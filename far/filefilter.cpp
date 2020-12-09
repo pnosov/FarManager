@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "filefilter.hpp"
 
@@ -42,7 +45,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "panel.hpp"
 #include "vmenu.hpp"
 #include "vmenu2.hpp"
-#include "scantree.hpp"
 #include "filelist.hpp"
 #include "message.hpp"
 #include "config.hpp"
@@ -52,7 +54,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "mix.hpp"
 #include "configdb.hpp"
 #include "keyboard.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "lang.hpp"
 #include "string_sort.hpp"
 #include "global.hpp"
@@ -151,12 +153,12 @@ FileFilter::FileFilter(Panel *HostPanel, FAR_FILE_FILTER_TYPE FilterType):
 	UpdateCurrentTime();
 }
 
-static void ParseAndAddMasks(std::map<string, int, string_sort::less_t>& Extensions, const string& FileName, DWORD FileAttr, int Check)
+static void ParseAndAddMasks(std::map<string, int, string_sort::less_t>& Extensions, string_view const FileName, os::fs::attributes const FileAttr, int const Check)
 {
 	if ((FileAttr & FILE_ATTRIBUTE_DIRECTORY) || IsParentDirectory(FileName))
 		return;
 
-	const auto Ext = PointToExt(FileName);
+	const auto Ext = name_ext(FileName).second;
 	Extensions.emplace(Ext.empty()? L"*."s : concat(L'*', Ext), Check);
 }
 
@@ -173,7 +175,7 @@ void FileFilter::FilterEdit()
 	const auto FilterList = VMenu2::create(msg(lng::MFilterTitle), {}, ScrY - 6);
 	FilterList->SetHelp(L"FiltersMenu"sv);
 	FilterList->SetPosition({ -1, -1, 0, 0 });
-	FilterList->SetBottomTitle(msg(lng::MFilterBottom));
+	FilterList->SetBottomTitle(KeysToLocalizedText(L'+', L'-', KEY_SPACE, L'I', L'X', KEY_BS, KEY_SHIFTBS, KEY_INS, KEY_DEL, KEY_F4, KEY_F5, KEY_CTRLUP, KEY_CTRLDOWN));
 	FilterList->SetMenuFlags(VMENU_WRAPMODE);
 	FilterList->SetId(FiltersMenuId);
 
@@ -222,7 +224,7 @@ void FileFilter::FilterEdit()
 
 		{
 			string strFileName;
-			DWORD FileAttr;
+			os::fs::attributes FileAttr;
 
 			for (int i = 0; m_HostPanel->GetFileName(strFileName, i, FileAttr); i++)
 				ParseAndAddMasks(Extensions, strFileName, FileAttr, 0);
@@ -255,7 +257,7 @@ void FileFilter::FilterEdit()
 		if (Msg!=DN_INPUT)
 			return 0;
 
-		int Key=InputRecordToKey(static_cast<INPUT_RECORD*>(param));
+		auto Key = InputRecordToKey(static_cast<INPUT_RECORD*>(param));
 
 		if (Key==KEY_ADD)
 			Key=L'+';
@@ -319,7 +321,7 @@ void FileFilter::FilterEdit()
 					{
 						MenuItemEx ListItem(MenuString(&FilterData()[SelPos]));
 
-						if (const auto Check = GetCheck(FilterData()[SelPos]))
+						if (const auto Check = FilterList->GetCheck(SelPos))
 							ListItem.SetCustomCheck(Check);
 
 						FilterList->DeleteItem(SelPos);
@@ -440,10 +442,10 @@ void FileFilter::FilterEdit()
 				if (SelPos<0)
 					break;
 
-				if (static_cast<size_t>(SelPos) < FilterData().size() && !((Key == KEY_CTRLUP || Key == KEY_RCTRLUP) && !SelPos) &&
-					!((Key == KEY_CTRLDOWN || Key == KEY_RCTRLDOWN) && static_cast<size_t>(SelPos) == FilterData().size() - 1))
+				if (static_cast<size_t>(SelPos) < FilterData().size() && !(any_of(Key, KEY_CTRLUP, KEY_RCTRLUP) && !SelPos) &&
+					!(any_of(Key, KEY_CTRLDOWN, KEY_RCTRLDOWN) && static_cast<size_t>(SelPos) == FilterData().size() - 1))
 				{
-					const auto NewPos = SelPos + ((Key == KEY_CTRLDOWN || Key == KEY_RCTRLDOWN) ? 1 : -1);
+					const auto NewPos = SelPos + (any_of(Key, KEY_CTRLDOWN, KEY_RCTRLDOWN)? 1 : -1);
 					using std::swap;
 					swap(FilterList->at(SelPos), FilterList->at(NewPos));
 					swap(FilterData()[NewPos], FilterData()[SelPos]);
@@ -587,10 +589,10 @@ void FileFilter::UpdateCurrentTime()
 
 bool FileFilter::FileInFilter(const FileListItem* fli, filter_status* FilterStatus)
 {
-	return FileInFilter(*fli, FilterStatus, &fli->FileName);
+	return FileInFilter(*fli, FilterStatus, fli->FileName);
 }
 
-bool FileFilter::FileInFilter(const os::fs::find_data& fde, filter_status* FilterStatus, const string* FullName)
+bool FileFilter::FileInFilter(const os::fs::find_data& fde, filter_status* const FilterStatus, string_view const FullName)
 {
 	const auto FFFT = GetFFFT();
 	const auto bFolder = (fde.Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
@@ -613,7 +615,7 @@ bool FileFilter::FileInFilter(const os::fs::find_data& fde, filter_status* Filte
 			{
 				IsAnyIncludeFound = true;
 
-				DWORD AttrClear;
+				os::fs::attributes AttrClear;
 				if (CurFilterData.GetAttr(nullptr, &AttrClear))
 					IsAnyFolderIncludeFound = IsAnyFolderIncludeFound || !(AttrClear & FILE_ATTRIBUTE_DIRECTORY);
 			}
@@ -716,7 +718,7 @@ bool FileFilter::FileInFilter(const PluginPanelItem& fd, filter_status* FilterSt
 {
 	os::fs::find_data fde;
 	PluginPanelItemToFindDataEx(fd, fde);
-	return FileInFilter(fde, FilterStatus, &fde.FileName);
+	return FileInFilter(fde, FilterStatus, fde.FileName);
 }
 
 bool FileFilter::IsEnabledOnPanel()
@@ -764,7 +766,7 @@ FileFilterParams FileFilter::LoadFilter(/*const*/ HierarchicalConfig& cfg, unsig
 	{
 		// Old format
 		// TODO 2020 Q4: remove
-		if (cfg.GetValue(Key, legacy_names::DateAfter, bytes::reference(DateAfter)))
+		if (bytes Blob; cfg.GetValue(Key, legacy_names::DateAfter, Blob) && deserialise(Blob, DateAfter))
 		{
 			cfg.SetValue(Key, names::DateTimeAfter, DateAfter);
 			cfg.DeleteValue(Key, legacy_names::DateAfter);
@@ -776,7 +778,7 @@ FileFilterParams FileFilter::LoadFilter(/*const*/ HierarchicalConfig& cfg, unsig
 	{
 		// Old format
 		// TODO 2020 Q4: remove
-		if (cfg.GetValue(Key, legacy_names::DateBefore, bytes::reference(DateBefore)))
+		if (bytes Blob; cfg.GetValue(Key, legacy_names::DateBefore, Blob) && deserialise(Blob, DateBefore))
 		{
 			cfg.SetValue(Key, names::DateTimeBefore, DateBefore);
 			cfg.DeleteValue(Key, legacy_names::DateBefore);
@@ -799,7 +801,7 @@ FileFilterParams FileFilter::LoadFilter(/*const*/ HierarchicalConfig& cfg, unsig
 	}
 
 	Item.SetDate(UseDate, static_cast<enumFDateType>(DateType), DateRelative?
-		filter_dates(os::chrono::duration(DateAfter), os::chrono::duration(DateBefore)) :
+		filter_dates(os::chrono::hectonanoseconds(DateAfter), os::chrono::hectonanoseconds(DateBefore)) :
 		filter_dates(os::chrono::nt_clock::from_hectonanoseconds(DateAfter), os::chrono::nt_clock::from_hectonanoseconds(DateBefore)));
 
 	const auto UseSize = cfg.GetValue<bool>(Key, names::UseSize);
@@ -849,7 +851,7 @@ FileFilterParams FileFilter::LoadFilter(/*const*/ HierarchicalConfig& cfg, unsig
 		}
 	}
 
-	Item.SetAttr(UseAttr != 0, static_cast<DWORD>(AttrSet), static_cast<DWORD>(AttrClear));
+	Item.SetAttr(UseAttr != 0, static_cast<os::fs::attributes>(AttrSet), static_cast<os::fs::attributes>(AttrClear));
 
 	return Item;
 }
@@ -893,14 +895,14 @@ static bool LoadLegacyFlags(const HierarchicalConfigUniquePtr& Cfg, Hierarchical
 	static_assert(FFFT_COUNT >= LegacyCount);
 
 	DWORD LegacyFlags[LegacyCount]{};
-	if (!Cfg->GetValue(Key, Name, bytes::reference(LegacyFlags)))
+	if (bytes Blob; !Cfg->GetValue(Key, Name, Blob) || !deserialise(Blob, LegacyFlags))
 		return false;
 
 	for (int i = 0; i != LegacyCount; ++i)
 		Item.SetFlags(static_cast<enumFileFilterFlagsType>(i), LegacyFlags[i]);
 
 	return true;
-};
+}
 
 void FileFilter::InitFilter()
 {
@@ -993,8 +995,6 @@ void FileFilter::SaveFilter(HierarchicalConfig& cfg, unsigned long long KeyId, c
 	cfg.SetValue(Key, names::UseDate, Item.GetDate(&DateType, &Dates));
 	cfg.SetValue(Key, names::DateType, DateType);
 
-	using namespace os::chrono::literals;
-
 	Dates.visit(overload
 	{
 		[&](os::chrono::duration After, os::chrono::duration Before)
@@ -1020,7 +1020,7 @@ void FileFilter::SaveFilter(HierarchicalConfig& cfg, unsigned long long KeyId, c
 	cfg.SetValue(Key, names::HardLinksAbove, HardLinksAbove);
 	cfg.SetValue(Key, names::HardLinksBelow, HardLinksBelow);
 
-	DWORD AttrSet, AttrClear;
+	os::fs::attributes AttrSet, AttrClear;
 	cfg.SetValue(Key, names::UseAttr, Item.GetAttr(&AttrSet, &AttrClear));
 	cfg.SetValue(Key, names::AttrSet, AttrSet);
 	cfg.SetValue(Key, names::AttrClear, AttrClear);

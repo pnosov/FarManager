@@ -29,6 +29,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "platform.fs.hpp"
 
@@ -38,10 +41,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "elevation.hpp"
 #include "flink.hpp"
 #include "imports.hpp"
-#include "lasterror.hpp"
 #include "pathmix.hpp"
 #include "string_utils.hpp"
 #include "strmix.hpp"
+#include "exception.hpp"
 #include "exception_handler.hpp"
 
 // Platform:
@@ -128,27 +131,27 @@ namespace os::fs
 {
 	namespace detail
 	{
-		void find_handle_closer::operator()(HANDLE Handle) const
+		void find_handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			FindClose(Handle);
 		}
 
-		void find_file_handle_closer::operator()(HANDLE Handle) const
+		void find_file_handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			delete static_cast<i_find_file_handle_impl*>(Handle);
 		}
 
-		void find_volume_handle_closer::operator()(HANDLE Handle) const
+		void find_volume_handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			FindVolumeClose(Handle);
 		}
 
-		void find_notification_handle_closer::operator()(HANDLE Handle) const
+		void find_notification_handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			FindCloseChangeNotification(Handle);
 		}
 
-		void file_unmapper::operator()(const void* Data) const
+		void file_unmapper::operator()(const void* Data) const noexcept
 		{
 			UnmapViewOfFile(Data);
 		}
@@ -179,43 +182,67 @@ namespace os::fs
 		return !AlternateFileNameData.empty();
 	}
 
-	bool is_standard_drive_letter(wchar_t Letter)
+	namespace drive
 	{
-		return in_range(L'A', upper(Letter), L'Z');
-	}
+		bool is_standard_letter(wchar_t Letter)
+		{
+			return in_closed_range(L'A', upper(Letter), L'Z');
+		}
 
-	size_t get_drive_number(wchar_t Letter)
-	{
-		assert(is_standard_drive_letter(Letter));
+		size_t get_number(wchar_t Letter)
+		{
+			assert(is_standard_letter(Letter));
 
-		return upper(Letter) - L'A';
-	}
+			return upper(Letter) - L'A';
+		}
 
-	wchar_t get_drive_letter(size_t Number)
-	{
-		assert(Number < 26);
+		wchar_t get_letter(size_t Number)
+		{
+			assert(Number < 26);
 
-		return static_cast<wchar_t>(L'A' + Number);
-	}
+			return static_cast<wchar_t>(L'A' + Number);
+		}
 
-	string get_drive(wchar_t Letter)
-	{
-		return { Letter, L':' };
-	}
+		string get_device_path(wchar_t Letter)
+		{
+			return { Letter, L':' };
+		}
 
-	string get_drive(size_t const Number)
-	{
-		return { get_drive_letter(Number), L':' };
-	}
+		string get_device_path(size_t const Number)
+		{
+			return { get_letter(Number), L':' };
+		}
 
-	string get_unc_drive(wchar_t Letter)
-	{
-		return { L'\\', L'\\', L'.', L'\\', Letter, L':' };
-	}
+		string get_win32nt_device_path(wchar_t Letter)
+		{
+			return { L'\\', L'\\', L'?', L'\\', Letter, L':' };
+		}
 
-	string get_root_directory(wchar_t Letter)
-	{
-		return { Letter, L':', L'\\' };
+		string get_root_directory(wchar_t Letter)
+		{
+			return { Letter, L':', L'\\' };
+		}
+
+		string get_win32nt_root_directory(wchar_t Letter)
+		{
+			return { L'\\', L'\\', L'?', L'\\', Letter, L':', L'\\' };
+		}
+
+		unsigned get_type(string_view const Path)
+		{
+			bool IsRoot = false;
+			if (const auto PathType = ParsePath(Path, {}, &IsRoot); IsRoot && (PathType == root_type::drive_letter || PathType == root_type::win32nt_drive_letter))
+			{
+				// It seems that Windows caches this information for drive letters, but not for other paths.
+				// We want to utilise it, if possible, to avoid delays with network drives.
+				return GetDriveType(get_root_directory(PathType == root_type::drive_letter? Path[0] : Path[4]).c_str());
+			}
+
+			NTPath NtPath(Path.empty()? os::fs::GetCurrentDirectory() : Path);
+			AddEndSlash(NtPath);
+
+			return GetDriveType(NtPath.c_str());
+		}
 	}
 
 	//-------------------------------------------------------------------------
@@ -236,7 +263,7 @@ namespace os::fs
 		if (m_CurrentIndex == m_Drives.size())
 			return false;
 
-		Value = get_drive_letter(m_CurrentIndex);
+		Value = drive::get_letter(m_CurrentIndex);
 		++m_CurrentIndex;
 		return true;
 	}
@@ -247,8 +274,8 @@ namespace os::fs
 	{
 		string PreparedObject = NTPath(Object);
 		auto Root = false;
-		const auto Type = ParsePath(PreparedObject, nullptr, &Root);
-		if (Root && (Type == root_type::drive_letter || Type == root_type::unc_drive_letter || Type == root_type::volume))
+		ParsePath(PreparedObject, nullptr, &Root);
+		if (Root)
 		{
 			AddEndSlash(PreparedObject);
 		}
@@ -535,7 +562,7 @@ namespace os::fs
 		if (!Length || Length >= std::size(StreamData.cStreamName))
 			return false;
 
-		*std::copy_n(std::cbegin(StreamInfo.StreamName), Length, StreamData.cStreamName) = L'\0';
+		*std::copy_n(std::cbegin(StreamInfo.StreamName), Length, StreamData.cStreamName) = {};
 		StreamData.StreamSize = StreamInfo.StreamSize;
 		return true;
 	}
@@ -626,7 +653,7 @@ namespace os::fs
 
 	bool enum_volumes::get(bool Reset, string& Value) const
 	{
-		// A reasonable size for the buffer to accommodate the largest possible volume GUID path is 50 characters.
+		// A reasonable size for the buffer to accommodate the largest possible volume UUID path is 50 characters.
 		wchar_t VolumeName[50];
 
 		if (Reset)
@@ -862,7 +889,7 @@ namespace os::fs
 		if (!FileName.empty())
 		{
 			NameString.Buffer = const_cast<wchar_t*>(FileName.data());
-			NameString.Length = static_cast<USHORT>(FileName.size() * sizeof(WCHAR));
+			NameString.Length = static_cast<USHORT>(FileName.size() * sizeof(wchar_t));
 			NameString.MaximumLength = NameString.Length;
 			pNameString = &NameString;
 		}
@@ -914,11 +941,11 @@ namespace os::fs
 		if (Result != STATUS_SUCCESS)
 			return false;
 
-		ObjectName.assign(oni->Name.Buffer, oni->Name.Length / sizeof(WCHAR));
+		ObjectName.assign(oni->Name.Buffer, oni->Name.Length / sizeof(wchar_t));
 		return true;
 	}
 
-	static int MatchNtPathRoot(const string& NtPath, const string& DeviceName)
+	static int MatchNtPathRoot(string_view const NtPath, const string& DeviceName)
 	{
 		string TargetPath;
 		if (!os::fs::QueryDosDevice(DeviceName, TargetPath))
@@ -983,7 +1010,7 @@ namespace os::fs
 		// try to convert NT path (\Device\HarddiskVolume1) to drive letter
 		for (const auto& i: enum_drives(get_logical_drives()))
 		{
-			const auto Device = fs::get_drive(i);
+			const auto Device = drive::get_device_path(i);
 			if (const auto Len = MatchNtPathRoot(NtPath, Device))
 			{
 				FinalFilePath = starts_with(NtPath, L"\\Device\\WinDfs"sv)? NtPath.replace(0, Len, 1, L'\\') : NtPath.replace(0, Len, Device);
@@ -1011,7 +1038,7 @@ namespace os::fs
 			// It seems that Microsoft has forgotten to put an exception handler around this function.
 			// It causes EXCEPTION_ACCESS_VIOLATION (read from 0) in kernel32 under certain conditions,
 			// e.g. badly written file system drivers or weirdly formatted volumes.
-			return seh_invoke_no_ui(
+			return seh_try_no_ui(
 			[&]
 			{
 				return imports.GetFinalPathNameByHandle(File, Buffer, Size, Flags);
@@ -1367,7 +1394,7 @@ namespace os::fs
 		return is_file(file_status(Object));
 	}
 
-	bool is_file(DWORD const Attributes)
+	bool is_file(attributes const Attributes)
 	{
 		return Attributes != INVALID_FILE_ATTRIBUTES && !flags::check_any(Attributes, FILE_ATTRIBUTE_DIRECTORY);
 	}
@@ -1382,15 +1409,15 @@ namespace os::fs
 		return is_directory(file_status(Object));
 	}
 
-	bool is_directory(DWORD const Attributes)
+	bool is_directory(attributes const Attributes)
 	{
 		return Attributes != INVALID_FILE_ATTRIBUTES && flags::check_any(Attributes, FILE_ATTRIBUTE_DIRECTORY);
 	}
 
-	bool is_not_empty_directory(const string& Object)
+	bool is_not_empty_directory(string_view const Object)
 	{
 		const auto Find = enum_files(path::join(Object, L'*'));
-		return Find.begin() != Find.end();
+		return !Find.empty();
 	}
 
 	//-------------------------------------------------------------------------
@@ -1443,12 +1470,12 @@ namespace os::fs
 			return ::DeleteFile(FileName) != FALSE;
 		}
 
-		DWORD get_file_attributes(const wchar_t* FileName)
+		attributes get_file_attributes(const wchar_t* const FileName)
 		{
 			return ::GetFileAttributes(FileName);
 		}
 
-		bool set_file_attributes(const wchar_t* FileName, DWORD Attributes)
+		bool set_file_attributes(const wchar_t* const FileName, attributes const Attributes)
 		{
 			return ::SetFileAttributes(FileName, Attributes) != FALSE;
 		}
@@ -1522,7 +1549,7 @@ namespace os::fs
 			return (Encrypt? ::EncryptFile(FileName) : ::DecryptFile(FileName, 0)) != FALSE;
 		}
 
-		security::descriptor get_file_security(string const& Object, SECURITY_INFORMATION RequestedInformation)
+		security::descriptor get_file_security(const wchar_t* Object, SECURITY_INFORMATION RequestedInformation)
 		{
 			security::descriptor Result(default_buffer_size);
 
@@ -1530,7 +1557,7 @@ namespace os::fs
 				[&](span<SECURITY_DESCRIPTOR> Buffer)
 				{
 					DWORD LengthNeeded = 0;
-					if (!::GetFileSecurity(Object.c_str(), RequestedInformation, Buffer.data(), static_cast<DWORD>(Buffer.size()), &LengthNeeded))
+					if (!::GetFileSecurity(Object, RequestedInformation, Buffer.data(), static_cast<DWORD>(Buffer.size()), &LengthNeeded))
 						return static_cast<size_t>(LengthNeeded);
 					return Buffer.size();
 				},
@@ -1635,8 +1662,8 @@ namespace os::fs
 		string strDir = PathName;
 		ReplaceSlashToBackslash(strDir);
 		bool Root = false;
-		const auto Type = ParsePath(strDir, nullptr, &Root);
-		if (Root && (Type == root_type::drive_letter || Type == root_type::unc_drive_letter || Type == root_type::volume))
+		ParsePath(strDir, nullptr, &Root);
+		if (Root)
 		{
 			AddEndSlash(strDir);
 		}
@@ -1845,7 +1872,7 @@ namespace os::fs
 
 		if (ElevationRequired(ELEVATION_MODIFY_REQUEST)) //BUGBUG, really unknown
 		{
-			GuardLastError gle;
+			last_error_guard gle;
 			// exclude fake elevation request for: move file over existing directory with same name
 			const file_status SrcStatus(strFrom), DstStatus(strTo);
 			if (is_directory(DstStatus) && is_file(SrcStatus))
@@ -1874,7 +1901,7 @@ namespace os::fs
 	}
 
 
-	DWORD get_file_attributes(const string_view FileName)
+	attributes get_file_attributes(const string_view FileName)
 	{
 		const NTPath NtName(FileName);
 
@@ -1888,7 +1915,7 @@ namespace os::fs
 		return INVALID_FILE_ATTRIBUTES;
 	}
 
-	bool set_file_attributes(const string_view FileName, const DWORD Attributes)
+	bool set_file_attributes(string_view const FileName, attributes const Attributes)
 	{
 		const NTPath NtName(FileName);
 
@@ -1917,19 +1944,19 @@ namespace os::fs
 		});
 	}
 
-	bool GetVolumeInformation(const string& RootPathName, string* VolumeName, DWORD* VolumeSerialNumber, DWORD* MaximumComponentLength, DWORD* FileSystemFlags, string* FileSystemName)
+	bool GetVolumeInformation(string_view const RootPathName, string* VolumeName, DWORD* VolumeSerialNumber, DWORD* MaximumComponentLength, DWORD* FileSystemFlags, string* FileSystemName)
 	{
 		wchar_t VolumeNameBuffer[MAX_PATH + 1], FileSystemNameBuffer[MAX_PATH + 1];
 		if (VolumeName)
 		{
-			VolumeNameBuffer[0] = L'\0';
+			VolumeNameBuffer[0] = {};
 		}
 		if (FileSystemName)
 		{
-			FileSystemNameBuffer[0] = L'\0';
+			FileSystemNameBuffer[0] = {};
 		}
 
-		if (!::GetVolumeInformation(RootPathName.c_str(), VolumeNameBuffer, static_cast<DWORD>(std::size(VolumeNameBuffer)), VolumeSerialNumber,
+		if (!::GetVolumeInformation(null_terminated(RootPathName).c_str(), VolumeNameBuffer, static_cast<DWORD>(std::size(VolumeNameBuffer)), VolumeSerialNumber,
 			MaximumComponentLength, FileSystemFlags, FileSystemNameBuffer, static_cast<DWORD>(std::size(FileSystemNameBuffer))))
 			return false;
 
@@ -1944,7 +1971,7 @@ namespace os::fs
 
 	bool GetVolumeNameForVolumeMountPoint(string_view const VolumeMountPoint, string& VolumeName)
 	{
-		WCHAR VolumeNameBuffer[50];
+		wchar_t VolumeNameBuffer[50];
 		NTPath strVolumeMountPoint(VolumeMountPoint);
 		AddEndSlash(strVolumeMountPoint);
 		if (!::GetVolumeNameForVolumeMountPoint(strVolumeMountPoint.c_str(), VolumeNameBuffer, static_cast<DWORD>(std::size(VolumeNameBuffer))))
@@ -2025,7 +2052,7 @@ namespace os::fs
 	{
 		NTPath const NtObject(Object);
 
-		if (auto Result = low::get_file_security(NtObject, RequestedInformation))
+		if (auto Result = low::get_file_security(NtObject.c_str(), RequestedInformation))
 			return Result;
 
 		if (ElevationRequired(ELEVATION_READ_REQUEST))
@@ -2090,7 +2117,7 @@ namespace os::fs
 		return File.Open(FileName, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING) && File.GetTime(CreationTime, LastAccessTime, LastWriteTime, ChangeTime);
 	}
 
-	bool get_find_data(const string& FileName, find_data& FindData, bool ScanSymLink)
+	bool get_find_data(string_view const FileName, find_data& FindData, bool ScanSymLink)
 	{
 		const auto Find = enum_files(FileName, ScanSymLink);
 		auto ItemIterator = Find.begin();
@@ -2139,18 +2166,14 @@ namespace os::fs
 		return find_notification_handle(::FindFirstChangeNotification(NTPath(PathName).c_str(), WatchSubtree, NotifyFilter));
 	}
 
-	bool IsDiskInDrive(const string& Root)
+	bool IsDiskInDrive(string_view const Root)
 	{
-		string strVolName;
-		DWORD MaxComSize;
-		DWORD Flags;
-		string strFS;
-		auto strDrive = Root;
+		string strDrive(Root);
 		AddEndSlash(strDrive);
-		return os::fs::GetVolumeInformation(strDrive, &strVolName, nullptr, &MaxComSize, &Flags, &strFS);
+		return os::fs::GetVolumeInformation(strDrive, {}, {}, {}, {}, {});
 	}
 
-	bool create_hard_link(const string& FileName, const string& ExistingFileName, SECURITY_ATTRIBUTES* SecurityAttributes)
+	bool create_hard_link(string_view const FileName, string_view const ExistingFileName, SECURITY_ATTRIBUTES* SecurityAttributes)
 	{
 		const auto Create = [SecurityAttributes](const string& Object, const string& Target)
 		{
@@ -2168,12 +2191,12 @@ namespace os::fs
 
 		// win2k bug: \\?\ fails
 		if (!IsWindowsXPOrGreater())
-			return Create(FileName, ExistingFileName);
+			return Create(string(FileName), string(ExistingFileName));
 
 		return false;
 	}
 
-	bool CreateSymbolicLink(const string& SymlinkFileName, const string& TargetFileName, DWORD Flags)
+	bool CreateSymbolicLink(string_view const SymlinkFileName, string_view const TargetFileName, DWORD Flags)
 	{
 		const NTPath NtSymlinkFileName(SymlinkFileName);
 
@@ -2212,7 +2235,7 @@ namespace os::fs
 		return false;
 	}
 
-	bool is_directory_reparse_point(DWORD const Attributes)
+	bool is_directory_reparse_point(attributes const Attributes)
 	{
 		return Attributes != INVALID_FILE_ATTRIBUTES && flags::check_all(Attributes, FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT);
 	}
@@ -2227,14 +2250,14 @@ namespace os::fs
 		return file(Name, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, CREATE_ALWAYS, FILE_FLAG_DELETE_ON_CLOSE)? true : false;
 	}
 
-	bool CreateSymbolicLinkInternal(const string& Object, const string& Target, DWORD Flags)
+	bool CreateSymbolicLinkInternal(string_view const Object, string_view const Target, DWORD Flags)
 	{
 		if (!imports.CreateSymbolicLinkW)
 			return CreateReparsePoint(Target, Object, Flags & SYMBOLIC_LINK_FLAG_DIRECTORY? RP_SYMLINKDIR : RP_SYMLINKFILE);
 
 		static const DWORD unpriv_flag = version::is_win10_1703_or_later()? SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE : 0;
 
-		return imports.CreateSymbolicLinkW(Object.c_str(), Target.c_str(), Flags | unpriv_flag) != FALSE;
+		return imports.CreateSymbolicLinkW(null_terminated(Object).c_str(), null_terminated(Target).c_str(), Flags | unpriv_flag) != FALSE;
 	}
 
 	drives_set allowed_drives_mask()
@@ -2242,7 +2265,9 @@ namespace os::fs
 		// It's good enough to read it once.
 		static const auto AllowedDrivesMask = []
 		{
-			for (const auto& i: { &os::reg::key::local_machine, &os::reg::key::current_user })
+			// Declared separately due to a VS19 bug
+			const auto Where = { &os::reg::key::local_machine, &os::reg::key::current_user };
+			for (const auto& i: Where)
 			{
 				unsigned NoDrives;
 				if (i->get(L"Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer"sv, L"NoDrives"sv, NoDrives))
@@ -2265,32 +2290,35 @@ TEST_CASE("drives")
 	static const struct
 	{
 		wchar_t DriveLetter;
-		string_view Drive, UncDrive, RootDirectory;
+		string_view DriveDevicePath, Win32NtDriveDevicePath, DriveRootDirectory, Win32NtDriveRootDirectory;
 		bool Standard;
 		size_t Number;
 	}
 	Tests[]
 	{
-		{ L'A', L"A:"sv, L"\\\\.\\A:"sv, L"A:\\"sv, true,  0,  },
-		{ L'B', L"B:"sv, L"\\\\.\\B:"sv, L"B:\\"sv, true,  1,  },
-		{ L'C', L"C:"sv, L"\\\\.\\C:"sv, L"C:\\"sv, true,  2,  },
-		{ L'Z', L"Z:"sv, L"\\\\.\\Z:"sv, L"Z:\\"sv, true,  25, },
-		{ L'1', L"1:"sv, L"\\\\.\\1:"sv, L"1:\\"sv, false, 42, },
-		{ L'λ', L"λ:"sv, L"\\\\.\\λ:"sv, L"λ:\\"sv, false, 42, },
+		{ L'A', L"A:"sv, L"\\\\?\\A:"sv, L"A:\\"sv, L"\\\\?\\A:\\"sv, true,  0,  },
+		{ L'B', L"B:"sv, L"\\\\?\\B:"sv, L"B:\\"sv, L"\\\\?\\B:\\"sv, true,  1,  },
+		{ L'C', L"C:"sv, L"\\\\?\\C:"sv, L"C:\\"sv, L"\\\\?\\C:\\"sv, true,  2,  },
+		{ L'Z', L"Z:"sv, L"\\\\?\\Z:"sv, L"Z:\\"sv, L"\\\\?\\Z:\\"sv, true,  25, },
+		{ L'1', L"1:"sv, L"\\\\?\\1:"sv, L"1:\\"sv, L"\\\\?\\1:\\"sv, false, 42, },
+		{ L'λ', L"λ:"sv, L"\\\\?\\λ:"sv, L"λ:\\"sv, L"\\\\?\\λ:\\"sv, false, 42, },
 	};
 
 	for (const auto& i: Tests)
 	{
-		REQUIRE(os::fs::get_drive(i.DriveLetter) == i.Drive);
-		REQUIRE(os::fs::get_unc_drive(i.DriveLetter) == i.UncDrive);
-		REQUIRE(os::fs::get_root_directory(i.DriveLetter) == i.RootDirectory);
-		REQUIRE(os::fs::is_standard_drive_letter(i.DriveLetter) == i.Standard);
+		namespace osd = os::fs::drive;
+
+		REQUIRE(osd::get_device_path(i.DriveLetter) == i.DriveDevicePath);
+		REQUIRE(osd::get_win32nt_device_path(i.DriveLetter) == i.Win32NtDriveDevicePath);
+		REQUIRE(osd::get_root_directory(i.DriveLetter) == i.DriveRootDirectory);
+		REQUIRE(osd::get_win32nt_root_directory(i.DriveLetter) == i.Win32NtDriveRootDirectory);
+		REQUIRE(osd::is_standard_letter(i.DriveLetter) == i.Standard);
 
 		if (i.Standard)
 		{
-			REQUIRE(os::fs::get_drive_number(i.DriveLetter) == i.Number);
-			REQUIRE(os::fs::get_drive_letter(i.Number) == i.DriveLetter);
-			REQUIRE(os::fs::get_drive(i.Number) == i.Drive);
+			REQUIRE(osd::get_number(i.DriveLetter) == i.Number);
+			REQUIRE(osd::get_letter(i.Number) == i.DriveLetter);
+			REQUIRE(osd::get_device_path(i.Number) == i.DriveDevicePath);
 		}
 	}
 }

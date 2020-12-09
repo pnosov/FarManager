@@ -29,6 +29,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "notification.hpp"
 
@@ -39,6 +42,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/range.hpp"
+#include "common/uuid.hpp"
 
 // External:
 
@@ -68,7 +72,7 @@ message_manager::handlers_map::iterator message_manager::subscribe(event_id Even
 	return m_Handlers.emplace(EventNames[EventId], &EventHandler);
 }
 
-message_manager::handlers_map::iterator message_manager::subscribe(const string& EventName, const detail::event_handler& EventHandler)
+message_manager::handlers_map::iterator message_manager::subscribe(string_view const EventName, const detail::event_handler& EventHandler)
 {
 	SCOPED_ACTION(std::unique_lock)(m_RWLock);
 	return m_Handlers.emplace(EventName, &EventHandler);
@@ -85,7 +89,7 @@ void message_manager::notify(event_id EventId, std::any&& Payload)
 	m_Messages.emplace(EventNames[EventId], std::move(Payload));
 }
 
-void message_manager::notify(const string& EventName, std::any&& Payload)
+void message_manager::notify(string_view const EventName, std::any&& Payload)
 {
 	m_Messages.emplace(EventName, std::move(Payload));
 }
@@ -112,5 +116,5 @@ bool message_manager::dispatch()
 
 string listener::CreateEventName()
 {
-	return GuidToStr(CreateUuid());
+	return uuid::str(os::uuid::generate());
 }

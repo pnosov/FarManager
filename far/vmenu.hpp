@@ -203,8 +203,8 @@ public:
 
 	void FastShow() { ShowMenu(); }
 	void ResetCursor();
-	void SetTitle(const string& Title);
-	void SetBottomTitle(const wchar_t *BottomTitle);
+	void SetTitle(string_view Title);
+	void SetBottomTitle(string_view BottomTitle);
 	string &GetBottomTitle(string &strDest) const;
 	void SetDialogStyle(bool Style) { ChangeFlags(VMENU_WARNDIALOG, Style); SetColors(nullptr); }
 	void SetUpdateRequired(bool SetUpdate) { ChangeFlags(VMENU_UPDATEREQUIRED, SetUpdate); }
@@ -221,22 +221,23 @@ public:
 	bool ProcessFilterKey(int Key);
 	void clear();
 	int DeleteItem(int ID, int Count = 1);
-	int AddItem(MenuItemEx&& NewItem, int PosAdd = 0x7FFFFFFF);
+	int AddItem(MenuItemEx&& NewItem, int PosAdd = std::numeric_limits<int>::max());
 	int AddItem(const FarList *List);
 	int AddItem(const wchar_t *NewStrItem);
 	int InsertItem(const FarListInsert *NewItem);
 	bool UpdateItem(const FarListUpdate *NewItem);
 	int FindItem(const FarListFind *FItem);
-	int FindItem(int StartIndex, const string& Pattern, unsigned long long Flags = 0);
+	int FindItem(int StartIndex, string_view Pattern, unsigned long long Flags = 0);
 	void RestoreFilteredItems();
 	void FilterStringUpdated();
 	void FilterUpdateHeight(bool bShrink = false);
 	void SetFilterEnabled(bool bEnabled) { bFilterEnabled = bEnabled; }
 	void SetFilterLocked(bool bLocked) { bFilterEnabled = bLocked; }
 	bool AddToFilter(string_view Str);
+	size_t size() const { return Items.size(); }
+	bool empty() const { return Items.empty(); }
 	// SelectPos == -1 & non-empty Items - everything is filtered
-	size_t size() const { return SelectPos == -1? 0 : Items.size(); }
-	bool empty() const { return SelectPos == -1 || Items.empty(); }
+	bool HasVisible() const { return SelectPos > -1 && !Items.empty(); }
 	int GetShowItemCount() const { return static_cast<int>(Items.size() - ItemHiddenCount); }
 	int GetVisualPos(int Pos);
 	int VisualPosToReal(int VPos);
@@ -269,8 +270,8 @@ public:
 	void SetMaxHeight(int NewMaxHeight);
 	size_t GetVDialogItemID() const { return DialogItemID; }
 	void SetVDialogItemID(size_t NewDialogItemID) { DialogItemID = NewDialogItemID; }
-	void SetId(const GUID& Id);
-	const GUID& Id() const;
+	void SetId(const UUID& Id);
+	const UUID& Id() const;
 	bool IsComboBox() const { return GetDialog() && CheckFlags(VMENU_COMBOBOX); }
 	dialog_ptr GetDialog() const {return ParentDialog.lock();}
 
@@ -303,13 +304,9 @@ private:
 	int CheckHighlights(wchar_t CheckSymbol,int StartPos=0);
 	wchar_t GetHighlights(const MenuItemEx *Item) const;
 	bool ShiftItemShowPos(int Pos,int Direct);
-	bool ItemCanHaveFocus(unsigned long long Flags) const;
-	bool ItemCanBeEntered(unsigned long long Flags) const;
-	bool ItemIsVisible(unsigned long long Flags) const;
 	void UpdateMaxLengthFromTitles();
 	void UpdateMaxLength(size_t Length);
-	void UpdateInternalCounters(unsigned long long OldFlags, unsigned long long NewFlags);
-	bool ShouldSendKeyToFilter(int Key) const;
+	bool ShouldSendKeyToFilter(unsigned Key) const;
 	//корректировка текущей позиции и флагов SELECTED
 	void UpdateSelectPos();
 	void EnableFilter(bool Enable);
@@ -325,7 +322,7 @@ private:
 	int m_BoxType;
 	window_ptr CurrentWindow;
 	bool PrevCursorVisible;
-	DWORD PrevCursorSize;
+	size_t PrevCursorSize;
 	// переменная, отвечающая за отображение scrollbar в DI_LISTBOX & DI_COMBOBOX
 	BitFlags VMFlags;
 	// Для LisBox - родитель в виде диалога
@@ -340,7 +337,7 @@ private:
 	FarColor Colors[VMENU_COLOR_COUNT];
 	size_t MaxLineWidth;
 	bool bRightBtnPressed;
-	GUID MenuId;
+	UUID MenuId;
 };
 
 #endif // VMENU_HPP_DF9F4258_12AF_4721_9D5F_BE29A59649C2

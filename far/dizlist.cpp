@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "dizlist.hpp"
 
@@ -86,7 +89,7 @@ static void PR_ReadingMsg()
 		{});
 }
 
-void DizList::Read(const string& Path, const string* DizName)
+void DizList::Read(string_view const Path, const string* DizName)
 {
 	Reset();
 
@@ -153,7 +156,7 @@ void DizList::Read(const string& Path, const string* DizName)
 				}
 
 				// Insert unconditionally
-				LastAdded = Insert({ NameBegin, NameEnd });
+				LastAdded = Insert({ &*NameBegin, static_cast<size_t>(NameEnd - NameBegin) });
 				LastAdded->second.emplace_back(DescBegin, DizText.cend());
 			}
 			else if (LastAdded != m_DizData.end())
@@ -255,9 +258,9 @@ DizList::desc_map::const_iterator DizList::Find(const string& Name, const string
 	return const_cast<DizList&>(*this).Find(Name, ShortName);
 }
 
-DizList::desc_map::iterator DizList::Insert(const string& Name)
+DizList::desc_map::iterator DizList::Insert(string_view const Name)
 {
-	auto Iterator = m_DizData.emplace(Name, std::list<string>());
+	auto Iterator = m_DizData.emplace(Name, description_data{});
 	m_OrderForWrite.push_back(&*Iterator);
 	return Iterator;
 }
@@ -281,7 +284,7 @@ bool DizList::Erase(const string& Name,const string& ShortName)
 	return true;
 }
 
-bool DizList::Flush(const string& Path,const string* DizName)
+bool DizList::Flush(string_view const Path, const string* DizName)
 {
 	if (!m_Modified)
 		return true;
@@ -322,7 +325,7 @@ bool DizList::Flush(const string& Path,const string* DizName)
 				{ lng::MYes, lng::MNo }) != Message::first_button)
 			return false;
 
-		os::fs::set_file_attributes(m_DizFileName, FileAttr & ~FILE_ATTRIBUTE_READONLY);
+		(void)os::fs::set_file_attributes(m_DizFileName, FileAttr & ~FILE_ATTRIBUTE_READONLY); //BUGBUG
 	}
 
 	try
@@ -355,7 +358,7 @@ bool DizList::Flush(const string& Path,const string* DizName)
 	}
 	catch (const far_exception& e)
 	{
-		Message(MSG_WARNING, e.error_state(),
+		Message(MSG_WARNING, e,
 			msg(lng::MError),
 			{
 				msg(lng::MCannotUpdateDiz)

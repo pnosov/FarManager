@@ -30,6 +30,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "configdb.hpp"
 
@@ -52,10 +55,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common.hpp"
+#include "common/base64.hpp"
 #include "common/bytes_view.hpp"
 #include "common/chrono.hpp"
 #include "common/function_ref.hpp"
 #include "common/scope_exit.hpp"
+#include "common/uuid.hpp"
 
 // External:
 #include "format.hpp"
@@ -68,7 +73,7 @@ static const auto XmlDocumentRootName = "farconfig";
 class representation_source
 {
 public:
-	explicit representation_source(const string& File)
+	explicit representation_source(string_view const File)
 	{
 		const file_ptr XmlFile(_wfsopen(NTPath(File).c_str(), L"rb", _SH_DENYWR));
 		if (!XmlFile)
@@ -103,6 +108,15 @@ static auto& CreateChild(tinyxml::XMLElement& Parent, const char* Name)
 	return *e;
 }
 
+template<typename T>
+static void SetAttribute(tinyxml::XMLElement& Element, const char* Name, T const& Value)
+{
+	if constexpr (std::is_convertible_v<T, std::string_view>)
+		Element.SetAttribute(Name, null_terminated_t<char>(Value).c_str());
+	else
+		Element.SetAttribute(Name, Value);
+}
+
 class representation_destination
 {
 public:
@@ -119,7 +133,7 @@ public:
 
 	void SetRoot(tinyxml::XMLElement& Root) { m_Root = &Root; }
 
-	void Save(const string& File)
+	void Save(string_view const File)
 	{
 		const file_ptr XmlFile(_wfsopen(NTPath(File).c_str(), L"w", _SH_DENYWR));
 		if (!XmlFile)
@@ -134,10 +148,42 @@ private:
 	tinyxml::XMLElement* m_Root{};
 };
 
+
+class async_delete_impl: virtual public async_delete
+{
+protected:
+	explicit async_delete_impl(string_view const Name):
+		// If a thread with same event name is running, we will open that event here
+		m_AsyncDone(os::event::type::manual, os::event::state::signaled, Name)
+	{
+		// and wait for the signal
+		m_AsyncDone.wait();
+	}
+
+	~async_delete_impl() override
+	{
+		m_AsyncDone.set();
+	}
+
+	void finish() override
+	{
+		m_AsyncDone.reset();
+		// TODO: SEH guard, try/catch, exception_ptr
+		ConfigProvider().AsyncCall(config_provider::async_key{}, [this]
+		{
+			delete this;
+		});
+	}
+
+private:
+	os::event m_AsyncDone;
+};
+
+
 namespace
 {
 
-class [[nodiscard]] xml_enum: noncopyable, public enumerator<xml_enum, const tinyxml::XMLElement*>
+class [[nodiscard]] xml_enum: noncopyable, public enumerator<xml_enum, const tinyxml::XMLElement*, true>
 {
 	IMPLEMENTS_ENUMERATOR(xml_enum);
 
@@ -154,11 +200,13 @@ public:
 	}
 
 private:
-	[[nodiscard]]
+	[[nodiscard, maybe_unused]]
 	bool get(bool Reset, value_type& value) const
 	{
-		value = !Reset? value->NextSiblingElement(m_name) :
-		        m_base? m_base->FirstChildElement(m_name) : nullptr;
+		value =
+			!Reset? value->NextSiblingElement(m_name) :
+			m_base? m_base->FirstChildElement(m_name) :
+			nullptr;
 
 		return value != nullptr;
 	}
@@ -167,17 +215,76 @@ private:
 	const tinyxml::XMLNode* m_base;
 };
 
-int sqlite_busy_handler(void* Param, int Retries)
+static void serialise_integer(tinyxml::XMLElement& e, long long const Value)
 {
-	if (Retries < 10)
+	SetAttribute(e, "type", "qword"sv);
+	SetAttribute(e, "value", encoding::utf8::get_bytes(to_hex_wstring(Value)));
+}
+
+static void serialise_string(tinyxml::XMLElement& e, std::string const& Value)
+{
+	SetAttribute(e, "type", "text"sv);
+	SetAttribute(e, "value", Value);
+}
+
+static void serialise_blob(tinyxml::XMLElement& e, bytes_view const Value)
+{
+	SetAttribute(e, "type", "base64"sv);
+	SetAttribute(e, "value", base64::encode(Value));
+}
+
+template<typename callable>
+static bool deserialise_value(char const* Type, char const* Value, callable const& Setter)
+{
+	if (!strcmp(Type, "qword"))
 	{
-		// Let's retry silently first:
-		os::chrono::sleep_for(500ms);
-		return 1;
+		if (Value)
+			Setter(strtoull(Value, nullptr, 16));
+		return true;
 	}
 
-	const auto& Db = *static_cast<const SQLiteDb*>(Param);
-	return RetryAbort({ Db.GetPath(), L"Database is busy"s });
+	if (!strcmp(Type, "text"))
+	{
+		if (Value)
+			Setter(encoding::utf8::get_chars(Value));
+		return true;
+	}
+
+	if (!strcmp(Type, "base64"))
+	{
+		if (Value)
+			Setter(base64::decode(Value));
+		return true;
+	}
+
+	if (!strcmp(Type, "hex"))
+	{
+		if (Value)
+			Setter(HexStringToBlob(encoding::utf8::get_chars(Value)));
+		return true;
+	}
+
+	return false;
+}
+
+int sqlite_busy_handler(void* Param, int Retries) noexcept
+{
+	try
+	{
+		if (Retries < 10)
+		{
+			// Let's retry silently first:
+			os::chrono::sleep_for(500ms);
+			return 1;
+		}
+
+		const auto& Db = *static_cast<const SQLiteDb*>(Param);
+		return RetryAbort({ Db.GetPath(), L"Database is busy"s });
+	}
+	catch (...)
+	{
+		return 0;
+	}
 }
 
 class sqlite_boilerplate : public SQLiteDb
@@ -208,7 +315,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtSetValue,              "REPLACE INTO general_config VALUES (?1,?2,?3);"sv },
 			{ stmtGetValue,              "SELECT value FROM general_config WHERE key=?1 AND name=?2;"sv },
@@ -229,7 +336,7 @@ private:
 		SetValueT(Key, Name, Value);
 	}
 
-	void SetValue(const string_view Key, const string_view Name, const bytes_view& Value) override
+	void SetValue(const string_view Key, const string_view Name, bytes_view const Value) override
 	{
 		SetValueT(Key, Name, Value);
 	}
@@ -289,27 +396,23 @@ private:
 		{
 			auto& e = CreateChild(root, "setting");
 
-			e.SetAttribute("key", stmtEnumAllValues.GetColTextUTF8(0).c_str());
-			e.SetAttribute("name", stmtEnumAllValues.GetColTextUTF8(1).c_str());
+			SetAttribute(e, "key", stmtEnumAllValues.GetColTextUTF8(0));
+			SetAttribute(e, "name", stmtEnumAllValues.GetColTextUTF8(1));
 
 			switch (stmtEnumAllValues.GetColType(2))
 			{
 			case column_type::integer:
-				e.SetAttribute("type", "qword");
-				e.SetAttribute("value", to_hex_string(stmtEnumAllValues.GetColInt64(2)).c_str());
+				serialise_integer(e, stmtEnumAllValues.GetColInt64(2));
 				break;
 
 			case column_type::string:
-				e.SetAttribute("type", "text");
-				e.SetAttribute("value", stmtEnumAllValues.GetColTextUTF8(2).c_str());
+				serialise_string(e, stmtEnumAllValues.GetColTextUTF8(2));
 				break;
 
 			case column_type::blob:
 			case column_type::unknown:
-				{
-					e.SetAttribute("type", "hex");
-					e.SetAttribute("value", BlobToHexString(stmtEnumAllValues.GetColBlob(2)).c_str());
-				}
+				serialise_blob(e, stmtEnumAllValues.GetColBlob(2));
+				break;
 			}
 		}
 	}
@@ -319,34 +422,17 @@ private:
 		SCOPED_ACTION(auto)(ScopedTransaction());
 		for(const auto& e: xml_enum(Representation.Root().FirstChildElement(GetKeyName()), "setting"))
 		{
-			const auto key = e->Attribute("key");
-			const auto name = e->Attribute("name");
-			const auto type = e->Attribute("type");
-			const auto value = e->Attribute("value");
+			const auto key = e.Attribute("key");
+			const auto name = e.Attribute("name");
+			const auto type = e.Attribute("type");
+			const auto value = e.Attribute("value");
 
 			if (!key || !name || !type || !value)
 				continue;
 
 			const auto Key = encoding::utf8::get_chars(key);
 			const auto Name = encoding::utf8::get_chars(name);
-
-			if (!strcmp(type,"qword"))
-			{
-				SetValue(Key, Name, strtoull(value, nullptr, 16));
-				continue;
-			}
-
-			if (!strcmp(type,"text"))
-			{
-				SetValue(Key, Name, encoding::utf8::get_chars(value));
-				continue;
-			}
-
-			if (!strcmp(type,"hex"))
-			{
-				SetValue(Key, Name, HexStringToBlob(value));
-				continue;
-			}
+			deserialise_value(type, value, [&](auto const& Value){ SetValue(Key, Name, Value); });
 		}
 	}
 
@@ -421,37 +507,6 @@ private:
 	const char* GetKeyName() const override {return "localconfig";}
 };
 
-class async_delete_impl: virtual public async_delete
-{
-public:
-	~async_delete_impl() override
-	{
-		m_AsyncDone.set();
-	}
-
-	void finish() override
-	{
-		m_AsyncDone.reset();
-		// TODO: SEH guard, try/catch, exception_ptr
-		ConfigProvider().AsyncCall([this]
-		{
-			delete this;
-		});
-	}
-
-protected:
-	explicit async_delete_impl(string_view const Name):
-		// If a thread with same event name is running, we will open that event here
-		m_AsyncDone(os::event::type::manual, os::event::state::signaled, Name)
-	{
-		// and wait for the signal
-		m_AsyncDone.wait();
-	}
-
-private:
-	os::event m_AsyncDone;
-};
-
 class HierarchicalConfigDb: public async_delete_impl, public HierarchicalConfig, public sqlite_boilerplate
 {
 public:
@@ -462,15 +517,14 @@ public:
 	}
 
 protected:
-	virtual void SerializeBlob(std::string_view /*Name*/, const bytes_view& Blob, tinyxml::XMLElement& e) const
+	virtual void SerializeBlob(std::string_view /*Name*/, bytes_view const Blob, tinyxml::XMLElement& e) const
 	{
-		e.SetAttribute("type", "hex");
-		e.SetAttribute("value", BlobToHexString(Blob).c_str());
+		serialise_blob(e, Blob);
 	}
 
 	virtual bytes DeserializeBlob(const char* Type, const char* Value, const tinyxml::XMLElement& e) const
 	{
-		return Value? HexStringToBlob(Value) : bytes{};
+		return Value? HexStringToBlob(encoding::utf8::get_chars(Value)) : bytes{};
 	}
 
 private:
@@ -489,12 +543,12 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
-			{ stmtCreateKey,             "INSERT OR IGNORE INTO table_keys VALUES (NULL,?1,?2,?3);"sv },
+			{ stmtCreateKey,             "INSERT OR IGNORE INTO table_keys VALUES (NULL,?1,?2,NULL);"sv },
 			{ stmtFindKey,               "SELECT id FROM table_keys WHERE parent_id=?1 AND name=?2 AND id<>0;"sv },
 			{ stmtGetKeyName,            "SELECT name from table_keys WHERE parent_id=?1 AND id=?2 AND id<>0 ;"sv },
-			{ stmtSetKeyDescription,     "UPDATE table_keys SET description=?1 WHERE id=?2 AND id<>0 AND description<>?1;"sv },
+			{ stmtSetKeyDescription,     "UPDATE table_keys SET description=?1 WHERE id=?2 AND id<>0 AND (description IS NULL OR description<>?1);"sv },
 			{ stmtSetValue,              "REPLACE INTO table_values VALUES (?1,?2,?3);"sv },
 			{ stmtGetValue,              "SELECT value FROM table_values WHERE key_id=?1 AND name=?2;"sv },
 			{ stmtEnumKeys,              "SELECT id FROM table_keys WHERE parent_id=?1 AND id<>0;"sv },
@@ -519,16 +573,12 @@ private:
 		return GetPath();
 	}
 
-	key CreateKey(const key& Root, const string_view Name, const string* const Description) override
+	key CreateKey(const key& Root, const string_view Name) override
 	{
 		if (const auto Key = FindByName(Root, Name))
-		{
-			if (Description)
-				SetKeyDescription(Key, *Description);
 			return Key;
-		}
 
-		ExecuteStatement(stmtCreateKey, Root.get(), Name, Description);
+		ExecuteStatement(stmtCreateKey, Root.get(), Name);
 		return key(LastInsertRowID());
 	}
 
@@ -566,7 +616,7 @@ private:
 		SetValueT(Root, Name, Value);
 	}
 
-	void SetValue(const key& Root, const string_view Name, const bytes_view& Value) override
+	void SetValue(const key& Root, const string_view Name, bytes_view const Value) override
 	{
 		SetValueT(Root, Name, Value);
 	}
@@ -666,7 +716,7 @@ private:
 		SCOPED_ACTION(auto)(ScopedTransaction());
 		for (const auto& e: xml_enum(Representation.Root().FirstChildElement("hierarchicalconfig"), "key"))
 		{
-			Import(root_key, *e);
+			Import(root_key, e);
 		}
 	}
 
@@ -680,18 +730,16 @@ private:
 				auto& e = CreateChild(XmlKey, "value");
 
 				const auto name = Stmt->GetColTextUTF8(0);
-				e.SetAttribute("name", name.c_str());
+				SetAttribute(e, "name", name);
 
 				switch (Stmt->GetColType(1))
 				{
 				case column_type::integer:
-					e.SetAttribute("type", "qword");
-					e.SetAttribute("value", to_hex_string(Stmt->GetColInt64(1)).c_str());
+					serialise_integer(e, Stmt->GetColInt64(1));
 					break;
 
 				case column_type::string:
-					e.SetAttribute("type", "text");
-					e.SetAttribute("value", Stmt->GetColTextUTF8(1).c_str());
+					serialise_string(e, Stmt->GetColTextUTF8(1));
 					break;
 
 				case column_type::blob:
@@ -708,10 +756,10 @@ private:
 		{
 			auto& e = CreateChild(XmlKey, "key");
 
-			e.SetAttribute("name", stmtEnumSubKeys.GetColTextUTF8(1).c_str());
+			SetAttribute(e, "name", stmtEnumSubKeys.GetColTextUTF8(1));
 			const auto description = stmtEnumSubKeys.GetColTextUTF8(2);
 			if (!description.empty())
-				e.SetAttribute("description", description.c_str());
+				SetAttribute(e, "description", description);
 
 			Export(Representation, key(stmtEnumSubKeys.GetColInt64(0)), e);
 		}
@@ -719,54 +767,36 @@ private:
 
 	void Import(const key& root, const tinyxml::XMLElement& key)
 	{
-		const auto key_name = key.Attribute("name");
-		if (!key_name)
+		const auto KeyName = key.Attribute("name");
+		if (!KeyName)
 			return;
-		const auto KeyName = encoding::utf8::get_chars(key_name);
-		const auto key_description = key.Attribute("description");
-		string KeyDescription;
-		if (key_description)
-		{
-			KeyDescription = encoding::utf8::get_chars(key_description);
-		}
-		const auto Key = CreateKey(root, KeyName, key_description? &KeyDescription : nullptr);
+
+		const auto Key = CreateKey(root, encoding::utf8::get_chars(KeyName));
+
+		if (const auto KeyDescription = key.Attribute("description"))
+			SetKeyDescription(Key, encoding::utf8::get_chars(KeyDescription));
 
 		for (const auto& e: xml_enum(key, "value"))
 		{
-			const auto name = e->Attribute("name");
-			const auto type = e->Attribute("type");
-			const auto value = e->Attribute("value");
+			const auto name = e.Attribute("name");
+			const auto type = e.Attribute("type");
+			const auto value = e.Attribute("value");
 
 			if (!name || !type)
 				continue;
 
 			const auto Name = encoding::utf8::get_chars(name);
 
-			if (!strcmp(type, "qword"))
-			{
-				if (value)
-					SetValue(Key, Name, strtoull(value, nullptr, 16));
-			}
-			else if (!strcmp(type, "text"))
-			{
-				if (value)
-					SetValue(Key, Name, encoding::utf8::get_chars(value));
-			}
-			else if (!strcmp(type, "hex"))
-			{
-				if (value)
-					SetValue(Key, Name, HexStringToBlob(value));
-			}
-			else
+			if (!deserialise_value(type, value, [&](auto const& Value){ SetValue(Key, Name, Value); }))
 			{
 				// custom types, value is optional
-				SetValue(Key, Name, DeserializeBlob(type, value, *e));
+				SetValue(Key, Name, DeserializeBlob(type, value, e));
 			}
 		}
 
 		for (const auto& e: xml_enum(key, "key"))
 		{
-			Import(Key, *e);
+			Import(Key, e);
 		}
 	}
 
@@ -777,16 +807,7 @@ private:
 		if (!Stmt->Bind(Root.get(), Name).Step())
 			return false;
 
-		try
-		{
-			Value = std::invoke(Getter, Stmt, 0);
-		}
-		catch (const far_exception&)
-		{
-			// Blob assignment could fail if the size is incorrect
-			return false;
-		}
-
+		Value = std::invoke(Getter, Stmt, 0);
 		return true;
 	}
 
@@ -830,28 +851,34 @@ public:
 	using HierarchicalConfigDb::HierarchicalConfigDb;
 
 private:
-	void SerializeBlob(std::string_view const Name, const bytes_view& Blob, tinyxml::XMLElement& e) const override
+	void SerializeBlob(std::string_view const Name, bytes_view const Blob, tinyxml::XMLElement& e) const override
 	{
-		static const std::string_view ColorKeys[] =
+		static const std::string_view ColorKeys[]
 		{
-			"NormalColor"sv, "SelectedColor"sv,
-			"CursorColor"sv, "SelectedCursorColor"sv,
-			"MarkCharNormalColor"sv, "MarkCharSelectedColor"sv,
-			"MarkCharCursorColor"sv, "MarkCharSelectedCursorColor"sv,
+			"NormalColor"sv,
+			"SelectedColor"sv,
+			"CursorColor"sv,
+			"SelectedCursorColor"sv,
+			"MarkCharNormalColor"sv,
+			"MarkCharSelectedColor"sv,
+			"MarkCharCursorColor"sv,
+			"MarkCharSelectedCursorColor"sv,
 		};
 
-		if (std::find(ALL_CONST_RANGE(ColorKeys), Name) != std::cend(ColorKeys))
+		if (contains(ColorKeys, Name))
 		{
-			const auto Color = deserialise<FarColor>(Blob);
-			e.SetAttribute("type", "color");
-			e.SetAttribute("background", to_hex_string(Color.BackgroundColor).c_str());
-			e.SetAttribute("foreground", to_hex_string(Color.ForegroundColor).c_str());
-			e.SetAttribute("flags", encoding::utf8::get_bytes(FlagsToString(Color.Flags, ColorFlagNames)).c_str());
+			FarColor Color;
+			if (deserialise(Blob, Color))
+			{
+				SetAttribute(e, "type", "color"sv);
+				SetAttribute(e, "background", encoding::utf8::get_bytes(to_hex_wstring(Color.BackgroundColor)));
+				SetAttribute(e, "foreground", encoding::utf8::get_bytes(to_hex_wstring(Color.ForegroundColor)));
+				SetAttribute(e, "flags", encoding::utf8::get_bytes(FlagsToString(Color.Flags, ColorFlagNames)));
+				return;
+			}
 		}
-		else
-		{
-			return HierarchicalConfigDb::SerializeBlob(Name, Blob, e);
-		}
+
+		return HierarchicalConfigDb::SerializeBlob(Name, Blob, e);
 	}
 
 	bytes DeserializeBlob(const char* Type, const char* Value, const tinyxml::XMLElement& e) const override
@@ -867,7 +894,7 @@ private:
 			if (const auto flags = e.Attribute("flags"))
 				Color.Flags = StringToFlags(encoding::utf8::get_chars(flags), ColorFlagNames);
 
-			return bytes::copy(Color);
+			return bytes(view_bytes(Color));
 		}
 
 		return HierarchicalConfigDb::DeserializeBlob(Type, Value, e);
@@ -892,7 +919,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtSetValue,              "REPLACE INTO colors VALUES (?1,?2);"sv },
 			{ stmtGetValue,              "SELECT value FROM colors WHERE name=?1;"sv },
@@ -904,7 +931,7 @@ private:
 
 	void SetValue(const string_view Name, const FarColor& Value) override
 	{
-		ExecuteStatement(stmtSetValue, Name, bytes_view(Value));
+		ExecuteStatement(stmtSetValue, Name, view_bytes(Value));
 	}
 
 	bool GetValue(const string_view Name, FarColor& Value) const override
@@ -913,8 +940,7 @@ private:
 		if (!Stmt->Bind(Name).Step())
 			return false;
 
-		Value = deserialise<FarColor>(Stmt->GetColBlob(0));
-		return true;
+		return deserialise(Stmt->GetColBlob(0), Value);
 	}
 
 	void Export(representation_destination& Representation) const override
@@ -927,11 +953,13 @@ private:
 		{
 			auto& e = CreateChild(root, "object");
 
-			e.SetAttribute("name", stmtEnumAllValues.GetColTextUTF8(0).c_str());
-			const auto Color = deserialise<FarColor>(stmtEnumAllValues.GetColBlob(1));
-			e.SetAttribute("background", to_hex_string(Color.BackgroundColor).c_str());
-			e.SetAttribute("foreground", to_hex_string(Color.ForegroundColor).c_str());
-			e.SetAttribute("flags", encoding::utf8::get_bytes(FlagsToString(Color.Flags, ColorFlagNames)).c_str());
+			SetAttribute(e, "name", stmtEnumAllValues.GetColTextUTF8(0));
+			if (FarColor Color; deserialise(stmtEnumAllValues.GetColBlob(1), Color))
+			{
+				SetAttribute(e, "background", encoding::utf8::get_bytes(to_hex_wstring(Color.BackgroundColor)));
+				SetAttribute(e, "foreground", encoding::utf8::get_bytes(to_hex_wstring(Color.ForegroundColor)));
+				SetAttribute(e, "flags", encoding::utf8::get_bytes(FlagsToString(Color.Flags, ColorFlagNames)));
+			}
 		}
 	}
 
@@ -940,10 +968,10 @@ private:
 		SCOPED_ACTION(auto)(ScopedTransaction());
 		for (const auto& e: xml_enum(Representation.Root().FirstChildElement("colors"), "object"))
 		{
-			const auto name = e->Attribute("name");
-			const auto background = e->Attribute("background");
-			const auto foreground = e->Attribute("foreground");
-			const auto flags = e->Attribute("flags");
+			const auto name = e.Attribute("name");
+			const auto background = e.Attribute("background");
+			const auto foreground = e.Attribute("foreground");
+			const auto flags = e.Attribute("flags");
 
 			if (!name)
 				continue;
@@ -996,7 +1024,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtReorder,               "UPDATE filetypes SET weight=weight+1 WHERE weight>(CASE ?1 WHEN 0 THEN 0 ELSE (SELECT weight FROM filetypes WHERE id=?1) END);"sv },
 			{ stmtAddType,               "INSERT INTO filetypes VALUES (NULL,(CASE ?1 WHEN 0 THEN 1 ELSE (SELECT weight FROM filetypes WHERE id=?1)+1 END),?2,?3);"sv },
@@ -1151,17 +1179,17 @@ private:
 		{
 			auto& e = CreateChild(root, "filetype");
 
-			e.SetAttribute("mask", stmtEnumAllTypes.GetColTextUTF8(1).c_str());
-			e.SetAttribute("description", stmtEnumAllTypes.GetColTextUTF8(2).c_str());
+			SetAttribute(e, "mask", stmtEnumAllTypes.GetColTextUTF8(1));
+			SetAttribute(e, "description", stmtEnumAllTypes.GetColTextUTF8(2));
 
 			stmtEnumCommandsPerFiletype.Bind(stmtEnumAllTypes.GetColInt64(0));
 			while (stmtEnumCommandsPerFiletype.Step())
 			{
 				auto& se = CreateChild(e, "command");
 
-				se.SetAttribute("type", stmtEnumCommandsPerFiletype.GetColInt(0));
-				se.SetAttribute("enabled", stmtEnumCommandsPerFiletype.GetColInt(1));
-				se.SetAttribute("command", stmtEnumCommandsPerFiletype.GetColTextUTF8(2).c_str());
+				SetAttribute(se, "type", stmtEnumCommandsPerFiletype.GetColInt(0));
+				SetAttribute(se, "enabled", stmtEnumCommandsPerFiletype.GetColInt(1));
+				SetAttribute(se, "command", stmtEnumCommandsPerFiletype.GetColTextUTF8(2));
 			}
 			stmtEnumCommandsPerFiletype.Reset();
 		}
@@ -1178,8 +1206,8 @@ private:
 		unsigned long long id = 0;
 		for (const auto& e: xml_enum(base, "filetype"))
 		{
-			const auto mask = e->Attribute("mask");
-			const auto description = e->Attribute("description");
+			const auto mask = e.Attribute("mask");
+			const auto description = e.Attribute("description");
 
 			if (!mask)
 				continue;
@@ -1189,18 +1217,18 @@ private:
 
 			id = AddType(id, Mask, Description);
 
-			for (const auto& se: xml_enum(*e, "command"))
+			for (const auto& se: xml_enum(e, "command"))
 			{
-				const auto command = se->Attribute("command");
+				const auto command = se.Attribute("command");
 				if (!command)
 					continue;
 
 				int type=0;
-				if (se->QueryIntAttribute("type", &type) != tinyxml::XML_SUCCESS)
+				if (se.QueryIntAttribute("type", &type) != tinyxml::XML_SUCCESS)
 					continue;
 
 				int enabled=0;
-				if (se->QueryIntAttribute("enabled", &enabled) != tinyxml::XML_SUCCESS)
+				if (se.QueryIntAttribute("enabled", &enabled) != tinyxml::XML_SUCCESS)
 					continue;
 
 				SetCommand(id, type, encoding::utf8::get_chars(command), enabled != 0);
@@ -1268,7 +1296,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtCreateCache,           "INSERT INTO cachename VALUES (NULL,?1);"sv },
 			{ stmtFindCacheName,         "SELECT id FROM cachename WHERE name=?1;"sv },
@@ -1277,7 +1305,7 @@ private:
 			{ stmtGetPreloadState,       "SELECT enabled FROM preload WHERE cid=?1;"sv },
 			{ stmtGetSignature,          "SELECT signature FROM signatures WHERE cid=?1;"sv },
 			{ stmtGetExportState,        "SELECT enabled FROM exports WHERE cid=?1 and export=?2;"sv },
-			{ stmtGetGuid,               "SELECT guid FROM guids WHERE cid=?1;"sv },
+			{ stmtGetUuid,               "SELECT guid FROM guids WHERE cid=?1;"sv },
 			{ stmtGetTitle,              "SELECT title FROM titles WHERE cid=?1;"sv },
 			{ stmtGetAuthor,             "SELECT author FROM authors WHERE cid=?1;"sv },
 			{ stmtGetPrefix,             "SELECT prefix FROM prefixes WHERE cid=?1;"sv },
@@ -1288,7 +1316,7 @@ private:
 			{ stmtSetPreloadState,       "REPLACE INTO preload VALUES (?1,?2);"sv },
 			{ stmtSetSignature,          "REPLACE INTO signatures VALUES (?1,?2);"sv },
 			{ stmtSetExportState,        "REPLACE INTO exports VALUES (?1,?2,?3);"sv },
-			{ stmtSetGuid,               "REPLACE INTO guids VALUES (?1,?2);"sv },
+			{ stmtSetUuid,               "REPLACE INTO guids VALUES (?1,?2);"sv },
 			{ stmtSetTitle,              "REPLACE INTO titles VALUES (?1,?2);"sv },
 			{ stmtSetAuthor,             "REPLACE INTO authors VALUES (?1,?2);"sv },
 			{ stmtSetPrefix,             "REPLACE INTO prefixes VALUES (?1,?2);"sv },
@@ -1343,9 +1371,9 @@ private:
 		return Stmt->Bind(id, ExportName).Step() && Stmt->GetColInt(0);
 	}
 
-	string GetGuid(unsigned long long id) const override
+	string GetUuid(unsigned long long id) const override
 	{
-		return GetTextFromID(stmtGetGuid, id);
+		return GetTextFromID(stmtGetUuid, id);
 	}
 
 	string GetTitle(unsigned long long id) const override
@@ -1373,19 +1401,19 @@ private:
 		return GetVersionImpl(stmtGetVersion, id, Version);
 	}
 
-	bool GetDiskMenuItem(unsigned long long id, size_t index, string &Text, GUID& Guid) const override
+	bool GetDiskMenuItem(unsigned long long id, size_t index, string &Text, UUID& Uuid) const override
 	{
-		return GetMenuItem(id, DRIVE_MENU, index, Text, Guid);
+		return GetMenuItem(id, DRIVE_MENU, index, Text, Uuid);
 	}
 
-	bool GetPluginsMenuItem(unsigned long long id, size_t index, string &Text, GUID& Guid) const override
+	bool GetPluginsMenuItem(unsigned long long id, size_t index, string &Text, UUID& Uuid) const override
 	{
-		return GetMenuItem(id, PLUGINS_MENU, index, Text, Guid);
+		return GetMenuItem(id, PLUGINS_MENU, index, Text, Uuid);
 	}
 
-	bool GetPluginsConfigMenuItem(unsigned long long id, size_t index, string &Text, GUID& Guid) const override
+	bool GetPluginsConfigMenuItem(unsigned long long id, size_t index, string &Text, UUID& Uuid) const override
 	{
-		return GetMenuItem(id, CONFIG_MENU, index, Text, Guid);
+		return GetMenuItem(id, CONFIG_MENU, index, Text, Uuid);
 	}
 
 	string GetCommandPrefix(unsigned long long id) const override
@@ -1409,19 +1437,19 @@ private:
 		ExecuteStatement(stmtSetSignature, id, Signature);
 	}
 
-	void SetDiskMenuItem(const unsigned long long id, const size_t index, const string_view Text, const GUID& Guid) override
+	void SetDiskMenuItem(const unsigned long long id, const size_t index, const string_view Text, const UUID& Uuid) override
 	{
-		SetMenuItem(id, DRIVE_MENU, index, Text, Guid);
+		SetMenuItem(id, DRIVE_MENU, index, Text, Uuid);
 	}
 
-	void SetPluginsMenuItem(const unsigned long long id, const size_t index, const string_view Text, const GUID& Guid) override
+	void SetPluginsMenuItem(const unsigned long long id, const size_t index, const string_view Text, const UUID& Uuid) override
 	{
-		SetMenuItem(id, PLUGINS_MENU, index, Text, Guid);
+		SetMenuItem(id, PLUGINS_MENU, index, Text, Uuid);
 	}
 
-	void SetPluginsConfigMenuItem(const unsigned long long id, const size_t index, const string_view Text, const GUID& Guid) override
+	void SetPluginsConfigMenuItem(const unsigned long long id, const size_t index, const string_view Text, const UUID& Uuid) override
 	{
-		SetMenuItem(id, CONFIG_MENU, index, Text, Guid);
+		SetMenuItem(id, CONFIG_MENU, index, Text, Uuid);
 	}
 
 	void SetCommandPrefix(const unsigned long long id, const string_view Prefix) override
@@ -1442,17 +1470,17 @@ private:
 
 	void SetMinFarVersion(unsigned long long id, const VersionInfo& Version) override
 	{
-		ExecuteStatement(stmtSetMinFarVersion, id, bytes_view(Version));
+		ExecuteStatement(stmtSetMinFarVersion, id, view_bytes(Version));
 	}
 
 	void SetVersion(unsigned long long id, const VersionInfo& Version) override
 	{
-		ExecuteStatement(stmtSetVersion, id, bytes_view(Version));
+		ExecuteStatement(stmtSetVersion, id, view_bytes(Version));
 	}
 
-	void SetGuid(const unsigned long long id, const string_view Guid) override
+	void SetUuid(const unsigned long long id, const string_view Uuid) override
 	{
-		ExecuteStatement(stmtSetGuid, id, Guid);
+		ExecuteStatement(stmtSetUuid, id, Uuid);
 	}
 
 	void SetTitle(const unsigned long long id, const string_view Title) override
@@ -1470,10 +1498,10 @@ private:
 		ExecuteStatement(stmtSetDescription, id, Description);
 	}
 
-	bool EnumPlugins(DWORD index, string &CacheName) const override
+	bool EnumPlugins(size_t const Index, string &CacheName) const override
 	{
 		auto Stmt = AutoStatement(stmtEnumCache);
-		if (index == 0)
+		if (Index == 0)
 			Stmt->Reset();
 
 		if (!Stmt->Step())
@@ -1497,19 +1525,25 @@ private:
 		DRIVE_MENU
 	};
 
-	bool GetMenuItem(unsigned long long id, MenuItemTypeEnum type, size_t index, string &Text, GUID& Guid) const
+	bool GetMenuItem(unsigned long long id, MenuItemTypeEnum type, size_t index, string &Text, UUID& Uuid) const
 	{
 		const auto Stmt = AutoStatement(stmtGetMenuItem);
 		if (!Stmt->Bind(id, type, index).Step())
 			return false;
 
 		Text = Stmt->GetColText(0);
-		return StrToGuid(Stmt->GetColText(1), Guid);
+
+		const auto UuidOpt = uuid::try_parse(Stmt->GetColText(1));
+		if (!UuidOpt)
+			return false;
+
+		Uuid = *UuidOpt;
+		return true;
 	}
 
-	void SetMenuItem(const unsigned long long id, const MenuItemTypeEnum type, const size_t index, const string_view Text, const GUID& Guid) const
+	void SetMenuItem(const unsigned long long id, const MenuItemTypeEnum type, const size_t index, const string_view Text, const UUID& Uuid) const
 	{
-		ExecuteStatement(stmtSetMenuItem, id, type, index, GuidToStr(Guid), Text);
+		ExecuteStatement(stmtSetMenuItem, id, type, index, uuid::str(Uuid), Text);
 	}
 
 	string GetTextFromID(size_t StatementIndex, unsigned long long id) const
@@ -1524,8 +1558,7 @@ private:
 		if (!Stmt->Bind(id).Step())
 			return false;
 
-		Version = deserialise<VersionInfo>(Stmt->GetColBlob(0));
-		return true;
+		return deserialise(Stmt->GetColBlob(0), Version);
 	}
 
 	enum statement_id
@@ -1537,7 +1570,7 @@ private:
 		stmtGetPreloadState,
 		stmtGetSignature,
 		stmtGetExportState,
-		stmtGetGuid,
+		stmtGetUuid,
 		stmtGetTitle,
 		stmtGetAuthor,
 		stmtGetPrefix,
@@ -1548,7 +1581,7 @@ private:
 		stmtSetPreloadState,
 		stmtSetSignature,
 		stmtSetExportState,
-		stmtSetGuid,
+		stmtSetUuid,
 		stmtSetTitle,
 		stmtSetAuthor,
 		stmtSetPrefix,
@@ -1582,7 +1615,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtGetHotkey,             "SELECT hotkey FROM pluginhotkeys WHERE pluginkey=?1 AND menuguid=?2 AND type=?3;"sv },
 			{ stmtSetHotkey,             "REPLACE INTO pluginhotkeys VALUES (?1,?2,?3,?4);"sv },
@@ -1599,23 +1632,23 @@ private:
 		return Stmt->Bind(as_underlying_type(HotKeyType)).Step() && Stmt->GetColInt(0);
 	}
 
-	string GetHotkey(const string_view PluginKey, const GUID& MenuGuid, const hotkey_type HotKeyType) override
+	string GetHotkey(const string_view PluginKey, const UUID& MenuUuid, const hotkey_type HotKeyType) override
 	{
 		const auto Stmt = AutoStatement(stmtGetHotkey);
-		if (!Stmt->Bind(PluginKey, GuidToStr(MenuGuid), as_underlying_type(HotKeyType)).Step())
+		if (!Stmt->Bind(PluginKey, uuid::str(MenuUuid), as_underlying_type(HotKeyType)).Step())
 			return {};
 
 		return Stmt->GetColText(0);
 	}
 
-	void SetHotkey(const string_view PluginKey, const GUID& MenuGuid, const hotkey_type HotKeyType, const string_view HotKey) override
+	void SetHotkey(const string_view PluginKey, const UUID& MenuUuid, const hotkey_type HotKeyType, const string_view HotKey) override
 	{
-		ExecuteStatement(stmtSetHotkey, PluginKey, GuidToStr(MenuGuid), as_underlying_type(HotKeyType), HotKey);
+		ExecuteStatement(stmtSetHotkey, PluginKey, uuid::str(MenuUuid), as_underlying_type(HotKeyType), HotKey);
 	}
 
-	void DelHotkey(const string_view PluginKey, const GUID& MenuGuid, const hotkey_type HotKeyType) override
+	void DelHotkey(const string_view PluginKey, const UUID& MenuUuid, const hotkey_type HotKeyType) override
 	{
-		ExecuteStatement(stmtDelHotkey, PluginKey, GuidToStr(MenuGuid), as_underlying_type(HotKeyType));
+		ExecuteStatement(stmtDelHotkey, PluginKey, uuid::str(MenuUuid), as_underlying_type(HotKeyType));
 	}
 
 	void Export(representation_destination& Representation) const override
@@ -1629,7 +1662,7 @@ private:
 		{
 			auto& p = CreateChild(root, "plugin");
 
-			p.SetAttribute("key", stmtEnumAllPluginKeys.GetColTextUTF8(0).c_str());
+			SetAttribute(p, "key", stmtEnumAllPluginKeys.GetColTextUTF8(0));
 
 			stmtEnumAllHotkeysPerKey.Bind(stmtEnumAllPluginKeys.GetColText(0));
 			while (stmtEnumAllHotkeysPerKey.Step())
@@ -1649,9 +1682,9 @@ private:
 				}
 
 				auto& e = CreateChild(p, "hotkey");
-				e.SetAttribute("menu", type);
-				e.SetAttribute("guid", stmtEnumAllHotkeysPerKey.GetColTextUTF8(0).c_str());
-				e.SetAttribute("hotkey", stmtEnumAllHotkeysPerKey.GetColTextUTF8(2).c_str());
+				SetAttribute(e, "menu", type);
+				SetAttribute(e, "guid", stmtEnumAllHotkeysPerKey.GetColTextUTF8(0));
+				SetAttribute(e, "hotkey", stmtEnumAllHotkeysPerKey.GetColTextUTF8(2));
 			}
 			stmtEnumAllHotkeysPerKey.Reset();
 		}
@@ -1662,30 +1695,35 @@ private:
 		SCOPED_ACTION(auto)(ScopedTransaction());
 		for (const auto& e: xml_enum(Representation.Root().FirstChildElement("pluginhotkeys"), "plugin"))
 		{
-			const auto key = e->Attribute("key");
+			const auto key = e.Attribute("key");
 
 			if (!key)
 				continue;
 
 			const auto Key = encoding::utf8::get_chars(key);
 
-			for (const auto& se: xml_enum(*e, "hotkey"))
+			for (const auto& se: xml_enum(e, "hotkey"))
 			{
-				const auto stype = se->Attribute("menu");
-				const auto guid = se->Attribute("guid");
-				const auto hotkey = se->Attribute("hotkey");
-
-				GUID Guid;
-
-				if (!stype || !guid || !StrToGuid(encoding::utf8::get_chars(guid), Guid))
+				const auto stype = se.Attribute("menu");
+				if (!stype)
 					continue;
+
+				const auto UuidStr = se.Attribute("guid");
+				if (!UuidStr)
+					continue;
+
+				const auto Uuid = uuid::try_parse(encoding::utf8::get_chars(UuidStr));
+				if (!Uuid)
+					continue;
+
+				const auto hotkey = se.Attribute("hotkey");
 
 				const auto ProcessHotkey = [&](hotkey_type const Type)
 				{
 					if (hotkey && *hotkey)
-						SetHotkey(Key, Guid, Type, encoding::utf8::get_chars(hotkey));
+						SetHotkey(Key, *Uuid, Type, encoding::utf8::get_chars(hotkey));
 					else
-						DelHotkey(Key, Guid, Type);
+						DelHotkey(Key, *Uuid, Type);
 				};
 
 				if (!strcmp(stype, "drive"))
@@ -1716,7 +1754,6 @@ public:
 	explicit HistoryConfigCustom(string_view const DbName):
 		sqlite_boilerplate(&HistoryConfigCustom::Initialise, DbName, true)
 	{
-		StartThread();
 	}
 
 	~HistoryConfigCustom() override
@@ -1726,12 +1763,11 @@ public:
 	}
 
 private:
-	os::thread WorkThread;
-	os::event StopEvent;
-	os::event AsyncDeleteAddDone;
-	os::event AsyncCommitDone;
-	os::event AsyncWork;
-	os::multi_waiter AllWaiter;
+	os::event StopEvent{os::event::type::automatic, os::event::state::nonsignaled};
+	os::event AsyncDeleteAddDone{os::event::type::manual, os::event::state::signaled};
+	os::event AsyncCommitDone{os::event::type::manual, os::event::state::signaled};
+	os::event AsyncWork{os::event::type::automatic, os::event::state::nonsignaled};
+	os::thread WorkThread{os::thread::mode::join, &HistoryConfigCustom::ThreadProc, this};
 
 	struct AsyncWorkItem
 	{
@@ -1741,40 +1777,30 @@ private:
 		string strName;
 		int Type;
 		bool Lock;
-		string strGuid;
+		string strUuid;
 		string strFile;
 		string strData;
 	};
 
 	os::synced_queue<std::unique_ptr<AsyncWorkItem>> WorkQueue;
 
-	void WaitAllAsync() const { AllWaiter.wait(); }
-	void WaitCommitAsync() const { AsyncCommitDone.wait(); }
-
-	bool StartThread()
+	void WaitAllAsync() const
 	{
-		StopEvent = os::event(os::event::type::automatic, os::event::state::nonsignaled);
-		AsyncDeleteAddDone = os::event(os::event::type::manual, os::event::state::signaled);
-		AsyncCommitDone = os::event(os::event::type::manual, os::event::state::signaled);
-		AllWaiter.add(AsyncDeleteAddDone);
-		AllWaiter.add(AsyncCommitDone);
-		AsyncWork = os::event(os::event::type::automatic, os::event::state::nonsignaled);
-		WorkThread = os::thread(&os::thread::join, &HistoryConfigCustom::ThreadProc, this);
-		return true;
+		(void)os::handle::wait_all({ AsyncDeleteAddDone.native_handle(), AsyncCommitDone.native_handle() });
+	}
+
+	void WaitCommitAsync() const
+	{
+		AsyncCommitDone.wait();
 	}
 
 	void ThreadProc()
 	{
 		// TODO: SEH guard, try/catch, exception_ptr
-		os::multi_waiter Waiter;
-		Waiter.add(AsyncWork);
-		Waiter.add(StopEvent);
 
 		for (;;)
 		{
-			const auto wait = Waiter.wait(os::multi_waiter::mode::any);
-
-			if (wait != WAIT_OBJECT_0)
+			if (os::handle::wait_any({ AsyncWork.native_handle(), StopEvent.native_handle() }) == 1)
 				break;
 
 			bool bAddDelete=false, bCommit=false;
@@ -1791,7 +1817,7 @@ private:
 						SQLiteDb::BeginTransaction();
 						if (item->DeleteId)
 							DeleteInternal(item->DeleteId);
-						AddInternal(item->TypeHistory, item->HistoryName, item->strName, item->Type, item->Lock, item->strGuid, item->strFile, item->strData);
+						AddInternal(item->TypeHistory, item->HistoryName, item->strName, item->Type, item->Lock, item->strUuid, item->strFile, item->strData);
 						bAddDelete = true;
 					}
 					else // EndTransaction
@@ -1807,9 +1833,9 @@ private:
 		}
 	}
 
-	void AddInternal(unsigned int const TypeHistory, string_view const HistoryName, string_view const Name, int const Type, bool const Lock, string_view const Guid, string_view const File, string_view const Data) const
+	void AddInternal(unsigned int const TypeHistory, string_view const HistoryName, string_view const Name, int const Type, bool const Lock, string_view const Uuid, string_view const File, string_view const Data) const
 	{
-		ExecuteStatement(stmtAdd, TypeHistory, HistoryName, Type, Lock, Name, os::chrono::nt_clock::to_hectonanoseconds(os::chrono::nt_clock::now()), Guid, File, Data);
+		ExecuteStatement(stmtAdd, TypeHistory, HistoryName, Type, Lock, Name, os::chrono::nt_clock::to_hectonanoseconds(os::chrono::nt_clock::now()), Uuid, File, Data);
 	}
 
 	void DeleteInternal(unsigned long long id) const
@@ -1874,7 +1900,7 @@ private:
 
 		Db.Exec(Schema);
 
-		static const stmt_init<statement_id> Statements[] =
+		static const stmt_init<statement_id> Statements[]
 		{
 			{ stmtEnum,                  "SELECT id, name, type, lock, time, guid, file, data FROM history WHERE kind=?1 AND key=?2 ORDER BY time;"sv },
 			{ stmtEnumDesc,              "SELECT id, name, type, lock, time, guid, file, data FROM history WHERE kind=?1 AND key=?2 ORDER BY lock DESC, time DESC;"sv },
@@ -1918,7 +1944,7 @@ private:
 		return AutoStatement(Reverse? stmtEnumDesc : stmtEnum);
 	}
 
-	bool Enum(const bool Reset, const unsigned int TypeHistory, const string_view HistoryName, unsigned long long& id, string& Name, history_record_type& Type, bool& Lock, os::chrono::time_point& Time, string& strGuid, string& strFile, string& strData, const bool Reverse) override
+	bool Enum(const bool Reset, const unsigned int TypeHistory, const string_view HistoryName, unsigned long long& id, string& Name, history_record_type& Type, bool& Lock, os::chrono::time_point& Time, string& strUuid, string& strFile, string& strData, const bool Reverse) override
 	{
 		WaitAllAsync();
 		auto Stmt = EnumStmt(Reverse);
@@ -1934,7 +1960,7 @@ private:
 		Type = static_cast<history_record_type>(Stmt->GetColInt(2));
 		Lock = Stmt->GetColInt(3) != 0;
 		Time = os::chrono::nt_clock::from_hectonanoseconds(Stmt->GetColInt64(4));
-		strGuid = Stmt->GetColText(5);
+		strUuid = Stmt->GetColText(5);
 		strFile = Stmt->GetColText(6);
 		strData = Stmt->GetColText(7);
 		KeepStatement(Stmt);
@@ -1946,7 +1972,7 @@ private:
 		(void)EnumStmt(Reverse);
 	}
 
-	void DeleteAndAddAsync(unsigned long long const DeleteId, unsigned int const TypeHistory, string_view const HistoryName, string_view const Name, int const Type, bool const Lock, string_view const Guid, string_view const File, string_view const Data) override
+	void DeleteAndAddAsync(unsigned long long const DeleteId, unsigned int const TypeHistory, string_view const HistoryName, string_view const Name, int const Type, bool const Lock, string_view const Uuid, string_view const File, string_view const Data) override
 	{
 		auto item = std::make_unique<AsyncWorkItem>();
 		item->DeleteId=DeleteId;
@@ -1955,7 +1981,7 @@ private:
 		item->strName = Name;
 		item->Type=Type;
 		item->Lock=Lock;
-		item->strGuid = Guid;
+		item->strUuid = Uuid;
 		item->strFile = File;
 		item->strData = Data;
 
@@ -2011,11 +2037,11 @@ private:
 		return true;
 	}
 
-	bool Get(unsigned long long id, string* const Name = {}, history_record_type* const Type = {}, string* const Guid = {}, string* const File = {}, string* const Data = {}) override
+	bool Get(unsigned long long id, string* const Name = {}, history_record_type* const Type = {}, string* const Uuid = {}, string* const File = {}, string* const Data = {}) override
 	{
 		WaitAllAsync();
 
-		const auto StmtId = (Type || Guid || File || Data)? stmtGetNameAndType : stmtGetName;
+		const auto StmtId = (Type || Uuid || File || Data)? stmtGetNameAndType : stmtGetName;
 
 		const auto Stmt = AutoStatement(StmtId);
 		if (!Stmt->Bind(id).Step())
@@ -2027,8 +2053,8 @@ private:
 		if (Type)
 			*Type = static_cast<history_record_type>(Stmt->GetColInt(1));
 
-		if (Guid)
-			*Guid = Stmt->GetColText(2);
+		if (Uuid)
+			*Uuid = Stmt->GetColText(2);
 
 		if (File)
 			*File = Stmt->GetColText(3);
@@ -2274,10 +2300,10 @@ void config_provider::TryImportDatabase(representable& p, const char* NodeName, 
 		{
 			for (const auto& i: xml_enum(root.FirstChildElement("pluginsconfig"), "plugin"))
 			{
-				const auto guid = i->Attribute("guid");
-				if (guid && 0 == strcmp(guid, NodeName))
+				const auto Uuid = i.Attribute("guid");
+				if (Uuid && 0 == strcmp(Uuid, NodeName))
 				{
-					m_TemplateSource->SetRoot(&const_cast<tinyxml::XMLElement&>(*i));
+					m_TemplateSource->SetRoot(&const_cast<tinyxml::XMLElement&>(i));
 					p.Import(*m_TemplateSource);
 					break;
 				}
@@ -2298,7 +2324,7 @@ void config_provider::ImportDatabase(T& Database, const char* ImportNodeName, bo
 
 static string GetDatabasePath(string_view const FileName, bool const Local)
 {
-	return FileName == SQLiteDb::memory_db_name()?
+	return FileName == SQLiteDb::memory_db_name?
 		string(FileName) :
 		path::join(Local? Global->Opt->LocalProfilePath : Global->Opt->ProfilePath, FileName);
 }
@@ -2325,7 +2351,7 @@ std::unique_ptr<T> config_provider::CreateWithFallback(string_view const Name)
 		if (Global->Opt->ReadOnlyConfig || !os::fs::move_file(Name, Name + L".bad"sv, MOVEFILE_REPLACE_EXISTING))
 		{
 			Report(L"  - database is opened in memory"sv);
-			return std::make_unique<T>(SQLiteDb::memory_db_name());
+			return std::make_unique<T>(SQLiteDb::memory_db_name);
 		}
 
 		try
@@ -2338,7 +2364,7 @@ std::unique_ptr<T> config_provider::CreateWithFallback(string_view const Name)
 		{
 			Report(concat(L"  "sv, e2.message()));
 			Report(L"  - database is opened in memory"sv);
-			return std::make_unique<T>(SQLiteDb::memory_db_name());
+			return std::make_unique<T>(SQLiteDb::memory_db_name);
 		}
 	}
 }
@@ -2381,9 +2407,9 @@ enum dbcheck: int
 	CHECK_PANELMODES = 3_bit,
 };
 
-HierarchicalConfigUniquePtr config_provider::CreatePluginsConfig(const string_view guid, const bool Local, bool UseFallback)
+HierarchicalConfigUniquePtr config_provider::CreatePluginsConfig(const string_view Uuid, const bool Local, bool UseFallback)
 {
-	return CreateHierarchicalConfig<HierarchicalConfigDb>(CHECK_NONE, path::join(L"PluginsData"sv, guid) + L".db"sv, encoding::utf8::get_bytes(guid).c_str(), Local, true, UseFallback);
+	return CreateHierarchicalConfig<HierarchicalConfigDb>(CHECK_NONE, path::join(L"PluginsData"sv, Uuid) + L".db"sv, encoding::utf8::get_bytes(Uuid).c_str(), Local, true, UseFallback);
 }
 
 HierarchicalConfigUniquePtr config_provider::CreateFiltersConfig()
@@ -2432,7 +2458,7 @@ config_provider::config_provider(mode Mode):
 	m_PlCacheCfg(CreateDatabase<PluginsCacheConfigDb>(pluginscache_db_name(), true)),
 	m_PlHotkeyCfg(CreateDatabase<PluginsHotkeysConfigDb>(L"pluginhotkeys.db"sv, false)),
 	m_HistoryCfg(CreateDatabase<HistoryConfigDb>(L"history.db"sv, true)),
-	m_HistoryCfgMem(CreateDatabase<HistoryConfigMemory>(SQLiteDb::memory_db_name(), true))
+	m_HistoryCfgMem(CreateDatabase<HistoryConfigMemory>(SQLiteDb::memory_db_name, true))
 {
 }
 
@@ -2447,12 +2473,12 @@ config_provider::~config_provider()
 	m_Threads.clear();
 }
 
-void config_provider::Export(const string& File)
+void config_provider::Export(string_view const File)
 {
 	representation_destination Representation;
 	auto& root = Representation.Root();
 	const auto Version = build::version();
-	root.SetAttribute("version", format(FSTR("{0}.{1}.{2}"), Version.Major, Version.Minor, Version.Build).c_str());
+	SetAttribute(root, "version", format(FSTR("{0}.{1}.{2}"), Version.Major, Version.Minor, Version.Build));
 
 	GeneralCfg()->Export(Representation);
 	LocalGeneralCfg()->Export(Representation);
@@ -2472,15 +2498,15 @@ void config_provider::Export(const string& File)
 		const auto Ext = L"*.db"sv;
 		//TODO: export local plugin settings
 		auto& e = CreateChild(root, "pluginsconfig");
-		for(auto& i: os::fs::enum_files(path::join(Global->Opt->ProfilePath, L"PluginsData"sv, Ext)))
+		for(const auto& i: os::fs::enum_files(path::join(Global->Opt->ProfilePath, L"PluginsData"sv, Ext)))
 		{
-			i.FileName.resize(i.FileName.size() - (Ext.size() - 1));
-			if (is_uuid(i.FileName))
+			const auto FileName = name_ext(i.FileName).first;
+			if (is_uuid(FileName))
 			{
 				auto& PluginRoot = CreateChild(e, "plugin");
-				PluginRoot.SetAttribute("guid", encoding::utf8::get_bytes(i.FileName).c_str());
+				SetAttribute(PluginRoot, "guid", encoding::utf8::get_bytes(FileName));
 				Representation.SetRoot(PluginRoot);
-				CreatePluginsConfig(i.FileName)->Export(Representation);
+				CreatePluginsConfig(FileName)->Export(Representation);
 			}
 		}
 	}
@@ -2488,7 +2514,7 @@ void config_provider::Export(const string& File)
 	return Representation.Save(File);
 }
 
-void config_provider::ServiceMode(const string& File)
+void config_provider::ServiceMode(string_view const File)
 {
 	switch (m_Mode)
 	{
@@ -2498,7 +2524,7 @@ void config_provider::ServiceMode(const string& File)
 	}
 }
 
-void config_provider::Import(const string& File)
+void config_provider::Import(string_view const File)
 {
 	representation_source Representation(File);
 
@@ -2521,14 +2547,14 @@ void config_provider::Import(const string& File)
 	//TODO: import local plugin settings
 	for (const auto& plugin: xml_enum(root.FirstChildElement("pluginsconfig"), "plugin"))
 	{
-		const auto guid = plugin->Attribute("guid");
-		if (!guid)
+		const auto UuidStr = plugin.Attribute("guid");
+		if (!UuidStr)
 			continue;
 
-		if (const auto Guid = encoding::utf8::get_chars(guid); is_uuid(Guid))
+		if (const auto Uuid = encoding::utf8::get_chars(UuidStr); is_uuid(Uuid))
 		{
-			Representation.SetRoot(&const_cast<tinyxml::XMLElement&>(*plugin));
-			CreatePluginsConfig(Guid)->Import(Representation);
+			Representation.SetRoot(&const_cast<tinyxml::XMLElement&>(plugin));
+			CreatePluginsConfig(Uuid)->Import(Representation);
 		}
 	}
 }
@@ -2544,10 +2570,10 @@ bool config_provider::ShowProblems() const
 		{ lng::MShowConfigFolders, lng::MIgnore }) == Message::first_button;
 }
 
-void config_provider::AsyncCall(const std::function<void()>& Routine)
+void config_provider::AsyncCall(async_key, const std::function<void()>& Routine)
 {
 	m_Threads.erase(std::remove_if(ALL_RANGE(m_Threads), [](const os::thread& i){ return i.is_signaled(); }), m_Threads.end());
-	m_Threads.emplace_back(&os::thread::join, Routine);
+	m_Threads.emplace_back(os::thread::mode::join, Routine);
 }
 
 config_provider& ConfigProvider()

@@ -63,7 +63,7 @@ public:
 	enum_lines(std::istream& Stream, uintptr_t CodePage);
 	~enum_lines();
 
-	bool conversion_error() const { return m_ConversionError; }
+	bool conversion_error() const { return !!m_ErrorPosition; }
 
 private:
 	[[nodiscard]]
@@ -90,20 +90,16 @@ private:
 		default_capacity = 1024,
 	};
 
-	union
+	struct conversion_data
 	{
-		mutable string m_wStr;
-
-		struct
-		{
-			mutable std::string m_Bytes;
-			mutable wchar_t_ptr_n<default_capacity> m_wBuffer;
-		}
-		m_ConversionData;
+		mutable std::string m_Bytes;
+		mutable wchar_t_ptr_n<default_capacity> m_wBuffer;
 	};
 
+	mutable std::variant<conversion_data, string> m_Data;
+
 	mutable bool m_CrCr{};
-	mutable bool m_ConversionError{};
+	mutable encoding::error_position m_ErrorPosition{};
 };
 
 // If the file contains a BOM this function will advance the file pointer by the BOM size (either 2 or 3)

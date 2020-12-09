@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "plist.hpp"
 
@@ -45,7 +48,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "imports.hpp"
 #include "string_sort.hpp"
 #include "exception.hpp"
+#include "exception_handler.hpp"
 #include "console.hpp"
+#include "keyboard.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
@@ -107,7 +112,8 @@ static BOOL CALLBACK EnumWindowsProc(HWND const Window, LPARAM const Param)
 {
 	auto& Info = *reinterpret_cast<ProcInfo*>(Param);
 
-	try
+	return cpp_try(
+	[&]
 	{
 		if (!is_alttab_window(Window))
 			return true;
@@ -117,9 +123,12 @@ static BOOL CALLBACK EnumWindowsProc(HWND const Window, LPARAM const Param)
 
 		Info.Windows.emplace_back(Window, Pid);
 		return true;
-	}
-	CATCH_AND_SAVE_EXCEPTION_TO(Info.ExceptionPtr)
-	return false;
+	},
+	[&]
+	{
+		SAVE_EXCEPTION_TO(Info.ExceptionPtr);
+		return false;
+	});
 }
 
 static void AddMenuItem(HWND const Window, DWORD const Pid, size_t const PidWidth, bool const ShowImage, vmenu2_ptr const& Menu)
@@ -200,7 +209,7 @@ void ShowProcessList()
 		return;
 
 	ProcList->AssignHighlights();
-	ProcList->SetBottomTitle(msg(lng::MProcessListBottom));
+	ProcList->SetBottomTitle(KeysToLocalizedText(KEY_DEL, KEY_F2, KEY_CTRLR));
 
 	ProcList->Run([&](const Manager::Key& RawKey)
 	{
@@ -227,7 +236,7 @@ void ShowProcessList()
 						{ lng::MKillProcessKill, lng::MCancel }) == Message::first_button)
 					{
 						const os::handle Process(OpenProcess(PROCESS_TERMINATE, FALSE, MenuData->Pid));
-						if (!Process || !TerminateProcess(Process.native_handle(), 0xFFFFFFFF))
+						if (!Process || !TerminateProcess(Process.native_handle(), ERROR_PROCESS_ABORTED))
 						{
 							const auto ErrorState = error_state::fetch();
 

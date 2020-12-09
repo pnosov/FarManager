@@ -131,9 +131,10 @@ namespace os
 		protected:
 			[[nodiscard]]
 			static HANDLE normalise(HANDLE Handle);
-			static void wait(HANDLE Handle);
 			[[nodiscard]]
-			static bool is_signaled(HANDLE Handle, std::chrono::milliseconds Timeout = 0ms);
+			static bool wait(HANDLE Handle, std::optional<std::chrono::milliseconds> Timeout = {});
+			[[nodiscard]]
+			static std::optional<size_t> wait(span<HANDLE const> Handles, bool WaitAll, std::optional<std::chrono::milliseconds> Timeout = {});
 		};
 
 		template<class deleter>
@@ -171,24 +172,54 @@ namespace os
 
 			void wait() const
 			{
-				handle_implementation::wait(native_handle());
+				(void)handle_implementation::wait(native_handle());
 			}
 
 			[[nodiscard]]
 			bool is_signaled(std::chrono::milliseconds Timeout = 0ms) const
 			{
-				return handle_implementation::is_signaled(native_handle(), Timeout);
+				return handle_implementation::wait(native_handle(), Timeout);
+			}
+
+			[[nodiscard]]
+			static bool is_signaled(HANDLE const Handle, std::chrono::milliseconds const Timeout)
+			{
+				return handle_implementation::wait(Handle, Timeout);
+			}
+
+			[[nodiscard]]
+			static auto wait_any(span<HANDLE const> const Handles, std::chrono::milliseconds const Timeout)
+			{
+				return handle_implementation::wait(Handles, false, Timeout);
+			}
+
+			[[nodiscard]]
+			static auto wait_any(span<HANDLE const> const Handles)
+			{
+				return *handle_implementation::wait(Handles, false);
+			}
+
+			[[nodiscard]]
+			static auto wait_all(span<HANDLE const> const Handles, std::chrono::milliseconds const Timeout)
+			{
+				return handle_implementation::wait(Handles, true, Timeout);
+			}
+
+			[[nodiscard]]
+			static auto wait_all(span<HANDLE const> const Handles)
+			{
+				return *handle_implementation::wait(Handles, true);
 			}
 		};
 
 		struct handle_closer
 		{
-			void operator()(HANDLE Handle) const;
+			void operator()(HANDLE Handle) const noexcept;
 		};
 
 		struct printer_handle_closer
 		{
-			void operator()(HANDLE Handle) const;
+			void operator()(HANDLE Handle) const noexcept;
 		};
 	}
 
@@ -204,6 +235,25 @@ namespace os
 	[[nodiscard]]
 	string GetErrorString(bool Nt, DWORD Code);
 
+	string format_system_error(unsigned int ErrorCode, string_view ErrorMessage);
+
+	class last_error_guard
+	{
+	public:
+		NONCOPYABLE(last_error_guard);
+
+		last_error_guard();
+		~last_error_guard();
+
+		void dismiss();
+
+	private:
+		DWORD m_LastError;
+		NTSTATUS m_LastStatus;
+		bool m_Active;
+	};
+
+
 	bool WNetGetConnection(string_view LocalName, string &RemoteName);
 
 	[[nodiscard]]
@@ -212,7 +262,11 @@ namespace os
 	bool GetWindowText(HWND Hwnd, string& Text);
 
 	[[nodiscard]]
+#ifdef _WIN64
+	constexpr bool IsWow64Process() { return false; }
+#else
 	bool IsWow64Process();
+#endif
 
 	[[nodiscard]]
 	DWORD GetAppPathsRedirectionFlag();
@@ -272,7 +326,7 @@ namespace os
 
 		private:
 			[[nodiscard]]
-			HMODULE get_module() const;
+			HMODULE get_module() const noexcept;
 
 			struct module_deleter { void operator()(HMODULE Module) const; };
 			using module_ptr = std::unique_ptr<std::remove_pointer_t<HMODULE>, module_deleter>;
@@ -328,7 +382,7 @@ namespace os
 			template<class T>
 			struct deleter
 			{
-				void operator()(T* Ptr) const
+				void operator()(T* Ptr) const noexcept
 				{
 					NetApiBufferFree(Ptr);
 				}
@@ -374,15 +428,20 @@ namespace os
 		template<typename T>
 		using memory = std::unique_ptr<std::remove_pointer_t<T>, detail::memory_releaser>;
 	}
+
+	namespace uuid
+	{
+		[[nodiscard]]
+		UUID generate();
+	}
+
+	namespace debug
+	{
+		bool debugger_present();
+		void breakpoint(bool Always = true);
+		void print(const wchar_t* Str);
+		void print(string const& Str);
+	}
 }
-
-[[nodiscard]]
-UUID CreateUuid();
-
-[[nodiscard]]
-string GuidToStr(const GUID& Guid);
-
-[[nodiscard]]
-bool StrToGuid(string_view Value, GUID& Guid);
 
 #endif // PLATFORM_HPP_632CB91D_08A9_4793_8FC7_2E38C30CE234

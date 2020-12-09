@@ -21,7 +21,6 @@
 @Interface.CursorSize2=Interface.CursorSize
 @Interface.CursorSize3=Interface.CursorSize
 @Interface.CursorSize4=Interface.CursorSize
-@Interface.DelShowSelected=Interface.DelHighlightSelected
 @Interface.EditorTitleFormat=TitleFormat
 @Interface.ViewerTitleFormat=TitleFormat
 @InterfaceSettings=InterfSettings
@@ -39,9 +38,9 @@
 @System.MsWheelDeltaHelp=System.MsWheelDelta
 @System.MsWheelDeltaView=System.MsWheelDelta
 @Viewer.F8CPs=Editor.F8CPs
-@XLat.Rules1=XLat.Tables
-@XLat.Rules2=XLat.Tables
-@XLat.Rules3=XLat.Tables
+@XLat.Rules1=XLat.Rules
+@XLat.Rules2=XLat.Rules
+@XLat.Rules3=XLat.Rules
 @XLat.Table1=XLat.Tables
 @XLat.Table2=XLat.Tables
 
@@ -87,6 +86,7 @@ $^#Copyright © 1996-2000 Eugene Roshal#
  ~File associations~@FileAssoc@
  ~Operating system commands~@OSCommands@
  ~Folder shortcuts~@FolderShortcuts@
+ ~Sort groups~@SortGroups@
  ~Filters menu~@FiltersMenu@
  ~Screens switching~@ScrSwitch@
  ~Task list~@TaskList@
@@ -269,6 +269,10 @@ title.
  #-set:<parameter>=<value>#
  Override the configuration parameter, see ~far:config~@FarConfig@ for details.
 
+ #-x#
+ Disable exception handling. This parameter is for developers
+and is not recommended for normal operations.
+
  It is possible to specify at most two paths (to folders, files or archives) or
 two commands with plugin prefix in the command line. The first path applies to the
 active panel, the second path - to the passive one:
@@ -351,8 +355,7 @@ $ #Panel control commands#
  Invert selection including folders                   #Ctrl+<Gray *>#
  (ignore command line state)
  Select files with the same name as the current file   #Alt+<Gray +>#
- Deselect files with the same name as the current      #Alt+<Gray ->#
- file
+ Deselect files with the same name as the current file #Alt+<Gray ->#
  Select all files                                    #Shift+<Gray +>#
  Deselect all files                                  #Shift+<Gray ->#
  Restore previous selection                                  #Ctrl+M#
@@ -408,7 +411,6 @@ active, but on the passive panel.
 
  #Ctrl+Alt+Ins#
  Copy real names of selected files to clipboard.
-
 
  #Ctrl+Shift+C#
  Copy the selected files to clipboard.
@@ -712,7 +714,6 @@ the object currently under cursor will be deleted.
  #Alt+Del#
  Wipe out files and folders.
 
-
  Remarks:
 
  1. ^<wrap>In accordance to ~System settings~@SystemSettings@ the hotkeys #F8# and
@@ -723,6 +724,7 @@ the object currently under cursor will be deleted.
 (a different value can be specified in
 ~System.WipeSymbol~@System.WipeSymbol@), then truncating to zero
 length, following by renaming to a temporary name, and finally deleting.
+
 
 @ErrCannotExecute
 $ #Error: Cannot execute#
@@ -988,7 +990,7 @@ an almost limitless expansion of the features of Far.
  * Creating and modifying Windows shortcuts.
  * File and text operations making it more comfortable to use FidoNet.
  * Files UU-encode and UU-decode.
- * WinAmp control and MP3-tags modifying.
+ * Winamp control and MP3-tags modifying.
  * Quake PAK-files processing.
  * Printers control, both connected to PC and network.
  * Connection and debugging of queries to ODBC-compatible databases.
@@ -1022,7 +1024,7 @@ one can recommend:
 
 
 @Panels
-$ #Panels #
+$ #Panels#
  Normally Far shows two panels (left and right windows), with different
 information. If you want to change the type of information displayed in the
 panel, use the ~panel menu~@LeftRightMenu@ or corresponding ~keyboard commands~@KeyRef@.
@@ -1228,7 +1230,7 @@ Supported types: CD-ROM, CD-RW, CD-RW/DVD, DVD-ROM, DVD-RW and DVD-RAM.
 
  Can be one of:
 
- - #Default#
+ - #Logon Name#
    User login, (for example, JeffSmith)
 
  - #Fully Qualified Domain Name#
@@ -1241,19 +1243,23 @@ Supported types: CD-ROM, CD-RW, CD-RW/DVD, DVD-ROM, DVD-RW and DVD-RAM.
    ^<wrap>A "friendly" display name (for example, Jeff Smith). The display name is not necessarily the defining relative distinguished name (RDN).
 
  - #Unique Id#
-   ^<wrap>A GUID string (for example, {4fa050f0-f561-11cf-bdd9-00aa003a77b6}).
+   ^<wrap>An UUID string (for example, {4fa050f0-f561-11cf-bdd9-00aa003a77b6}).
 
  - #Canonical Name#
    ^<wrap>The complete canonical name (for example, engineering.microsoft.com/software/someone). The domain-only version includes a trailing forward slash (/).
 
  - #User Principial Name#
-   ^<wrap>The user principal name (for example, someone@example.com).
+   ^<wrap>The user principal name (for example, someone@@example.com).
 
  - #Service Principal#
-   ^<wrap>The generalized service principal name (for example, www/www.microsoft.com@microsoft.com).
+   ^<wrap>The generalized service principal name (for example, www/www.microsoft.com@@microsoft.com).
 
  - #DNS Domain#
    ^<wrap>The DNS domain name followed by a backward-slash and the SAM user name.
+
+   #Given Name#
+
+   #Surname#
 
  The ouput format depends on the domain structure.
 
@@ -1302,8 +1308,8 @@ pressing the left mouse button.
 
 
 @Menus
-$ #Menus #
- To choose an action from the menu you can press F9 or click on top of the
+$ #Menus#
+ To choose an action from the menu you can press #F9# or click on top of the
 screen.
 
  When the menu is activated by pressing #F9#, the menu for the active panel
@@ -1433,7 +1439,6 @@ $ #Menus: commands menu#
  #File view history#    Display ~file view and edit history~@HistoryViews@.
 
  #Folders history#      Display folders ~changing history~@HistoryFolders@.
-
                       Items in "Folders history" and "File view
                       history" are moved to the end of list after
                       selection. Use #Shift+Enter# to select item
@@ -1457,13 +1462,15 @@ $ #Menus: commands menu#
 
  #Folder shortcuts#     Displays current ~folder shortcuts~@FolderShortcuts@.
 
+ #Edit sort groups#     Allows to edit user defined ~sort groups~@SortGroups@.
+
  #File panel filter#    Allows to control file panel contents.
                       See ~filters menu~@FiltersMenu@ for the detailed
                       description.
 
- #Plugin commands#      Show ~plugin commands~@Plugins@ list
+ #Plugin commands#      Show ~plugin commands~@Plugins@ list.
 
- #Screens list#         Show open ~screens list~@ScrSwitch@
+ #Screens list#         Show open ~screens list~@ScrSwitch@.
 
  #Task list#            Shows ~active tasks list~@TaskList@.
 
@@ -1926,7 +1933,7 @@ attributes and none of the exclusion attributes:
  #[?]# - ^<wrap>ignore this attribute.
 
  The #Compressed#, #Encrypted#, #Not indexed#, #Sparse#, #Temporary# and #Offline# attributes
-are used only on disks with the NTFS file system. #Virtual# attribute is not used in Windows 2000/XP/2003.
+are used only on disks with the NTFS file system.
 The #Integrity stream# and #No scrub data# attributes are supported only on ReFS volumes starting from Windows Server 2012.
 
 
@@ -1940,7 +1947,7 @@ checkboxes. The #Reset# button will clear all of the filter conditions.
 
 
 @History
-$ #History #
+$ #History#
  The commands history shows the list of previously executed commands.
 Besides the cursor control keys, the following keyboard shortcuts are
 available:
@@ -2154,7 +2161,7 @@ If global user menu file exists it will override the user specific menu.
 
 
 @FileAssoc
-$ #File associations #
+$ #File associations#
  Far Manager supports file associations, that allow to associate various
 actions to running, viewing and editing files with a specified
 ~mask~@FileMasks@.
@@ -2176,10 +2183,6 @@ desired association from the menu.
  #Ctrl+Up#    - move association up
 
  #Ctrl+Down#  - move association down
-
- If no execute command is associated with the file and
-#Use Windows registered types# option in ~System settings~@SystemSettings@
-dialog is on, Far tries to use Windows association to execute this file type;
 
  See also: common ~menu~@MenuCmd@ keyboard commands.
 
@@ -2209,14 +2212,13 @@ as a ~mask~@FileMasks@:
 
  The association can be described in the #Description of the association# field.
 
- The following ~special symbols~@MetaSymbols@ can be used in the associated
-command.
+ ~Special symbols~@MetaSymbols@ can be used in the associated command.
 
  Notes:
 
  1. ^<wrap>If no execute command is associated with file and
 #Use Windows registered types# option in ~System settings~@SystemSettings@
-dialog is on, Far tries to use Windows association to execute this file type;
+dialog is on, Far tries to use Windows association to execute this file type.
  2. ^<wrap>Operating system ~commands~@OSCommands@ "IF EXIST" and "IF DEFINED"
 allow to configure "smarter" associations - if you have specified several
 associations for a file type, the menu will show only the associations
@@ -2258,6 +2260,8 @@ executing command. <title> and <init> - title and initial text of edit control.
  grep !?#$GrepHist$#Search for:?! !?In:?*.*!|Far.exe -v -
 
  Leave the name empty to disable history.
+
+ The entered string can also be accessed later as #%<history># (or as #%UserVarN#, where N is the index of the corresponding input).
 
  In <title> and <init> the usage of other meta-symbols is allowed by enclosing them in brackets, e.g.
 grep !?Find in (!.!):?! |Far.exe -v -.
@@ -2547,7 +2551,6 @@ Otherwise you can choose any desired icon in the Far shourtcut properties.
  Additional information, displayed in the window title.
 Can contain any text, including environment variables (e.g. "%USERDOMAIN%\%USERNAME%") and the following special variables:
  - #%Ver# - Far version;
- - #%Build# - Far build number;
  - #%Platform# - Far platform;
  - #%Admin# - ^<wrap>"Administrator" if running as administrator, otherwise an empty string.
  - #%PID# - Far process ID;
@@ -2747,9 +2750,14 @@ $ #Viewer: control keys#
  #Ctrl+Shift+Left#    Show the leftmost column
  #Ctrl+Shift+Right#   Show the rightmost column of all lines currently visible on the screen
 
- In #hex# and #dump# ~view modes~@ViewerMode@, #Ctrl+Left# and
+ In the #hex# and #dump# ~view modes~@ViewerMode@, #Ctrl+Left# and
 #Ctrl+Right# keys shift the content within the window one byte at a time
 in the corresponding direction.
+
+ In the #hex# ~view mode~@ViewerMode@, #Alt+Left# and #Alt+Right# key
+combinations decrease or increase the number of bytes displayed on each
+row by one byte, respectively. #Ctrl+Alt+Left# and #Ctrl+Alt+Right# key
+combinations adjust the number of displayed bytes by 16 at a time.
 
  Viewer commands
 
@@ -2969,7 +2977,15 @@ first byte on a row becomes the last on the previous row. The
 #Ctrl+Left# key combination shifts all bytes to the right moving the
 last byte of a row to the first positions of the next row. Unlike
 in #dump# mode, the content is shifted by a byte, not by a character.
-The #Right# and #Left# keys are ignored.
+
+ The #Alt+Right# key combination increases the number of bytes displayed
+on each row by one byte. The #Ctrl+Alt+Right# key combination increases
+the number of bytes by 16 at a time. The #Alt+Left# key combination
+decreases the number of bytes displayed on each row by one byte. The
+#Ctrl+Alt+Left# key combination decreases the number of bytes by 16 at
+a time.
+
+ The #Right# and #Left# keys are ignored.
 
 
 @ViewerGotoPos
@@ -3376,11 +3392,11 @@ helps applications to identify the code page of this file.
 
  #Dos/Windows format (CR LF)#
  Line breaks will be represented as a two-character sequence -
-Carriage Return and Line Feed (CR LF), as used in DOS/Windows.
+Carriage Return and Line Feed (CR LF), as used in Dos/Windows.
 
  #Unix format (LF)#
  Line breaks will be represented as a single character - Line
-Feed (LF), as used in UNIX.
+Feed (LF), as used in Unix.
 
  #Mac format (CR)#
  Line breaks will be represented as a single character - Carriage
@@ -3952,9 +3968,8 @@ folders, all checkboxes will always be 3-state.
 corresponding checkboxes was changed from the initial state.
 
  The #Compressed#, #Encrypted#, #Not indexed#, #Sparse#, #Temporary#,
-#Offline#, #Reparse point# and #Virtual# attributes are available only on NTFS drives. The
-#Virtual# attribute is not used in Windows 2000/XP/2003. The #Compressed#
-and #Encrypted# attributes are mutually exclusive, that is, you can set only
+#Offline#, #Reparse point# attributes are available only on NTFS drives.
+The #Compressed# and #Encrypted# attributes are mutually exclusive, that is, you can set only
 one of them. You cannot clear the #Sparse# attribute in Windows 2000/XP/2003. The
 #Integrity stream# and #No scrub data# attributes are supported only on ReFS volumes starting from
 Windows Server 2012.
@@ -3980,7 +3995,6 @@ month or only minutes. All the other date and time components will remain
 unchanged.
 
  The #Current# button fills the file time fields with the current time.
-
  The #Original# button fills the file time fields with their original
 values. Available only when the dialog is invoked for a single file object.
 
@@ -4122,7 +4136,6 @@ the list. In this list "Brief mode" item corresponds to brief panel mode
 on. The last item, "Alternative full", corresponds to view mode called with
 #LeftCtrl+0#. After selecting the mode, you can change the following settings:
 
-
  #Column types# - a comma-separated list. Each column type starts with
 a file property character, such as name, size, etc. Some file properties
 may be followed by modifiers. Supported column types (properties and
@@ -4231,7 +4244,6 @@ to the display of seconds and milliseconds.
 
  Enabling links, streams and owner columns (G, LN, F and O) can significantly
 slow down the directory reading.
-
 
  #Status line column types# and #Status line column widths# -
 similar to "Column types" and "Column widths", but for panel status line.
@@ -4429,8 +4441,8 @@ append backslash to its name.
 
  If ~Panel.Tree.TurnOffCompletely~@Panel.Tree.TurnOffCompletely@
 parameter in ~far:config~@FarConfig@ is set to “false,” you can use
-~Find folder~@FindFolder@ dialog to select the target path. The
-following shortcuts open the dialog with different pre-selected folders:
+~Find folder~@FindFolder@ dialog to select the target path.
+ The following shortcuts open the dialog with different pre-selected folders:
  - ^<wrap>#F10# selects the folder from the active panel.
  - ^<wrap>#Alt+F10# selects the folder from the passive panel.
  - ^<wrap>#Shift+F10# selects the specified target folder. If several
@@ -4464,8 +4476,7 @@ will be copied;
 dialog should be displayed for the read-only files.
 
  The “#Use system copy routine#” option of the ~System settings~@SystemSettings@
-dialog enables the use of Windows operating system function CopyFileEx
-(or CopyFile if CopyFileEx is not available). This may be useful
+dialog enables the use of Windows operating system function CopyFileEx. This may be useful
 on NTFS, because CopyFileEx optimizes disk space allocation and copies
 extended file attributes. If this option is off, the internal
 implementation of the file copy routine is used. The internal
@@ -4562,7 +4573,6 @@ $ #Hard and Symbolic link#
  On NTFS volumes you can create #hard links# for files, #directory junctions# for
 folders and #symbolic links# for files and folders using the #Alt+F6# command.
 
-
  #Hard links#
 
  A #hard link# is an additional directory entry for the given file. When a
@@ -4584,7 +4594,6 @@ and sort the files by hard link number.
 
  Hard links can only be created on the same partition as the source file.
 
-
  #Directory junctions#
 
  Directory junctions allows to access to any local folders as to any other
@@ -4597,7 +4606,6 @@ C:\\WINNT\\SYSTEM32\\DRIVERS.
  Under Windows 2000 it is not allowed to create directory junctions directly to
 CD-ROM folders, but this restriction can be overcome by mounting a CD-ROM
 as a folder on the NTFS partition.
-
 
  #Symbolic links#
 
@@ -4758,10 +4766,8 @@ behavior is restored by the “TITLE” command with no parameters.
  Notes:
 
  1. ^<wrap>If the command syntax does not match one of the listed
-above, Far Manager will invoke the operating system command processor
-to execute the command.
- 2. ^<wrap>Far Manager executes the commands listed above in the
-following contexts:
+above, Far Manager will invoke the operating system command processor to execute the command.
+ 2. ^<wrap>Far Manager executes the commands listed above in the following contexts:
  - ~Command line~@CmdLineCmd@
  - ~Apply command~@ApplyCmd@
  - ~User menu~@UserMenu@
@@ -4844,7 +4850,6 @@ zero-size expression.
  #(?{name}pattern)# - group with a name. The name can be empty (in such case you
 cannot refer to this group) or must contain only word characters (#\w#) and spaces (#\s#).
 
-
  #Quantifiers#
 
  Any character, group or class can be followed by a quantifier:
@@ -4862,7 +4867,6 @@ cannot refer to this group) or must contain only word characters (#\w#) and spac
  #{n,m}?# - ^<wrap>Match at least n but not more than m times, not greedily.
  #{,m}#   - ^<wrap>equals to {0,m}
  #{,m}?#  - ^<wrap>equals to {0,m}?
-
 
  #"Greedy" and "not greedy" quantifiers#
 
@@ -5158,7 +5162,6 @@ command playback is finished.
  #Execute after Far start#
  Allows to execute the macro command immediately after the Far Manager is started.
 
-
  The following execution conditions can be applied for the active and passive panels:
 
  #Plugin panel#
@@ -5188,11 +5191,11 @@ command playback is finished.
  [ ] - execute only if there is no selection present
  [?] - ignore selection state
 
-
  Notes:
 
  1. ^<wrap>Before executing a macro command, all of the above conditions are checked.
- 2. Some key combinations (including #Enter#, #Esc#, #F1# and #Ctrl+F5#,
+
+ 2. ^<wrap>Some key combinations (including #Enter#, #Esc#, #F1# and #Ctrl+F5#,
 #MsWheelUp#, #MsWheelDown# and other mouse keys combined with #Ctrl#, #Shift#, #Alt#) cannot be entered
 directly because they have special functions in the dialog. To assign a macro
 to one of those key combinations, select it from the drop-down list.
@@ -5676,37 +5679,6 @@ it before exiting. Use this parameter to compensate for this behavior.
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
-@System.Executor.UseAppPath
-$ #far:config System.Executor.UseAppPath#
- This Boolean parameter controls whether Far will look up #App Paths#
-Windows registry key when it searches for an executable module.
-
- When Far executes a command entered on the command line, it searches
-executable module in the following places in this order (using file
-name extensions defined by the #PATHEXT# environment variable):
-
- 1. ^<wrap>Current directory;
- 2. Directories listed on the #PATH# environment variable;
- 3. Windows 95: Windows system directory (SYSTEM);
-    Windows NT: 32-bit Windows system directory (SYSTEM32);
- 4. Windows NT: 16-bit Windows system directory (SYSTEM);
- 5. The Windows directory.
-
- If this parameter is True, Far will also look up subkeys of the
-following Windows registry keys:
-
- 6. #HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths#;
- 7. #HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths#.
-
- Default value: True (look up Windows registry).
-
- Note: If the command line is executed with #Shift+Enter# key
-combination, Far launches Windows Explorer to execute the command.
-Windows Explorer always looks up #App Paths# registry key.
-
- This parameter can be changed via ~far:config~@FarConfig@ only.
-
-
 @System.Executor.ExcludeCmds
 $ #far:config System.Executor.ExcludeCmds#
  This string parameter defines commands which will be directly passed
@@ -5754,19 +5726,6 @@ This parameter is handy with non-standard command processors requiring
 unusual command line options or quoting.
 
  Default value: #/S /C "{0}"# (compatible with CMD.EXE).
-
- This parameter can be changed via ~far:config~@FarConfig@ only.
-
-
-@System.Executor.FullTitle
-$ #far:config System.Executor.FullTitle#
- This Boolean parameter specifies the format of the console window title
-while an external command is being executed.
-
- False - ^<wrap>Console title contains the text entered on the command line;
- True  - Console title contains full path to the executable file.
-
- Default value: False (the entered text).
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
@@ -6173,7 +6132,7 @@ as for windowed and fullscreen mode.
 
 @-
  ┌──────────╥───────────────────────┬───────────────────────┐
- │ Mode     ║ Windowed              │ Fullscreen            │           
+ │ Mode     ║ Windowed              │ Fullscreen            │
  ╞══════════╬═══════════════════════╪═══════════════════════╡
  │ Insert   ║ Interface.CursorSize1 │ Interface.CursorSize2 │
  ├──────────╫───────────────────────┼───────────────────────┤
@@ -6424,144 +6383,220 @@ or the search starting point.
 
 @XLat.Layouts
 $ #far:config XLat.Layouts#
- Параметр "XLat.Layouts" позволяет задавать номера раскладок клавиатуры (через ‘;’), которые будут переключаться,
-независимо от количества установленных в системе раскладок.
+ This string parameter defines the input locales (keyboard layouts)
+which Far will cycle through. If this parameter is specified, system
+input locales will be ignored.
 
- Например, "04090409;04190419" (или "0409;0419").
+ This parameter contains semicolon (#;#) separated list of hexadecimal
+input locale identifiers. For example, value #0409;0419# (or
+#04090409;04190419#) can be used to switch between input locales
+“en-US” and “ru-RU”.
 
- Если указано меньше двух, то механизм "отключается" и раскладки переключаются по кругу.
+ If less than two input locale identifiers are specified, Far will use
+input locales installed in the system.
 
- Far для "Layouts" считывает первые 10 значений, остальные, если есть, игнорируются.
+ Only first 10 locales are used, the rest of the list is ignored.
 
- По умолчанию значение отсутствует.
+ Default value: empty string (use system input locales).
 
- Изменение этого параметра возможно через ~far:config~@FarConfig@
+ See also Addons\XLat\Russian\Qwerty.farconfig.
+
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @XLat.Flags
 $ #far:config XLat.Flags#
- Параметр "XLat.Flags" определяет поведение функции Xlat:
+ This numeric parameter controls the behavior of Far API function XLat
+(string transcoding based on keyboard layout).
 
- Биты:
- 0  - ^<wrap>Автоматическое переключение раскладки клавиатуры после перекодирования
-      ^<wrap>Переключение происходит по кругу: RU->EN->RU->…
-      ^<wrap>В семействе Windows NT позволяет переключить раскладку клавиатуры на следующую доступную (см. также описание бита 2).
- 1  - ^<wrap>При переключении раскладки выдать звуковой сигнал.
- 2  - ^<wrap>Использовать предопределённые именованные правила для "двойных" клавиш.
-      ^<wrap>Также, если задано автоматическое переключение, то переключение раскладок происходит только
-по списку значений, перечисленных в ~XLat.Layouts~@XLat.Layouts@, независимо от количества установленных в системе раскладок.
-      ^<wrap>Пример см. в Addons\XLat\Russian\Qwerty.farconfig (name="00000409" и name="00000419")
-Такие правила возможно поменять только из ~командной строки~@CmdLine@ (параметр /import)
- 16 - ^<wrap>Конвертировать всю командную строку при отсутствии выделенного блока.
+ Bit numbers:
+ 0  - ^<wrap>Automatically switch keyboard layout after transcoding
+operation. Far cycles through all system keyboard layouts or layouts
+defined in ~XLat.Layouts~@XLat.Layouts@ config parameter.
+ 1  - Sound beep after switching keyboard layout.
+ 2  - When a character could not be transcoded using
+~XLat.Tables~@XLat.Tables@, Far will attempt to apply special
+~XLat.Rules~@XLat.Rules@. If this bit is set and there is a named rule
+corresponding to the current keyboard layout, this rule will be used;
+otherwise, one of the three numbered rules will be used.
+ 16 - Transcode the entire command line if nothing is selected.
 
- По умолчанию значение = 0x00010001 (переключить раскладку и конвертировать всю командную строку при отсутствии выделенного блока)
+ Default value: 0x00010001 (switch keyboard layout and transcode the
+entire command line if no selection).
 
- Изменение этого параметра возможно через ~far:config~@FarConfig@
+ See also Addons\XLat\Russian\Qwerty.farconfig.
+
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @XLat.Tables
 $ #far:config XLat.Tables#
- Параметры "XLat.Table*" и "XLat.Rules*" задают перекодировочные таблицы и особые правила конвертации строк.
+ These string parameters define two-way transcoding table which is used
+by Far API function XLat (string transcoding based on keyboard layout).
 
- Перекодировочная таблица #XLat.Table1# содержит набор символов национальной кодировки.
+ #XLat.Table1# ^<wrap>is the list of characters from the national
+alphabet which will be replaced with their Latin counterparts defined
+in #XLat.Table2#.
+ #XLat.Table2# is the list of Latin characters which will be replaced
+with their national counterparts defined in #XLat.Table1#.
 
- Перекодировочная таблица #XLat.Table2# содержит набор латинских символов, соответствующих символам национальной кодировки на клавиатуре (см. свою клавиатуру).
+ Default value: empty string (transcoding table is not defined).
 
- Значение #XLat.Rules1# содержит пары правил для случая "если предыдущий символ русский". Первый символ - что меняем, второй - на что меняем. Допускается
+ If a character cannot be transcoded using the table, Far will attempt
+to apply special ~XLat.Rules~@XLat.Rules@.
 
- Значение #XLat.Rules2# содержит пары правил для случая "если предыдущий символ латинский". Первый символ - что меняем, второй - на что меняем.
+ See also Addons\XLat\Russian\Qwerty.farconfig.
 
- Значение #XLat.Rules3# содержит пары правил для случая "если предыдущий символ не буква". Первый символ - что меняем, второй - на что меняем - крутим по кругу.
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
- По умолчанию параметры не содержат значений. Если в системе установлена русская раскладка (0x0419) и значение параметра XLat.Table1
-пусто, то Far Manager выставляет следующие умолчания:
- Table1=№АВГДЕЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЯавгдезийклмнопрстуфхцчшщъыьэяёЁБЮ
- Table2=##FDULTPBQRKVYJGHCNEA{WXIO}SMZfdultpbqrkvyjghcnea[wxio]sm'z`~~<>
- Rules1=,??&./б,ю.:^Ж:ж;;$"@@Э"
- Rules2=?,&?/.,б.ю^::Ж;ж$;@@""Э
- Rules3=^::ЖЖ^$;;жж$@""ЭЭ@@&??,,бб&/..юю/
 
- Изменить эти параметры можно через ~far:config~@FarConfig@
+@XLat.Rules
+$ #far:config XLat.Rules#
+ These string parameters define special transcoding rules used by Far
+API function XLat (string transcoding based on keyboard layout).
+
+ Far will attempt to apply special rules if a character could not be
+transcoded using the ~XLat.Tables~@XLat.Tables@.
+
+ Each rule contains the sequence of character pairs. If a character
+in the transcoded string matches the first character in the pair,
+it will be replaced with the second character in the pair.
+
+ One of the three numbered rules is used if the bit 2 (0x04)
+in ~XLat.Flags~@XLat.Flags@ is zero or there is no named rule
+corresponding to the current keyboard layout.
+
+ #XLat.Rules1# ^<wrap>is applied if the previous character in the
+transcoded string is from the national alphabet.
+ #XLat.Rules2# is applied if the previous character in the transcoded
+string is a Latin character.
+ #XLat.Rules3# is applied if the previous character in the transcoded
+string is neither from the national alphabet, nor a Latin character.
+
+ A named special rule is applied if the bit 2 (0x04)
+in ~XLat.Flags~@XLat.Flags@ is set to one. Far uses hexadecimal value
+of the current input locale identifier (keyboard layout) to find the
+corresponding rule. For example, if current keyboard layout is “en-US”,
+Far will look up the rule named #XLat.00000409# and use it if it
+exists. Otherwise, Far will fall back to the numbered rules.
+
+ Default value: empty string for all rules (special rules are not
+defined).
+
+ See also Addons\XLat\Russian\Qwerty.farconfig.
+
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @Interface.DelHighlightSelected
 $ #far:config Interface.DelHighlightSelected#
+ This Boolean parameter controls how the items which will be deleted are
+displayed in the file / folder #Delete# confirmation dialog.
+
+ False - ^<wrap>The items to be deleted are always displayed in plain
+text, without highlighting.
+ True  - If more than one item is to be deleted or the deleted item
+is not the item under cursor, the deleted item(s) will be highlighted
+in the dialog.
+
+ Default value: True (highlight the list if it does not match the item
+under cursor).
+
+ Note: This parameter does not affect which items will be deleted;
+it only controls how the deleted items are shown in the dialog.
+
+ This parameter can be changed via ~far:config~@FarConfig@ only.
+
+
+@Interface.DelShowSelected
 $ #far:config Interface.DelShowSelected#
+ This numeric parameter controls the number of items which are displayed
+in the file / folder #Delete# confirmation dialog.
 
- Interface.DelHighlightSelected -- bool, default = true.
+ The maximum number of displayed items is either this parameter’s value
+or half of Far window height, whichever is less. The minimum number
+of items is one.
 
- true -- выделяем случай, когда список удаляемых объектов отличается от объекта под курсором.
+ Default value: 10.
 
- Interface.DelShowSelected -- int, default = 10.
- При множественном удалении показываем имена удаляемых объектов. Не более чем заданное число,
-приведённое к диапазону 1…высота_окна/2
-
- Старое поведение = (false, 1)
-
- Изменить эти параметры можно через ~far:config~@FarConfig@
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @History.Config
 $ #far:config History.*#
- Данный блок параметров позволяет ограничить размеры списков и время жизни элементов следующих историй:
+ These parameters limit the number and the lifetime of the items of the
+following histories:
 
- - история ~команд~@History@ в командной строке:
+ - History of command line ~commands~@History@:
    #History.CommandHistory.Count#
    #History.CommandHistory.Lifetime#
 
- - история строк ввода в диалогах:
+ - History of entries in dialog edit controls:
    #History.DialogHistory.Count#
    #History.DialogHistory.Lifetime#
 
- - история ~посещения папок~@HistoryFolders@:
+ - History of recently ~visited folders~@HistoryFolders@:
    #History.FolderHistory.Count#
    #History.FolderHistory.Lifetime#
 
- - история ~просмотра и редактирования~@HistoryViews@:
+ - History of recently ~viewed and edited files~@HistoryViews@:
    #History.ViewEditHistory.Count#
    #History.ViewEditHistory.Lifetime#
 
- По умолчанию:
- - максимальный размер списка (.Count) = 1000 элементов
- - время жизни элемента (.Lifetime) = 90 дней
+ Default values:
+ - Maximum history size (*.Count): 1000 items
+ - Lifetime of an item (*.Lifetime): 90 days
 
- Изменить эти параметры можно через ~far:config~@FarConfig@
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @Editor.F8CPs
 $ #far:config Editor.F8CPs#
 $ #far:config Viewer.F8CPs#
- Строка позволяющая задавать список кодовых страниц используемых при переключении
-кодировки клавишей #F8# в редакторе или просмотрщике.
+ These string parameters define code pages which are cycled through when
+#F8# key is pressed in ~Editor~@Editor@ or ~Viewer~@Viewer@.
 
- Умолчательное значение - #""#, в этом случае используются только кодовые
-страницы ANSI и OEM.
+ The value of each parameter is a list of code page numbers or symbolic
+names listed below. Symbolic names are case insensitive. Duplicated
+code pages, as well as unsupported code pages, are ignored.
 
- Если задать строку #"-1"#, то кроме ANSI и OEM в список переключения добавляется
-умолчательная кодовая страница редактора/просмотрщика (если отличается).
+ - #ANSI#    ^<wrap>variants #ACP#, #WIN#
+ - #OEM#     variants #OEMCP#, #DOS#
+ - #UTF8#    variant #UTF-8#
+ - #DEFAULT# stands for the default code page defined in
+~Editor~@EditorSettings@ or ~Viewer~@ViewerSettings@ settings dialog.
 
- В противном случае строка должна быть списком номеров кодовых страниц.
-Кроме номеров можно использовать также имена - ANSI/OEM/UTF8/DEFAULT.
-Дубликаты и неподдерживаемые кодовые страницы удаляются.
-Пример: #"ANSI,OEM,65001"#.
+ If the string is empty or does not contain any supported code pages,
+ANSI and OEM code pages are used.
 
- Изменение этого параметра возможно через ~far:config~@FarConfig@
+ Special parameter value of #-1# stands for #ANSI;OEM;Default#.
+
+ Example: #ANSI,OEM,65001#.
+
+ Default value: empty string (ANSI and OEM code pages).
+
+ This parameter can be changed via ~far:config~@FarConfig@ only.
 
 
 @Panel.Tree.TurnOffCompletely
 $ #far:config Panel.Tree.TurnOffCompletely#
- If “true”, all folder tree operations are unavailable:
+ This Boolean parameter enables or disables all folder tree operations:
 
- - ~Tree panel~@TreePanel@ mode in ~left and right menus~@LeftRightMenu@,
-as well as toggle tree panel shortcut key #Ctrl+T#.
- - ~Find folder~@FindFolder@ panel command (#Alt+F10#).
+ - ^<wrap>~Tree panel~@TreePanel@ mode in
+~left and right menus~@LeftRightMenu@;
+ - The toggle tree panel shortcut key (#Ctrl+T#);
+ - ~Find folder~@FindFolder@ panel command (#Alt+F10#);
  - Folder tree operations in ~copy, move and rename~@CopyFiles@
-dialog (#F10# #Alt+F10# #Shift+F10#).
+dialog (#F10#, #Alt+F10#, and #Shift+F10#).
 
- Also, folder tree cache files, even if already exist, are not updated
-during folder create / delete / rename operations.
+ False - ^<wrap>Folder tree operations are #enabled#.
+ True  - All folder tree operations are #disabled#.
 
- Default value: True
+ Note: If folder tree operations are disabled, folder tree cache files,
+even if already exist, are not updated when folders are created,
+deleted, or renamed.
+
+ Default value: True (all folder tree operations are disabled).
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 

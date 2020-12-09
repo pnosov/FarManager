@@ -42,7 +42,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/noncopyable.hpp"
-#include "common/range.hpp"
 
 // External:
 
@@ -60,7 +59,7 @@ struct detailed_time_point
 		Hour,
 		Minute,
 		Second,
-		Tick;
+		Hectonanosecond;
 };
 
 detailed_time_point parse_detailed_time_point(string_view Date, string_view Time, int DateFormat);
@@ -84,7 +83,6 @@ std::tuple<string, string> ConvertDuration(os::chrono::duration Duration);
 
 string ConvertDurationToHMS(os::chrono::duration Duration);
 
-string StrFTime(string_view Format, const tm* Time);
 string MkStrFTime(string_view Format = {});
 
 bool utc_to_local(os::chrono::time_point UtcTime, SYSTEMTIME& LocalTime);
@@ -97,34 +95,11 @@ class time_check: noncopyable
 public:
 	enum class mode { delayed, immediate };
 
-	time_check(mode Mode = mode::delayed);
-
-	time_check(mode Mode, clock_type::duration Interval):
-		m_Begin(Mode == mode::delayed? clock_type::now() : clock_type::now() - Interval),
-		m_Interval(Interval)
-	{
-	}
-
-	void reset(clock_type::time_point Value = clock_type::now()) const
-	{
-		m_Begin = Value;
-	}
-
-	bool is_time() const
-	{
-		return clock_type::now() - m_Begin > m_Interval;
-	}
-
-	explicit operator bool() const noexcept
-	{
-		const auto Current = clock_type::now();
-		if (m_Interval != 0s && Current - m_Begin > m_Interval)
-		{
-			reset(Current);
-			return true;
-		}
-		return false;
-	}
+	explicit time_check(mode Mode = mode::delayed) noexcept;
+	time_check(mode Mode, clock_type::duration Interval) noexcept;
+	void reset(clock_type::time_point Value = clock_type::now()) const noexcept;
+	bool is_time() const noexcept;
+	explicit operator bool() const noexcept;
 
 private:
 	mutable clock_type::time_point m_Begin;

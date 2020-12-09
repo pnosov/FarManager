@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "infolist.hpp"
 
@@ -49,7 +52,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cddrv.hpp"
 #include "syslog.hpp"
 #include "interf.hpp"
-#include "drivemix.hpp"
 #include "dirmix.hpp"
 #include "pathmix.hpp"
 #include "strmix.hpp"
@@ -64,6 +66,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cvtname.hpp"
 #include "vmenu.hpp"
 #include "global.hpp"
+#include "network.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
@@ -98,7 +101,7 @@ enum InfoListSectionStateIndex
 struct InfoList::InfoListSectionState
 {
 	bool Show;   // раскрыть/свернуть?
-	SHORT Y;     // Где?
+	int Y;     // Где?
 };
 
 info_panel_ptr InfoList::create(window_ptr Owner)
@@ -230,18 +233,23 @@ void InfoList::DisplayObject()
 			}
 		}
 
-		string strUserName;
-		if (!os::GetUserNameEx(static_cast<EXTENDED_NAME_FORMAT>(Global->Opt->InfoPanel.UserNameFormat.Get()), strUserName) && !os::GetUserName(strUserName))
+		string UserLogonName, UserExtendedName;
+		const auto UserNameRead = os::GetUserName(UserLogonName);
+
+		string_view DisplayName = UserLogonName;
+
+		if (const auto NameFormat = static_cast<EXTENDED_NAME_FORMAT>(Global->Opt->InfoPanel.UserNameFormat.Get());
+			NameFormat != NameUnknown && os::GetUserNameEx(NameFormat, UserExtendedName))
 		{
-			// TODO: fallback?
+			DisplayName = UserExtendedName;
 		}
 
 		GotoXY(m_Where.left + 2, CurY++);
 		PrintText(lng::MInfoUserName);
-		PrintInfo(strUserName);
+		PrintInfo(DisplayName);
 
 		os::netapi::ptr<USER_INFO_1> UserInfo;
-		if (NetUserGetInfo(nullptr, strUserName.c_str(), 1, reinterpret_cast<LPBYTE*>(&ptr_setter(UserInfo))) == NERR_Success)
+		if (UserNameRead && NetUserGetInfo(nullptr, UserLogonName.c_str(), 1, reinterpret_cast<LPBYTE*>(&ptr_setter(UserInfo))) == NERR_Success)
 		{
 			if(UserInfo->usri1_comment && *UserInfo->usri1_comment)
 			{
@@ -273,7 +281,6 @@ void InfoList::DisplayObject()
 			PrintText(lng::MInfoUserAccessLevel);
 			PrintInfo(LabelId);
 		}
-
 	}
 
 	string SectionTitle;
@@ -301,72 +308,75 @@ void InfoList::DisplayObject()
 			}
 		}
 		else
-			strDriveRoot = GetPathRoot(m_CurDir);
+		{
+			// GetPathRoot expands network drives, it's too early for that
+			strDriveRoot = os::fs::drive::get_type(m_CurDir) == DRIVE_REMOTE?
+				extract_root_directory(m_CurDir) :
+				GetPathRoot(m_CurDir);
+		}
 
 		if (os::fs::GetVolumeInformation(strDriveRoot,&strVolumeName,
 		                            &VolumeNumber,&MaxNameLength,&FileSystemFlags,
 		                            &strFileSystemName))
 		{
 			auto DiskTypeId = lng::MInfoUnknown;
-			int DriveType=FAR_GetDriveType(strDriveRoot, Global->Opt->InfoPanel.ShowCDInfo);
+			const auto DriveType = os::fs::drive::get_type(strDriveRoot);
+			string strAssocPath;
+			bool UseAssocPath = false;
 
 			switch (DriveType)
 			{
 				case DRIVE_REMOVABLE:
 					DiskTypeId = lng::MInfoRemovable;
 					break;
+
 				case DRIVE_FIXED:
 					DiskTypeId = lng::MInfoFixed;
 					break;
+
 				case DRIVE_REMOTE:
-					DiskTypeId = lng::MInfoNetwork;
+					{
+						DiskTypeId = lng::MInfoNetwork;
+						UseAssocPath = DriveLocalToRemoteName(false, strDriveRoot, strAssocPath);
+					}
 					break;
+
 				case DRIVE_CDROM:
-					DiskTypeId = lng::MInfoCDROM;
+					if (Global->Opt->InfoPanel.ShowCDInfo)
+					{
+						static_assert(as_underlying_type(lng::MInfoHDDVDRAM) - as_underlying_type(lng::MInfoCDROM) == as_underlying_type(cd_type::hddvdram) - as_underlying_type(cd_type::cdrom));
+
+						DiskTypeId = lng::MInfoCDROM + (as_underlying_type(get_cdrom_type(strDriveRoot)) - as_underlying_type(cd_type::cdrom));
+					}
+					else
+					{
+						DiskTypeId = lng::MInfoCDROM;
+					}
 					break;
+
 				case DRIVE_RAMDISK:
 					DiskTypeId = lng::MInfoRAM;
 					break;
+
 				default:
-
-					if (IsDriveTypeCDROM(DriveType))
-						DiskTypeId = lng::MInfoCD_RW + (DriveType - DRIVE_CD_RW);
-
 					break;
 			}
-
-			string strAssocPath;
 
 			if (GetSubstName(DriveType,strDriveRoot,strAssocPath))
 			{
 				DiskTypeId = lng::MInfoSUBST;
-				DriveType=DRIVE_SUBSTITUTE;
+				UseAssocPath = true;
 			}
 			else if(DriveCanBeVirtual(DriveType) && GetVHDInfo(strDriveRoot,strAssocPath))
 			{
 				DiskTypeId = lng::MInfoVirtual;
-				DriveType=DRIVE_VIRTUAL;
+				UseAssocPath = true;
 			}
 
 			SectionTitle = concat(msg(DiskTypeId), L' ', msg(lng::MInfoDisk), L' ', strDriveRoot, L" ("sv, strFileSystemName, L')');
 
-			switch(DriveType)
-			{
-				case DRIVE_REMOTE:
-					{
-						auto DeviceName = strDriveRoot;
-						DeleteEndSlash(DeviceName);
-						os::WNetGetConnection(DeviceName, strAssocPath);
-					}
-					// TODO: check result
-					[[fallthrough]];
-				case DRIVE_SUBSTITUTE:
-				case DRIVE_VIRTUAL:
-				{
-					append(SectionTitle, L' ', strAssocPath);
-				}
-				break;
-			}
+			if (UseAssocPath)
+				append(SectionTitle, L' ', strAssocPath);
 
 			strDiskNumber = format(FSTR(L"{0:04X}-{1:04X}"), HIWORD(VolumeNumber), LOWORD(VolumeNumber));
 		}
@@ -620,11 +630,6 @@ void InfoList::SelectShowMode()
 	int ShowMode=-1;
 
 	{
-		// ?????
-		// {BFC64A26-F433-4cf3-A1DE-8361CF762F68}
-		//DEFINE_GUID(InfoListSelectShowModeId,0xbfc64a26, 0xf433, 0x4cf3, 0xa1, 0xde, 0x83, 0x61, 0xcf, 0x76, 0x2f, 0x68);
-		// ?????
-
 		const auto ShowModeMenu = VMenu2::create(msg(lng::MMenuInfoShowModeTitle), std::as_const(ShowModeMenuItem), 0);
 		ShowModeMenu->SetHelp(L"InfoPanelShowMode"sv);
 		ShowModeMenu->SetPosition({ m_Where.left + 4, -1, 0, 0 });
@@ -769,15 +774,13 @@ bool InfoList::ProcessKey(const Manager::Key& Key)
 		{
 			const auto ret = DizView->ProcessKey(Key);
 
-			if (LocalKey == KEY_F2 || LocalKey == KEY_SHIFTF2
-			 || LocalKey == KEY_F4 || LocalKey == KEY_SHIFTF4
-			 || LocalKey == KEY_F8 || LocalKey == KEY_SHIFTF8)
+			if (any_of(LocalKey, KEY_F2, KEY_SHIFTF2, KEY_F4, KEY_SHIFTF4, KEY_F8, KEY_SHIFTF8))
 			{
 				DynamicUpdateKeyBar();
 				Parent()->GetKeybar().Redraw();
 			}
 
-			if (LocalKey == KEY_F7 || LocalKey == KEY_SHIFTF7)
+			if (any_of(LocalKey, KEY_F7, KEY_SHIFTF7))
 			{
 				long long Pos, Length;
 				DWORD Flags;
@@ -889,7 +892,7 @@ void InfoList::PrintText(lng MsgID) const
 }
 
 
-void InfoList::PrintInfo(const string& Str) const
+void InfoList::PrintInfo(string_view const Str) const
 {
 	if (WhereY() > m_Where.bottom - 1)
 		return;
@@ -1017,10 +1020,9 @@ void InfoList::CloseFile()
 	strDizFileName.clear();
 }
 
-bool InfoList::OpenDizFile(const string& DizFile,int YPos)
+bool InfoList::OpenDizFile(string_view const DizFile, int const YPos)
 {
 	bool bOK=true;
-	_tran(SysLog(L"InfoList::OpenDizFile([%s]",DizFile));
 
 	if (!DizView)
 	{

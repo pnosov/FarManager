@@ -106,7 +106,7 @@ namespace os::reg
 
 		struct hkey_deleter
 		{
-			void operator()(HKEY Key) const;
+			void operator()(HKEY Key) const noexcept;
 		};
 
 		std::unique_ptr<std::remove_pointer_t<HKEY>, hkey_deleter> m_Key;
@@ -151,7 +151,7 @@ namespace os::reg
 		bool get(bool Reset, value_type& Value) const;
 
 		key m_Key;
-		const key& m_KeyRef;
+		const key* m_KeyRef{};
 		mutable size_t m_Index{};
 	};
 
@@ -168,7 +168,7 @@ namespace os::reg
 		bool get(bool Reset, value_type& Value) const;
 
 		key m_Key;
-		const key& m_KeyRef;
+		const key* m_KeyRef{};
 		mutable size_t m_Index{};
 	};
 }

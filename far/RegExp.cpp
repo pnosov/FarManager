@@ -32,6 +32,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "RegExp.hpp"
 
@@ -164,16 +167,18 @@ enum
 	RE_CHAR_COUNT = std::numeric_limits<wchar_t>::max() + 1,
 };
 
+static_assert(sizeof(wchar_t) == 2, "512 MB for a bitset is too much, rewrite it.");
+
 static bool isType(wchar_t chr,int type)
 {
 	switch (type)
 	{
-		case TYPE_DIGITCHAR:return ISDIGIT(chr) != 0;
-		case TYPE_SPACECHAR:return ISSPACE(chr) != 0;
-		case TYPE_WORDCHAR: return ISWORD(chr) != 0;
-		case TYPE_LOWCASE:  return ISLOWER(chr) != 0;
-		case TYPE_UPCASE:   return ISUPPER(chr) != 0;
-		case TYPE_ALPHACHAR:return ISALPHA(chr) != 0;
+	case TYPE_DIGITCHAR: return ISDIGIT(chr) != 0;
+	case TYPE_SPACECHAR: return ISSPACE(chr) != 0;
+	case TYPE_WORDCHAR:  return ISWORD(chr) != 0;
+	case TYPE_LOWCASE:   return ISLOWER(chr) != 0;
+	case TYPE_UPCASE:    return ISUPPER(chr) != 0;
+	case TYPE_ALPHACHAR: return ISALPHA(chr) != 0;
 	}
 
 	return false;
@@ -182,33 +187,15 @@ static bool isType(wchar_t chr,int type)
 struct RegExp::UniSet
 {
 	std::bitset<RE_CHAR_COUNT> Bits;
-	char types;
-	char nottypes;
-	char negative;
+	char types{};
+	char nottypes{};
+	char negative{};
+
 	UniSet()
 	{
 		types=0;
 		nottypes=0;
 		negative=0;
-	}
-	UniSet(const UniSet& src)
-	{
-		Bits = src.Bits;
-		types=src.types;
-		nottypes=src.nottypes;
-		negative=src.negative;
-	}
-	UniSet& operator=(const UniSet& src)
-	{
-		if (this != &src)
-		{
-			Bits = src.Bits;
-			types=src.types;
-			nottypes=src.nottypes;
-			negative=src.negative;
-		}
-
-		return *this;
 	}
 
 	void Reset()
@@ -223,18 +210,20 @@ struct RegExp::UniSet
 	{
 		UniSet& set;
 		wchar_t idx;
+
 		Setter(UniSet& s,wchar_t chr):set(s),idx(chr)
 		{
 		}
-		Setter& operator=(int val)
+
+		Setter& operator=(bool const val)
 		{
-			if (val)set.SetBit(idx);
-			else set.ClearBit(idx);
+			val? set.SetBit(idx) : set.ClearBit(idx);
 			return *this;
 		}
+
 		explicit operator bool() const
 		{
-			return set.GetBit(idx) != 0;
+			return set.GetBit(idx);
 		}
 	};
 
@@ -242,24 +231,12 @@ struct RegExp::UniSet
 	{
 		return GetBit(idx);
 	}
+
 	Setter operator[](wchar_t idx)
 	{
 		return Setter(*this,idx);
 	}
-	static bool CheckType(int t, wchar_t chr)
-	{
-		switch (t)
-		{
-			case TYPE_DIGITCHAR:if (ISDIGIT(chr))return true; else break;
-			case TYPE_SPACECHAR:if (ISSPACE(chr))return true; else break;
-			case TYPE_WORDCHAR: if (ISWORD(chr)) return true; else break;
-			case TYPE_LOWCASE:  if (ISLOWER(chr))return true; else break;
-			case TYPE_UPCASE:   if (ISUPPER(chr))return true; else break;
-			case TYPE_ALPHACHAR:if (ISALPHA(chr))return true; else break;
-		}
 
-		return false;
-	}
 	bool GetBit(wchar_t chr) const
 	{
 		if (types)
@@ -270,7 +247,7 @@ struct RegExp::UniSet
 			{
 				if (types&t)
 				{
-					if (CheckType(t,chr))
+					if (isType(chr, t))
 						return !negative;
 				}
 
@@ -286,7 +263,7 @@ struct RegExp::UniSet
 			{
 				if (nottypes&t)
 				{
-					if (!CheckType(t,chr))
+					if (!isType(chr, t))
 						return !negative;
 				}
 
@@ -297,15 +274,16 @@ struct RegExp::UniSet
 		const bool Set = Bits[chr];
 		return negative? !Set : Set;
 	}
+
 	void SetBit(wchar_t  chr)
 	{
 		Bits.set(chr, true);
 	}
-	void ClearBit(wchar_t  chr)
+
+	void ClearBit(wchar_t chr)
 	{
 		Bits.set(chr, false);
 	}
-
 };
 
 enum REOp
@@ -485,18 +463,7 @@ RegExp::RegExp():
 	backslashChar('\\'),
 	firstptr(std::make_unique<UniSet>()),
 	first(*firstptr),
-	havefirst(),
-	havelookahead(),
-	minlength(),
-	errorcode(errNotCompiled),
-	errorpos(),
-	srcstart(),
-	ignorecase(),
-	bracketscount(),
-	maxbackref(),
-	havenamedbrackets(),
-	brhandler(nullptr),
-	brhdata(nullptr)
+	errorcode(errNotCompiled)
 {
 }
 
@@ -662,7 +629,7 @@ int RegExp::CalcLength(string_view src)
 	return length;
 }
 
-int RegExp::Compile(string_view const src, int options)
+bool RegExp::Compile(string_view const src, int options)
 {
 	if (options&OP_CPPMODE)
 	{
@@ -711,30 +678,26 @@ int RegExp::Compile(string_view const src, int options)
 	}
 
 	ignorecase=options&OP_IGNORECASE?1:0;
-	const auto relength = CalcLength(Regex);
 
+	const auto relength = CalcLength(Regex);
 	if (!relength)
-	{
-		return 0;
-	}
+		return false;
 
 	code.resize(relength);
 
-	const auto result = InnerCompile(src.data(), Regex.data(), static_cast<int>(Regex.size()), options);
-
-	if (!result)
+	if (!InnerCompile(src.data(), Regex.data(), static_cast<int>(Regex.size()), options))
 	{
 		code.clear();
-	}
-	else
-	{
-		errorcode=errNone;
-		minlength=0;
-
-		if (options&OP_OPTIMIZE)Optimize();
+		return false;
 	}
 
-	return result;
+	errorcode = errNone;
+	minlength = 0;
+
+	if (options&OP_OPTIMIZE)
+		Optimize();
+
+	return true;
 }
 
 static int GetNum(const wchar_t* src,int& i)
@@ -767,7 +730,9 @@ static int CalcPatternLength(const RegExp::REOpCode* from, const RegExp::REOpCod
 			case opDataStart:
 			case opDataEnd:
 			case opWordBound:
-			case opNotWordBound:continue;
+			case opNotWordBound:
+				continue;
+
 			case opType:
 			case opNotType:
 			case opCharAny:
@@ -780,6 +745,7 @@ static int CalcPatternLength(const RegExp::REOpCode* from, const RegExp::REOpCod
 				len++;
 				altcnt++;
 				continue;
+
 			case opNamedBracket:
 			case opOpenBracket:
 			{
@@ -863,7 +829,7 @@ static int CalcPatternLength(const RegExp::REOpCode* from, const RegExp::REOpCod
 	return altlen==-1?len:altlen;
 }
 
-int RegExp::InnerCompile(const wchar_t* const start, const wchar_t* src, int srclength, int options)
+bool RegExp::InnerCompile(const wchar_t* const start, const wchar_t* src, int srclength, int options)
 {
 	REOpCode* brackets[MAXDEPTH];
 	// current brackets depth
@@ -1707,31 +1673,19 @@ int RegExp::InnerCompile(const wchar_t* const start, const wchar_t* src, int src
 #ifdef RE_DEBUG
 	op->srcpos=i+1;
 #endif
-	return 1;
+	return true;
 }
 
 struct RegExp::StateStackItem
 {
-	StateStackItem():
-		op(),
-		pos(),
-		savestr(),
-		startstr(),
-		min(),
-		cnt(),
-		max(),
-		forward()
-	{
-	}
-
-	int op;
-	const REOpCode* pos;
-	const wchar_t* savestr;
-	const wchar_t* startstr;
-	int min;
-	int cnt;
-	int max;
-	int forward;
+	int op{};
+	const REOpCode* pos{};
+	const wchar_t* savestr{};
+	const wchar_t* startstr{};
+	int min{};
+	int cnt{};
+	int max{};
+	int forward{};
 };
 
 static const RegExp::StateStackItem& FindStateByPos(const std::vector<RegExp::StateStackItem>& stack, RegExp::REOpCode* pos, int op)
@@ -1767,7 +1721,7 @@ int RegExp::StrCmp(const wchar_t*& str, const wchar_t* start, const wchar_t* end
 	return 1;
 }
 
-int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wchar_t* strend, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch, std::vector<StateStackItem>& stack) const
+bool RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wchar_t* strend, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch, std::vector<StateStackItem>& stack) const
 {
 	int i,j;
 	int minimizing;
@@ -1776,7 +1730,8 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 	UniSet *cl;
 	int inrangebracket=0;
 
-	if (errorcode==errNotCompiled)return 0;
+	if (errorcode==errNotCompiled)
+		return false;
 
 	if (matchcount<maxbackref)return SetError(errNotEnoughMatches,maxbackref);
 
@@ -1902,13 +1857,15 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 			{
 				case opLineStart:
 				{
-					if (str==start || str[-1]==0x0d || str[-1]==0x0a)continue;
+					if (str == start || IsEol(str[-1]))
+						continue;
 
 					break;
 				}
 				case opLineEnd:
 				{
-					if (str==strend || str[0]==0x0d || str[0]==0x0a)continue;
+					if (str == strend || IsEol(str[0]))
+						continue;
 
 					break;
 				}
@@ -1925,20 +1882,24 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 					break;
 				}
 				case opWordBound:
-				{
-					if ((str==start && ISWORD(*str))||
-					        (!(ISWORD(str[-1])) && ISWORD(*str)) ||
-					        (!(ISWORD(*str)) && ISWORD(str[-1])) ||
-					        (str==strend && ISWORD(str[-1])))continue;
-
-					break;
-				}
 				case opNotWordBound:
 				{
-					if (!((str==start && ISWORD(*str))||
-					        (!(ISWORD(str[-1])) && ISWORD(*str)) ||
-					        (!(ISWORD(*str)) && ISWORD(str[-1])) ||
-					        (str==strend && ISWORD(str[-1]))))continue;
+					const auto IsWordBoundary = [&]
+					{
+						if (start == strend)
+							return false;
+
+						if (str == start)
+							return ISWORD(*str);
+
+						if (str == strend)
+							return ISWORD(str[-1]);
+
+						return ISWORD(str[-1]) != ISWORD(*str);
+					}();
+
+					if (op->op == opWordBound? IsWordBoundary : !IsWordBoundary)
+						continue;
 
 					break;
 				}
@@ -2115,7 +2076,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 									    )
 									)
 									{
-										return -1;
+										return SetError(errCancelled, 0);
 									}
 								}
 							}
@@ -2154,7 +2115,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 										    )
 										)
 										{
-											return -1;
+											return SetError(errCancelled, 0);
 										}
 									}
 								}
@@ -2217,7 +2178,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 										    )
 										)
 										{
-											return -1;
+											return SetError(errCancelled, 0);
 										}
 									}
 								}
@@ -2243,7 +2204,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 									    )
 									)
 									{
-										return -1;
+										return SetError(errCancelled, 0);
 									}
 								}
 
@@ -2308,7 +2269,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 										    )
 										)
 										{
-											return -1;
+											return SetError(errCancelled, 0);
 										}
 									}
 
@@ -2348,7 +2309,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 									    )
 									)
 									{
-										return -1;
+										return SetError(errCancelled, 0);
 									}
 								}
 							}
@@ -2486,7 +2447,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 						}
 						else
 						{
-							MinSkip(st, [](const wchar_t* Str) { return *Str != L'\r' && *Str != L'\n'; });
+							MinSkip(st, [](const wchar_t* Str) { return !IsEol(*Str); });
 
 							if (st.max==-1)break;
 						}
@@ -2930,14 +2891,16 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 					stack.emplace_back(st);
 					continue;
 				}
-				case opRegExpEnd:return 1;
+				case opRegExpEnd:
+					return true;
 			}//switch(op)
 		}
 
 		for (;; stack.pop_back())
 		{
 			if (stack.empty())
-				return 0;
+				return false;
+
 			const auto ps = std::prev(stack.end());
 
 			//dpf(("ps->op:%s\n",ops[ps->op]));
@@ -3200,7 +3163,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 						    )
 						)
 						{
-							return -1;
+							return SetError(errCancelled, 0);
 						}
 					}
 
@@ -3250,7 +3213,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 						    )
 						)
 						{
-							return -1;
+							return SetError(errCancelled, 0);
 						}
 					}
 
@@ -3312,7 +3275,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 							    )
 							)
 							{
-								return -1;
+								return SetError(errCancelled, 0);
 							}
 						}
 
@@ -3359,7 +3322,7 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 				}
 				case opNoReturn:
 				{
-					return 0;
+					return false;
 				}
 			}//switch(op)
 
@@ -3367,85 +3330,55 @@ int RegExp::InnerMatch(const wchar_t* const start, const wchar_t* str, const wch
 		}
 	}
 
-	return 1;
+	return true;
 }
 
-int RegExp::Match(string_view const text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
+bool RegExp::Match(string_view const text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
 {
-	const auto textstart = text.data();
-	const auto textend = text.data() + text.size();
-
-	const wchar_t* const start = textstart;
-	const wchar_t* tempend=textend;
-
-	if (havefirst && !first[*start])return 0;
-
-	TrimTail(start, tempend);
-
-	if (tempend<start)return 0;
-
-	if (minlength && tempend-start<minlength)return 0;
-
-	std::vector<StateStackItem> stack;
-
-	const auto res = InnerMatch(start, start, tempend, match, matchcount, hmatch, stack);
-
-	if (res==1)
-	{
-		for (int i=0; i<matchcount; i++)
-		{
-			if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
-			{
-				match[i].start=match[i].end=-1;
-			}
-		}
-	}
-
-	return res;
+	return MatchEx(text, 0, match, matchcount, hmatch);
 }
 
-int RegExp::MatchEx(string_view const text, size_t const From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
+bool RegExp::MatchEx(string_view const text, size_t const From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
 {
-	const auto datastart = text.data();
+	const auto start = text.data();
 	const auto textstart = text.data() + From;
 	const auto textend = text.data() + text.size();
 
-	if (havefirst && !first[static_cast<wchar_t>(*textstart)])
-		return 0;
+	if (havefirst && !first[*textstart])
+		return false;
 
-	const wchar_t* tempend=textend;
-
-	const wchar_t* const start = datastart;
+	auto tempend = textend;
 	TrimTail(start, tempend);
 
-	if (tempend<textstart)return 0;
+	if (tempend<textstart)
+		return false;
 
-	if (minlength && tempend-start<minlength)return 0;
+	if (minlength && tempend-start<minlength)
+		return false;
 
 	std::vector<StateStackItem> stack;
 
-	const auto res = InnerMatch(start, textstart, tempend, match, matchcount, hmatch, stack);
+	if (!InnerMatch(start, textstart, tempend, match, matchcount, hmatch, stack))
+		return false;
 
-	if (res==1)
+	for (int i=0; i<matchcount; i++)
 	{
-		for (int i=0; i<matchcount; i++)
+		if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
 		{
-			if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
-			{
-				match[i].start=match[i].end=-1;
-			}
+			match[i].start=match[i].end=-1;
 		}
 	}
 
-	return res;
+	return true;
 }
 
-int RegExp::Optimize()
+bool RegExp::Optimize()
 {
 	REOpCode* jumps[MAXDEPTH];
 	int jumpcount=0;
 
-	if (havefirst)return 1;
+	if (havefirst)
+		return true;
 
 	first.Reset();
 
@@ -3555,37 +3488,40 @@ int RegExp::Optimize()
 		{
 			default:
 			{
-				return 0;
+				return false;
 			}
 			case opType:
 			{
-				for (int i=0; i<RE_CHAR_COUNT; i++)if (isType(i,op->type))first[i]=1;
+				for (int i = 0; i < RE_CHAR_COUNT; i++)
+					if (isType(i, op->type))
+						first[i] = true;
 
 				break;
 			}
 			case opNotType:
 			{
-				for (int i=0; i<RE_CHAR_COUNT; i++)if (!isType(i,op->type))first[i]=1;
+				for (int i = 0; i < RE_CHAR_COUNT; i++)
+					if (!isType(i, op->type))
+						first[i] = true;
 
 				break;
 			}
 			case opSymbol:
 			{
-				first[op->symbol]=1;
+				first[op->symbol] = true;
 				break;
 			}
 			case opSymbolIgnoreCase:
 			{
-				first[op->symbol]=1;
-				first[TOUPPER(op->symbol)]=1;
+				first[op->symbol] = true;
+				first[TOUPPER(op->symbol)] = true;
 				break;
 			}
 			case opSymbolClass:
 			{
-				for (int i=0; i<RE_CHAR_COUNT; i++)
-				{
-					if (op->symbolclass->GetBit(i))first[i]=1;
-				}
+				for (int i = 0; i < RE_CHAR_COUNT; i++)
+					if (op->symbolclass->GetBit(i))
+						first[i] = true;
 
 				break;
 			}
@@ -3605,19 +3541,19 @@ int RegExp::Optimize()
 			}
 			case opAlternative:
 			{
-				return 0;
+				return false;
 			}
 			case opSymbolRange:
 			case opSymbolMinRange:
 			{
 				if (ignorecase)
 				{
-					first[TOLOWER(op->range.symbol)]=1;
-					first[TOUPPER(op->range.symbol)]=1;
+					first[TOLOWER(op->range.symbol)] = true;
+					first[TOUPPER(op->range.symbol)] = true;
 				}
 				else
 				{
-					first[op->range.symbol]=1;
+					first[op->range.symbol] = true;
 				}
 
 				if (!op->range.min)continue;
@@ -3628,9 +3564,8 @@ int RegExp::Optimize()
 			case opTypeMinRange:
 			{
 				for (int i=0; i<RE_CHAR_COUNT; i++)
-				{
-					if (isType(i,op->range.type))first[i]=1;
-				}
+					if (isType(i,op->range.type))
+						first[i] = true;
 
 				if (!op->range.min)continue;
 
@@ -3640,9 +3575,8 @@ int RegExp::Optimize()
 			case opNotTypeMinRange:
 			{
 				for (int i=0; i<RE_CHAR_COUNT; i++)
-				{
-					if (!isType(i,op->range.type))first[i]=1;
-				}
+					if (!isType(i, op->range.type))
+						first[i] = true;
 
 				if (!op->range.min)continue;
 
@@ -3652,9 +3586,8 @@ int RegExp::Optimize()
 			case opClassMinRange:
 			{
 				for (int i=0; i<RE_CHAR_COUNT; i++)
-				{
-					if (op->range.symbolclass->GetBit(i))first[i]=1;
-				}
+					if (op->range.symbolclass->GetBit(i))
+						first[i] = true;
 
 				if (!op->range.min)continue;
 
@@ -3663,7 +3596,8 @@ int RegExp::Optimize()
 			case opBracketRange:
 			case opBracketMinRange:
 			{
-				if (!op->range.min)return 0;
+				if (!op->range.min)
+					return false;
 
 				if (op->range.bracket.nextalt)
 				{
@@ -3676,7 +3610,8 @@ int RegExp::Optimize()
 			//case opNotLookAhead:
 			//case opLookBehind:
 			//case opNotLookBehind:
-			case opRegExpEnd:return 0;
+			case opRegExpEnd:
+				return false;
 		}
 
 		if (jumpcount>0)
@@ -3695,131 +3630,58 @@ int RegExp::Optimize()
 	}
 
 	havefirst=1;
-	return 1;
+	return true;
 }
 
-int RegExp::Search(string_view const text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
+bool RegExp::Search(string_view const text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
 {
-	const auto textstart = text.data();
-	const auto textend = text.data() + text.size();
-
-	const wchar_t* const start = textstart;
-	const wchar_t* str=start;
-	const wchar_t* tempend=textend;
-	TrimTail(start, tempend);
-
-	if (tempend<start)return 0;
-
-	if (minlength && tempend-start<minlength)return 0;
-
-	int res=0;
-
-	std::vector<StateStackItem> stack;
-
-	if (!code[0].bracket.nextalt && code[1].op == opDataStart)
-	{
-		res = InnerMatch(start, start, tempend, match, matchcount, hmatch, stack);
-	}
-	else
-	{
-		if (!code[0].bracket.nextalt && code[1].op == opDataEnd && code[2].op == opClosingBracket)
-		{
-			matchcount=1;
-			match[0].start = textend - textstart;
-			match[0].end=match[0].start;
-			return 1;
-		}
-
-		if (havefirst)
-		{
-			do
-			{
-				while (!first[*str] && str<tempend)str++;
-
-				if (0 != (res = InnerMatch(start, str, tempend, match, matchcount, hmatch, stack)))
-				{
-					break;
-				}
-
-				str++;
-			}
-			while (str<tempend);
-
-			if (!res && InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
-			{
-				res=1;
-			}
-		}
-		else
-		{
-			do
-			{
-				if (0 != (res = InnerMatch(start, str, tempend, match, matchcount, hmatch, stack)))
-				{
-					break;
-				}
-
-				str++;
-			}
-			while (str<=tempend);
-		}
-	}
-
-	if (res==1)
-	{
-		for (int i=0; i<matchcount; i++)
-		{
-			if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
-			{
-				match[i].start=match[i].end=-1;
-			}
-		}
-	}
-
-	return res;
+	return SearchEx(text, 0, match, matchcount, hmatch);
 }
 
-int RegExp::SearchEx(string_view const text, size_t const From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
+bool RegExp::SearchEx(string_view const text, size_t const From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch) const
 {
-	const auto datastart = text.data();
+	const auto start = text.data();
 	const auto textstart = text.data() + From;
 	const auto textend = text.data() + text.size();
 
-	const wchar_t* const start = datastart;
-	const wchar_t* str=textstart;
-	const wchar_t* tempend=textend;
+	auto tempend = textend;
 	TrimTail(start, tempend);
 
-	if (tempend<start)return 0;
+	if (tempend<textstart)
+		return false;
 
-	if (minlength && tempend-start<minlength)return 0;
-
-	int res=0;
+	if (minlength && tempend-start<minlength)
+		return false;
 
 	std::vector<StateStackItem> stack;
 
+	auto str = textstart;
+
 	if (!code[0].bracket.nextalt && code[1].op == opDataStart)
 	{
-		res = InnerMatch(start, str, tempend, match, matchcount, hmatch, stack);
+		if (!InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
+			return false;
 	}
 	else
 	{
 		if (!code[0].bracket.nextalt && code[1].op == opDataEnd && code[2].op == opClosingBracket)
 		{
 			matchcount=1;
-			match[0].start = textend - datastart;
+			match[0].start = textend - start;
 			match[0].end=match[0].start;
-			return 1;
+			return true;
 		}
 
 		if (havefirst)
 		{
+			bool res = false;
 			do
 			{
 				while (!first[*str] && str<tempend)str++;
 
-				if (0 != (res = InnerMatch(start, str, tempend, match, matchcount, hmatch, stack)))
+				if (InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
 				{
+					res = true;
 					break;
 				}
 
@@ -3827,38 +3689,37 @@ int RegExp::SearchEx(string_view const text, size_t const From, RegExpMatch* mat
 			}
 			while (str<tempend);
 
-			if (!res && InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
-			{
-				res=1;
-			}
+			if (!res && !InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
+				return false;
 		}
 		else
 		{
+			bool res = false;
 			do
 			{
-				if (0 != (res = InnerMatch(start, str, tempend, match, matchcount, hmatch, stack)))
+				if (InnerMatch(start, str, tempend, match, matchcount, hmatch, stack))
 				{
+					res = true;
 					break;
 				}
 
 				str++;
 			}
 			while (str<=tempend);
+			if (!res)
+				return false;
 		}
 	}
 
-	if (res==1)
+	for (int i=0; i<matchcount; i++)
 	{
-		for (int i=0; i<matchcount; i++)
+		if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
 		{
-			if (match[i].start==-1 || match[i].end==-1 || match[i].start>match[i].end)
-			{
-				match[i].start=match[i].end=-1;
-			}
+			match[i].start=match[i].end=-1;
 		}
 	}
 
-	return res;
+	return true;
 }
 
 bool RegExp::Search(string_view const Str) const
@@ -4002,14 +3863,29 @@ void RegExp::TrimTail(const wchar_t* const start, const wchar_t*& strend) const
 
 TEST_CASE("regex")
 {
-	RegExp re;
-	REQUIRE(re.Compile(L"/a*?ca/"sv) == 1);
+	{
+		RegExp re;
+		REQUIRE(re.Compile(L"/a*?ca/"sv));
 
-	RegExpMatch m = { -1, -1 };
-	intptr_t n = 1;
-	REQUIRE(re.Search(L"abca", &m, n) == 1);
-	REQUIRE(n == 1);
-	REQUIRE(m.start == 2);
-	REQUIRE(m.end == 4);
+		RegExpMatch m = { -1, -1 };
+		intptr_t n = 1;
+		REQUIRE(re.Search(L"abca", &m, n));
+		REQUIRE(n == 1);
+		REQUIRE(m.start == 2);
+		REQUIRE(m.end == 4);
+	}
+
+	{
+		RegExp re;
+		REQUIRE(re.Compile(L"/^\\[([\\w.]+)\\]:\\s*\\[(.*)\\]$/"sv, OP_PERLSTYLE));
+
+		RegExpMatch m = { -1, -1 };
+		intptr_t n = 1;
+		REQUIRE(re.Search(L"[init.svc.imsdatadaemon]: [running]", &m, n));
+		REQUIRE(n == 1);
+		REQUIRE(m.start == 0);
+		REQUIRE(m.end == 35);
+	}
+
 }
 #endif

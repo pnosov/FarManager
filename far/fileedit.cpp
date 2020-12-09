@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "fileedit.hpp"
 
@@ -68,7 +71,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "exitcode.hpp"
 #include "constitle.hpp"
 #include "wakeful.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "stddlg.hpp"
 #include "plugins.hpp"
 #include "lang.hpp"
@@ -172,10 +175,10 @@ static bool dlgBadEditorCodepage(uintptr_t& codepage)
 	IntOption cp_val;
 	cp_val = codepage;
 
-	std::vector<FarDialogBuilderListItem2> Items;
+	std::vector<DialogBuilderListItem> Items;
 	codepages::instance().FillCodePagesList(Items, true, false, true, false, false);
 
-	Builder.AddComboBox(cp_val, nullptr, 46, Items, DIF_LISTAUTOHIGHLIGHT | DIF_LISTWRAPMODE | DIF_DROPDOWNLIST);
+	Builder.AddComboBox(cp_val, 46, Items);
 	Builder.AddOKCancel();
 	Builder.SetDialogMode(DMODE_WARNINGSTYLE);
 	Builder.SetId(BadEditorCodePageId);
@@ -416,8 +419,8 @@ FileEditor::~FileEditor()
 				DeleteFileWithFolder(strFullFileName);
 			else
 			{
-				os::fs::set_file_attributes(strFullFileName,FILE_ATTRIBUTE_NORMAL);
-				os::fs::delete_file(strFullFileName); //BUGBUG
+				(void)os::fs::set_file_attributes(strFullFileName,FILE_ATTRIBUTE_NORMAL); // BUGBUG
+				(void)os::fs::delete_file(strFullFileName); //BUGBUG
 			}
 		}
 	}
@@ -441,10 +444,9 @@ void FileEditor::Init(
 	bEE_READ_Sent = false;
 	bLoaded = false;
 	m_bAddSignature = false;
-	m_editor = std::make_unique<Editor>(shared_from_this());
+	m_editor = std::make_unique<Editor>(shared_from_this(), codepage);
 
 	m_codepage = codepage;
-	m_editor->SetCodePage(m_codepage);
 	*AttrStr=0;
 	m_FileAttributes=INVALID_FILE_ATTRIBUTES;
 	SetTitle(Title);
@@ -475,9 +477,10 @@ void FileEditor::Init(
 
 			if (!EditorWindow->GetCanLoseFocus(true) || Global->Opt->Confirm.AllowReedit)
 			{
-				int MsgCode;
+				int Result = XC_EXISTS;
 				if (OpenModeExstFile == EF_OPENMODE_QUERY)
 				{
+					int MsgCode;
 					if (m_Flags.Check(FFILEEDIT_ENABLEF6))
 					{
 						MsgCode = Message(0,
@@ -486,7 +489,7 @@ void FileEditor::Init(
 								strFullFileName,
 								msg(lng::MAskReload)
 							},
-							{ lng::MCurrent, lng::MNewOpen, lng::MReload },
+							{ lng::MCurrent, lng::MNewOpen, lng::MReload, lng::MCancel },
 							L"EditorReload"sv, &EditorReloadId);
 					}
 					else
@@ -499,34 +502,76 @@ void FileEditor::Init(
 							},
 							{ lng::MNewOpen, lng::MCancel },
 							L"EditorReload"sv, &EditorReloadModalId);
-						if (MsgCode == 0)
-							MsgCode=1;
-						else
-							MsgCode=-200;
+
+						if (MsgCode == Message::first_button)
+							MsgCode = Message::second_button;
+					}
+
+					switch (MsgCode)
+					{
+					case Message::first_button:
+						Result = XC_EXISTS;
+						break;
+
+					case Message::second_button:
+						Result = XC_OPEN_NEWINSTANCE;
+						break;
+
+					case Message::third_button:
+						Result = XC_RELOAD;
+						break;
+
+					default:
+						SetExitCode(XC_LOADING_INTERRUPTED);
+						return;
 					}
 				}
 				else
 				{
 					if (m_Flags.Check(FFILEEDIT_ENABLEF6))
-						MsgCode=(OpenModeExstFile==EF_OPENMODE_USEEXISTING)?0:
-					        (OpenModeExstFile==EF_OPENMODE_NEWIFOPEN?1:
-					         (OpenModeExstFile==EF_OPENMODE_RELOADIFOPEN?2:-100)
-					        );
+					{
+						switch (OpenModeExstFile)
+						{
+						case EF_OPENMODE_USEEXISTING:
+							Result = XC_EXISTS;
+							break;
+
+						case EF_OPENMODE_NEWIFOPEN:
+							Result = XC_OPEN_NEWINSTANCE;
+							break;
+
+						case EF_OPENMODE_RELOADIFOPEN:
+							Result = XC_RELOAD;
+							break;
+
+						default:
+							SetExitCode(XC_EXISTS);
+							return;
+						}
+					}
 					else
-						MsgCode=(OpenModeExstFile==EF_OPENMODE_NEWIFOPEN?1:-100);
+					{
+						switch (OpenModeExstFile)
+						{
+						case EF_OPENMODE_NEWIFOPEN:
+							Result = XC_OPEN_NEWINSTANCE;
+							break;
+						}
+					}
 				}
 
-				switch (MsgCode)
+				switch (Result)
 				{
-					case 0:         // Current
-						SwitchTo=TRUE;
-						SetExitCode(XC_EXISTS); // ???
-						break;
-					case 1:         // NewOpen
-						SwitchTo=FALSE;
-						SetExitCode(XC_OPEN_NEWINSTANCE); // ???
-						break;
-					case 2:         // Reload
+				case XC_EXISTS:
+					SwitchTo=TRUE;
+					SetExitCode(Result); // ???
+					break;
+
+				case XC_OPEN_NEWINSTANCE:
+					SetExitCode(Result); // ???
+					break;
+
+				case XC_RELOAD:
 					{
 						//файл могли уже закрыть. например макросом в диалоговой процедуре предыдущего Message.
 						EditorWindow = Global->WindowManager->FindWindowByFile(windowtype_editor, strFullFileName);
@@ -535,18 +580,9 @@ void FileEditor::Init(
 							EditorWindow->SetFlags(FFILEEDIT_DISABLESAVEPOS);
 							Global->WindowManager->DeleteWindow(EditorWindow);
 						}
-						SetExitCode(XC_RELOAD); // -2 ???
-						break;
+						SetExitCode(Result); // -2 ???
 					}
-					case -200:
-						SetExitCode(XC_LOADING_INTERRUPTED);
-						return;
-					case -100:
-						SetExitCode(XC_EXISTS);
-						return;
-					default:
-						SetExitCode(XC_QUIT);
-						return;
+					break;
 				}
 			}
 			else
@@ -637,7 +673,7 @@ void FileEditor::Init(
 		m_Flags.Set(FFILEEDIT_NEW);
 
 	if (m_Flags.Check(FFILEEDIT_NEW))
-	  m_bAddSignature = Global->Opt->EdOpt.AddUnicodeBOM;
+		m_bAddSignature = Global->Opt->EdOpt.AddUnicodeBOM;
 
 	if (m_Flags.Check(FFILEEDIT_LOCKED))
 		m_editor->m_Flags.Set(Editor::FEDITOR_LOCKMODE);
@@ -727,23 +763,32 @@ void FileEditor::ReadEvent()
 
 void FileEditor::InitKeyBar()
 {
-	m_windowKeyBar->SetLabels(Global->OnlyEditorViewerUsed ? lng::MSingleEditF1 : lng::MEditF1);
+	auto& Keybar = *m_windowKeyBar;
+
+	Keybar.SetLabels(lng::MEditF1);
+
+	if (Global->OnlyEditorViewerUsed)
+	{
+		Keybar[KBL_SHIFT][F4].clear();
+		Keybar[KBL_CTRL][F10].clear();
+	}
 
 	if (!GetCanLoseFocus())
 	{
-		(*m_windowKeyBar)[KBL_MAIN][F12].clear();
-		(*m_windowKeyBar)[KBL_ALT][F11].clear();
-		(*m_windowKeyBar)[KBL_SHIFT][F4].clear();
+		Keybar[KBL_MAIN][F12].clear();
+		Keybar[KBL_ALT][F11].clear();
+		Keybar[KBL_SHIFT][F4].clear();
 	}
+
 	if (m_Flags.Check(FFILEEDIT_SAVETOSAVEAS))
-		(*m_windowKeyBar)[KBL_MAIN][F2] = msg(lng::MEditShiftF2);
+		Keybar[KBL_MAIN][F2] = msg(lng::MEditShiftF2);
 
 	if (!m_Flags.Check(FFILEEDIT_ENABLEF6))
-		(*m_windowKeyBar)[KBL_MAIN][F6].clear();
+		Keybar[KBL_MAIN][F6].clear();
 
-	(*m_windowKeyBar)[KBL_MAIN][F8] = f8cps.NextCPname(m_codepage);
+	Keybar[KBL_MAIN][F8] = f8cps.NextCPname(m_codepage);
 
-	m_windowKeyBar->SetCustomLabels(KBA_EDITOR);
+	Keybar.SetCustomLabels(KBA_EDITOR);
 }
 
 void FileEditor::SetNamesList(NamesList& Names)
@@ -847,7 +892,7 @@ bool FileEditor::ProcessKey(const Manager::Key& Key)
 bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 {
 	const auto LocalKey = Key();
-	if (LocalKey!=KEY_F4 && LocalKey!=KEY_IDLE)
+	if (none_of(LocalKey, KEY_F4, KEY_IDLE))
 		F4KeyOnly=false;
 
 	if (m_Flags.Check(FFILEEDIT_REDRAWTITLE) && ((LocalKey & 0x00ffffff) < KEY_END_FKEY || IsInternalKeyReal(LocalKey & 0x00ffffff)))
@@ -859,7 +904,7 @@ bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 	   никак не соответствует обрабатываемой клавише, возникают разномастные
 	   глюки
 	*/
-	if ((LocalKey >= KEY_MACRO_BASE && LocalKey <= KEY_MACRO_ENDBASE) || (LocalKey>=KEY_OP_BASE && LocalKey <=KEY_OP_ENDBASE)) // исключаем MACRO
+	if (in_closed_range(KEY_MACRO_BASE, LocalKey, KEY_MACRO_ENDBASE) || in_closed_range(KEY_OP_BASE, LocalKey, KEY_OP_ENDBASE)) // исключаем MACRO
 	{
 		// ; //
 	}
@@ -871,7 +916,7 @@ bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 			if (m_Flags.Check(FFILEEDIT_ENABLEF6))
 			{
 				int FirstSave=1;
-				UINT cp=m_codepage;
+				auto cp = m_codepage;
 
 				// проверка на "а может это говно удалили уже?"
 				// возможно здесь она и не нужна!
@@ -1218,8 +1263,6 @@ bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 					if (m_editor->IsFileChanged() || // в текущем сеансе были изменения?
 					        FilePlaced) // а сам файл то еще на месте?
 					{
-						int Res=100;
-
 						auto MsgLine1 = lng::MNewFileName;
 						if (m_editor->IsFileChanged() && FilePlaced)
 							MsgLine1 = lng::MEditSavedChangedNonFile;
@@ -1228,35 +1271,31 @@ bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 
 						if (MsgLine1 != lng::MNewFileName)
 						{
-							Res = Message(MSG_WARNING,
+							switch (Message(MSG_WARNING,
 								msg(lng::MEditTitle),
 								{
 									msg(MsgLine1),
 									msg(lng::MEditSavedChangedNonFile2)
 								},
 								{ lng::MHYes, lng::MHNo, lng::MHCancel },
-								{}, &EditorSaveExitDeletedId);
-						}
-
-						switch (Res)
-						{
-							case 0:
+								{}, &EditorSaveExitDeletedId))
+							{
+							case Message::first_button:
 
 								if (!ProcessKey(Manager::Key(KEY_F2))) // попытка сначала сохранить
 									NeedQuestion = false;
 
 								FirstSave = false;
 								break;
-							case 1:
+
+							case Message::second_button:
 								NeedQuestion = false;
 								FirstSave = false;
 								break;
-							case 100:
-								FirstSave = NeedQuestion = true;
-								break;
-							case 2:
+
 							default:
 								return false;
+							}
 						}
 					}
 					else if (!m_editor->m_Flags.Check(Editor::FEDITOR_MODIFIED)) //????
@@ -1274,7 +1313,7 @@ bool FileEditor::ReProcessKey(const Manager::Key& Key, bool CalledFromControl)
 			case KEY_SHIFTF8:
 			{
 				uintptr_t codepage = m_codepage;
-				if (codepages::instance().SelectCodePage(codepage, true, false, true))
+				if (codepages::instance().SelectCodePage(codepage, false, true))
 					SetCodePageEx(codepage == CP_DEFAULT? CP_REDETECT : codepage);
 
 				return true;
@@ -1345,7 +1384,7 @@ bool FileEditor::SetCodePageEx(uintptr_t cp)
 
 	const auto need_reload = !m_Flags.Check(FFILEEDIT_NEW) // we can't reload non-existing file
 		&& (BadConversion
-		|| IsUnicodeCodePage(m_codepage) || m_codepage == CP_UTF7
+		|| IsUnicodeCodePage(m_codepage)
 		|| IsUnicodeCodePage(cp));
 
 	if (need_reload)
@@ -1541,7 +1580,7 @@ bool FileEditor::LoadFile(const string& Name,int &UserBreak, error_state_ex& Err
 			if (m_codepage == CP_DEFAULT)
 				m_codepage = GetDefaultCodePage();
 		}
-		m_editor->SetCodePage(m_codepage);  //BUGBUG
+		m_editor->SetCodePage(m_codepage, nullptr, false);  //BUGBUG
 		m_editor->GlobalEOL = eol::none;
 
 		unsigned long long FileSize = 0;
@@ -1558,7 +1597,7 @@ bool FileEditor::LoadFile(const string& Name,int &UserBreak, error_state_ex& Err
 		{
 			if (testBOM && IsUnicodeOrUtfCodePage(m_codepage))
 			{
-				if (starts_with(Str.Str, Utf::BOM_CHAR))
+				if (starts_with(Str.Str, encoding::bom_char))
 				{
 					Str.Str.remove_prefix(1);
 					m_bAddSignature = true;
@@ -1649,6 +1688,16 @@ bool FileEditor::LoadFile(const string& Name,int &UserBreak, error_state_ex& Err
 		ErrorState = error_state::fetch();
 		return false;
 	}
+	catch (const std::exception&)
+	{
+		// A portion of file can be locked
+
+		// TODO: better diagnostics
+		m_editor->FreeAllocatedData();
+		m_Flags.Set(FFILEEDIT_OPENFAILED);
+		ErrorState = error_state::fetch();
+		return false;
+	}
 }
 
 bool FileEditor::ReloadFile(uintptr_t codepage)
@@ -1658,7 +1707,7 @@ bool FileEditor::ReloadFile(uintptr_t codepage)
 	const auto save_BadConversiom(BadConversion);
 	const auto save_Flags(m_Flags), save_Flags1(m_editor->m_Flags);
 
-	Editor saved(shared_from_this());
+	Editor saved(shared_from_this(), CP_DEFAULT);
 	saved.fake_editor = true;
 	m_editor->SwapState(saved);
 
@@ -1730,21 +1779,19 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 			{}, &EditAskSaveId);
 		if(Code < 0 && !Global->AllowCancelExit)
 		{
-			Code = 1; // close == not save
+			Code = Message::second_button; // close == not save
 		}
 
 		switch (Code)
 		{
-		case 0:  // Save
+		case Message::first_button: // Save
 			break;
 
-		case 1:  // Not Save
-			m_editor->TextChanged(false); // 10.08.2000 skv: TextChanged() support;
+		case Message::second_button: // Not Save
+			m_editor->TextChanged(false);
 			return SAVEFILE_SUCCESS;
 
-		case -1:
-		case -2:
-		case 2:  // Continue Edit
+		default:
 			return SAVEFILE_CANCEL;
 		}
 	}
@@ -1771,19 +1818,16 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 						{ lng::MHYes, lng::MEditBtnSaveAs, lng::MHCancel },
 						L"WarnEditorSavedEx"sv, &EditAskSaveExtId))
 					{
-						case -1:
-						case -2:
-						case 2:  // Continue Edit
-							return SAVEFILE_CANCEL;
-						case 1:  // Save as
+					case Message::first_button: // Save
+						break;
 
-							if (ProcessKey(Manager::Key(KEY_SHIFTF2)))
-								return SAVEFILE_SUCCESS;
-							else
-								return SAVEFILE_CANCEL;
+					case Message::second_button: // Save as
+						return ProcessKey(Manager::Key(KEY_SHIFTF2))?
+							SAVEFILE_SUCCESS :
+							SAVEFILE_CANCEL;
 
-						case 0:  // Save
-							break;
+					default:
+						return SAVEFILE_CANCEL;
 					}
 				}
 			}
@@ -1806,7 +1850,7 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 				{}, &EditorSavedROId) != Message::first_button)
 				return SAVEFILE_CANCEL;
 
-			os::fs::set_file_attributes(Name, FileAttr & ~FILE_ATTRIBUTE_READONLY);
+			(void)os::fs::set_file_attributes(Name, FileAttr & ~FILE_ATTRIBUTE_READONLY); //BUGBUG
 		}
 	}
 	else
@@ -1868,6 +1912,7 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 	if (!IsUnicodeOrUtfCodePage(Codepage))
 	{
 		int LineNumber=-1;
+		encoding::error_position ErrorPosition;
 
 		for(auto& Line: m_editor->Lines)
 		{
@@ -1875,14 +1920,12 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 			const auto& SaveStr = Line.GetString();
 			auto LineEol = Line.GetEOL();
 
-			bool UsedDefaultCharStr = encoding::get_bytes(Codepage, SaveStr, {}, &UsedDefaultCharStr) && UsedDefaultCharStr;
+			(void)encoding::get_bytes_count(Codepage, SaveStr, &ErrorPosition);
+			const auto ValidStr = !ErrorPosition;
+			if (ValidStr)
+				(void)encoding::get_bytes_count(Codepage, LineEol.str(), &ErrorPosition);
 
-			if (Eol != eol::none && LineEol != eol::none)
-				LineEol = m_editor->GlobalEOL;
-
-			bool UsedDefaultCharEOL = encoding::get_bytes(Codepage, LineEol.str(), {}, &UsedDefaultCharEOL) && UsedDefaultCharEOL;
-
-			if (UsedDefaultCharStr || UsedDefaultCharEOL)
+			if (ErrorPosition)
 			{
 				//SetMessageHelp(L"EditorDataLostWarning")
 				const int Result = Message(MSG_WARNING,
@@ -1899,18 +1942,9 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 				if(Result == Message::second_button)
 				{
 					m_editor->GoToLine(LineNumber);
-					if(UsedDefaultCharStr)
+					if(!ValidStr)
 					{
-						const auto BadCharIterator = std::find_if(CONST_RANGE(SaveStr, i)
-						{
-							bool UseDefChar;
-							return encoding::get_bytes(Codepage, { &i, 1 }, {}, &UseDefChar) == 1 && UseDefChar;
-						});
-
-						if (BadCharIterator != SaveStr.cend())
-						{
-							Line.SetCurPos(BadCharIterator - SaveStr.cbegin());
-						}
+						Line.SetCurPos(static_cast<int>(*ErrorPosition));
 					}
 					else
 					{
@@ -1945,8 +1979,6 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 
 			size_t LineNumber = -1;
 
-			std::vector<char> Buffer;
-
 			for (auto& Line : m_editor->Lines)
 			{
 				++LineNumber;
@@ -1973,7 +2005,7 @@ int FileEditor::SaveFile(const string& Name,int Ask, bool bSaveAs, error_state_e
 	catch (const far_exception& e)
 	{
 		RetCode = SAVEFILE_ERROR;
-		ErrorState = e.error_state();
+		ErrorState = e;
 	}
 
 	// BUGBUG check result
@@ -2179,8 +2211,8 @@ static std::pair<string, size_t> ansi_char_code(std::optional<wchar_t> const& Ch
 		std::optional<unsigned> CharCode;
 
 		char Buffer;
-		bool UsedDefaultChar;
-		if (Char.has_value() && encoding::get_bytes(Codepage, { &*Char, 1 }, { &Buffer, 1 }, &UsedDefaultChar) == 1 && !UsedDefaultChar)
+		encoding::error_position ErrorPosition;
+		if (Char.has_value() && encoding::get_bytes(Codepage, { &*Char, 1 }, { &Buffer, 1 }, &ErrorPosition) == 1 && !ErrorPosition)
 		{
 			const unsigned AnsiCode = Buffer;
 			if (AnsiCode != *Char)
@@ -2284,7 +2316,7 @@ void FileEditor::ShowStatus() const
      Узнаем атрибуты файла и заодно сформируем готовую строку атрибутов для
      статуса.
 */
-DWORD FileEditor::EditorGetFileAttributes(const string& Name)
+os::fs::attributes FileEditor::EditorGetFileAttributes(string_view const Name)
 {
 	m_FileAttributes = os::fs::get_file_attributes(Name);
 	int ind=0;
@@ -2391,7 +2423,7 @@ intptr_t FileEditor::EditorControl(int Command, intptr_t Param1, void *Param2)
 		{
 			if (Param2 && static_cast<size_t>(Param1) > strFullFileName.size())
 			{
-				*std::copy(ALL_CONST_RANGE(strFullFileName), static_cast<wchar_t*>(Param2)) = L'\0';
+				*copy_string(strFullFileName, static_cast<wchar_t*>(Param2)) = {};
 			}
 
 			return strFullFileName.size()+1;
@@ -2462,7 +2494,7 @@ intptr_t FileEditor::EditorControl(int Command, intptr_t Param1, void *Param2)
 			const auto strLocalTitle = GetTitle();
 			if (Param2 && static_cast<size_t>(Param1) > strLocalTitle.size())
 			{
-				*std::copy(ALL_CONST_RANGE(strLocalTitle), static_cast<wchar_t*>(Param2)) = L'\0';
+				*copy_string(strLocalTitle, static_cast<wchar_t*>(Param2)) = {};
 			}
 
 			return strLocalTitle.size()+1;
@@ -2712,27 +2744,36 @@ bool FileEditor::SetCodePage(uintptr_t codepage)
 	if (codepage == m_codepage || !m_editor)
 		return false;
 
-	int x, y;
-	if (!m_editor->TryCodePage(codepage, x, y))
+	uintptr_t ErrorCodepage;
+	size_t ErrorLine, ErrorPos;
+	if (!m_editor->TryCodePage(codepage, ErrorCodepage, ErrorLine, ErrorPos))
 	{
-		const int ret = Message(MSG_WARNING,
+		const auto Info = codepages::GetInfo(ErrorCodepage);
+
+		const int Result = Message(MSG_WARNING,
 			msg(lng::MWarning),
 			{
 				msg(lng::MEditorSwitchCPWarn1),
-				format(msg(lng::MEditorSwitchCPWarn2), codepage),
+				msg(lng::MEditorSwitchCPWarn2),
+				format(FSTR(L"{0} - {1}"), codepage, Info? Info->Name : str(codepage)),
 				msg(lng::MEditorSwitchCPConfirm)
 			},
 			{ lng::MCancel, lng::MEditorSaveCPWarnShow, lng::MOk });
 
-		if (ret < 2) // not confirmed
+		switch (Result)
 		{
-			if (ret == 1)
-			{
-				m_editor->GoToLine(y);
-				m_editor->m_it_CurLine->SetCurPos(x);
-				Show();
-			}
+		default:
+		case Message::first_button:
 			return false;
+
+		case Message::second_button:
+			m_editor->GoToLine(static_cast<int>(ErrorLine));
+			m_editor->m_it_CurLine->SetCurPos(static_cast<int>(ErrorPos));
+			Show();
+			return false;
+
+		case Message::third_button:
+			break;
 		}
 	}
 

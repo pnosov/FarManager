@@ -88,13 +88,14 @@ if not exist $(BootstrapDir) mkdir $(BootstrapDir)</Command>
     </PreBuildEvent>
     <ClCompile>
       <AdditionalIncludeDirectories>$(BootstrapDir)..</AdditionalIncludeDirectories>
-      <AdditionalOptions>/J /Zc:__cplusplus,externConstexpr,inline,throwingNew /volatile:iso $(NewOptions) %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/J /Zc:__cplusplus,externConstexpr,inline,throwingNew /volatile:iso /utf-8 $(NewOptions) %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>_ENABLE_EXTENDED_ALIGNED_STORAGE;_HAS_AUTO_PTR_ETC=0;_CRT_SECURE_NO_WARNINGS;FAR_ALPHA_VERSION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ExceptionHandling>Sync</ExceptionHandling>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>headers.hpp</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)headers.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>EnableAllWarnings</WarningLevel>
+      <DisableSpecificWarnings>5045</DisableSpecificWarnings>
       <AssemblerListingLocation>$(OutDir)cod\</AssemblerListingLocation>
       <StringPooling>true</StringPooling>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -105,9 +106,10 @@ if not exist $(BootstrapDir) mkdir $(BootstrapDir)</Command>
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <RemoveUnreferencedCodeData>true</RemoveUnreferencedCodeData>
       <DiagnosticsFormat>Caret</DiagnosticsFormat>
-      <LanguageStandard>stdcpp17</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <ConformanceMode>true</ConformanceMode>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <UseFullPaths>false</UseFullPaths>
     </ClCompile>
     <ResourceCompile>
       <Culture>0x0409</Culture>
@@ -179,7 +181,7 @@ cl /nologo  /c /Fo"$(IntDir)%(Filename)_c.testobj" /TC api_test.c
 echo testing C++ plugin API
 cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
 </Command>
-      <AdditionalInputs>Include/plugin.hpp;Include/farcolor.hpp;Include/DlgBuilder.hpp</AdditionalInputs>
+      <AdditionalInputs>Include/plugin.hpp;Include/farcolor.hpp</AdditionalInputs>
       <Message>
       </Message>
       <Outputs>$(IntDir)%(Filename)_c.testobj;$(IntDir)%(Filename)_c++.testobj</Outputs>
@@ -263,7 +265,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClCompile Include="keybar.cpp" />
     <ClCompile Include="keyboard.cpp" />
     <ClCompile Include="language.cpp" />
-    <ClCompile Include="lasterror.cpp" />
     <ClCompile Include="locale.cpp" />
     <ClCompile Include="lockscrn.cpp" />
     <ClCompile Include="macro.cpp" />
@@ -291,6 +292,7 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClCompile Include="platform.env.cpp" />
     <ClCompile Include="platform.fs.cpp" />
     <ClCompile Include="platform.memory.cpp" />
+    <ClCompile Include="platform.process.cpp" />
     <ClCompile Include="platform.reg.cpp" />
     <ClCompile Include="platform.security.cpp" />
     <ClCompile Include="platform.version.cpp" />
@@ -368,6 +370,7 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="common\view\where.hpp" />
     <ClInclude Include="common\view\zip.hpp" />
     <ClInclude Include="common\algorithm.hpp" />
+    <ClInclude Include="common\base64.hpp" />
     <ClInclude Include="common\bytes_view.hpp" />
     <ClInclude Include="common\chrono.hpp" />
     <ClInclude Include="common\compiler.hpp" />
@@ -395,6 +398,7 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="common\string_utils.hpp" />
     <ClInclude Include="common\type_traits.hpp" />
     <ClInclude Include="common\utility.hpp" />
+    <ClInclude Include="common\uuid.hpp" />
     <ClInclude Include="components.hpp" />
     <ClInclude Include="config.hpp" />
     <ClInclude Include="configdb.hpp" />
@@ -419,7 +423,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="dizlist.hpp" />
     <ClInclude Include="dizviewer.hpp" />
     <ClInclude Include="dlgedit.hpp" />
-    <ClInclude Include="DlgGuid.hpp" />
     <ClInclude Include="drivemix.hpp" />
     <ClInclude Include="edit.hpp" />
     <ClInclude Include="editcontrol.hpp" />
@@ -434,7 +437,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="execute.hpp" />
     <ClInclude Include="exitcode.hpp" />
     <ClInclude Include="FarDlgBuilder.hpp" />
-    <ClInclude Include="FarGuid.hpp" />
     <ClInclude Include="farversion.hpp" />
     <ClInclude Include="fastfind.hpp" />
     <ClInclude Include="file_io.hpp" />
@@ -457,7 +459,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="format.hpp" />
     <ClInclude Include="global.hpp" />
     <ClInclude Include="grabber.hpp" />
-    <ClInclude Include="guid_parse.hpp" />
     <ClInclude Include="headers.hpp" />
     <ClInclude Include="help.hpp" />
     <ClInclude Include="hilight.hpp" />
@@ -470,10 +471,8 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="keybar.hpp" />
     <ClInclude Include="keyboard.hpp" />
     <ClInclude Include="keys.hpp" />
-    <ClInclude Include="KnownGuids.hpp" />
     <ClInclude Include="lang.hpp" />
     <ClInclude Include="language.hpp" />
-    <ClInclude Include="lasterror.hpp" />
     <ClInclude Include="locale.hpp" />
     <ClInclude Include="lockscrn.hpp" />
     <ClInclude Include="macro.hpp" />
@@ -503,9 +502,14 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="platform.fs.hpp" />
     <ClInclude Include="platform.fwd.hpp" />
     <ClInclude Include="platform.hpp" />
+    <ClInclude Include="platform.headers.hpp" />
     <ClInclude Include="platform.memory.hpp" />
+    <ClInclude Include="platform.process.hpp" />
     <ClInclude Include="platform.reg.hpp" />
     <ClInclude Include="platform.security.hpp" />
+    <ClInclude Include="platform.sdk.hpp" />
+    <ClInclude Include="platform.sdk\sdk_common.h" />
+    <ClInclude Include="platform.sdk\sdk_vc.h" />
     <ClInclude Include="platform.version.hpp" />
     <ClInclude Include="plclass.hpp" />
     <ClInclude Include="plist.hpp" />
@@ -529,9 +533,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="scrbuf.hpp" />
     <ClInclude Include="scrobj.hpp" />
     <ClInclude Include="scrsaver.hpp" />
-    <ClInclude Include="sdk.hpp" />
-    <ClInclude Include="sdk\sdk_common.h" />
-    <ClInclude Include="sdk\sdk_vc.h" />
     <ClInclude Include="setattr.hpp" />
     <ClInclude Include="setcolor.hpp" />
     <ClInclude Include="shortcuts.hpp" />
@@ -552,6 +553,9 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="treelist.hpp" />
     <ClInclude Include="tvar.hpp" />
     <ClInclude Include="usermenu.hpp" />
+    <ClInclude Include="uuids.far.hpp" />
+    <ClInclude Include="uuids.far.dialogs.hpp" />
+    <ClInclude Include="uuids.plugins.hpp" />
     <ClInclude Include="viewer.hpp" />
     <ClInclude Include="vmenu.hpp" />
     <ClInclude Include="vmenu2.hpp" />
@@ -562,12 +566,6 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
     <ClInclude Include="xlat.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="DlgBuilder.hpp">
-      <Message>Transforming %(Identity) to redistributable form...</Message>
-      <Command>$(M4Cmd) -DINPUT=%(Identity) headers.m4 &gt; Include\DlgBuilder.hpp</Command>
-      <AdditionalInputs>headers.m4;farversion.m4;vbuild.m4;%(AdditionalInputs)</AdditionalInputs>
-      <Outputs>Include\%(Identity);%(Outputs)</Outputs>
-    </CustomBuild>
     <CustomBuild Include="farcolor.hpp">
       <Message>Transforming %(Identity) to redistributable form...</Message>
       <Command>$(M4Cmd) -DINPUT=%(Identity) headers.m4 &gt; Include\farcolor.hpp</Command>
@@ -647,6 +645,20 @@ cl /nologo /c /Fo"$(IntDir)%(Filename)_c++.testobj" /TP api_test.c
       <Outputs>$(OutDir)%(FileName);%(Outputs)</Outputs>
     </CustomBuild>
     <CustomBuild Include="FarPol.hlf.m4">
+      <FileType>Document</FileType>
+      <Message>Compiling %(Identity)...</Message>
+      <Command>tools\gawk -f scripts\mkhlf.awk %(Identity) | $(M4Cmd) &gt; $(OutDir)%(FileName)</Command>
+      <AdditionalInputs>farversion.m4;vbuild.m4;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs>$(OutDir)%(FileName);%(Outputs)</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="FarGer.hlf.m4">
+      <FileType>Document</FileType>
+      <Message>Compiling %(Identity)...</Message>
+      <Command>tools\gawk -f scripts\mkhlf.awk %(Identity) | $(M4Cmd) &gt; $(OutDir)%(FileName)</Command>
+      <AdditionalInputs>farversion.m4;vbuild.m4;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs>$(OutDir)%(FileName);%(Outputs)</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="FarUkr.hlf.m4">
       <FileType>Document</FileType>
       <Message>Compiling %(Identity)...</Message>
       <Command>tools\gawk -f scripts\mkhlf.awk %(Identity) | $(M4Cmd) &gt; $(OutDir)%(FileName)</Command>

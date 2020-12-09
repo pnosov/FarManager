@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "panel.hpp"
 
@@ -45,12 +48,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "ctrlobj.hpp"
 #include "scrbuf.hpp"
 #include "syslog.hpp"
-#include "cddrv.hpp"
 #include "interf.hpp"
 #include "shortcuts.hpp"
 #include "dirmix.hpp"
 #include "constitle.hpp"
-#include "FarGuid.hpp"
+#include "uuids.far.hpp"
 #include "lang.hpp"
 #include "plugins.hpp"
 #include "keybar.hpp"
@@ -152,8 +154,8 @@ void Panel::OnFocusChange(bool Get)
 bool Panel::IsMouseInClientArea(const MOUSE_EVENT_RECORD* MouseEvent) const
 {
 	return IsVisible() &&
-		in_range(m_Where.left, MouseEvent->dwMousePosition.X, m_Where.right) &&
-		in_range(m_Where.top, MouseEvent->dwMousePosition.Y, m_Where.bottom);
+		in_closed_range(m_Where.left, MouseEvent->dwMousePosition.X, m_Where.right) &&
+		in_closed_range(m_Where.top, MouseEvent->dwMousePosition.Y, m_Where.bottom);
 }
 
 bool Panel::ProcessMouseDrag(const MOUSE_EVENT_RECORD *MouseEvent)
@@ -344,13 +346,11 @@ bool Panel::SetCurPath()
 
 	if (AnotherPanel->GetMode() != panel_mode::PLUGIN_PANEL)
 	{
-		if (AnotherPanel->m_CurDir.size() > 1 && AnotherPanel->m_CurDir[1]==L':' &&
-		        (m_CurDir.empty() || upper(AnotherPanel->m_CurDir[0])!=upper(m_CurDir[0])))
+		// Propagate passive panel curent directory to the environment
+		// (only if it won't be overwritten by the active)
+		if (!AnotherPanel->m_CurDir.empty() && (m_CurDir.empty() || !equal_icase_t{}(AnotherPanel->m_CurDir[0], m_CurDir[0])))
 		{
-			// сначала установим переменные окружения для пассивной панели
-			// (без реальной смены пути, чтобы лишний раз пассивный каталог
-			// не перечитывать)
-			FarChDir(AnotherPanel->m_CurDir, false);
+			set_drive_env_curdir(AnotherPanel->m_CurDir);
 		}
 	}
 
@@ -360,7 +360,7 @@ bool Panel::SetCurPath()
 		{
 			const auto strRoot = GetPathRoot(m_CurDir);
 
-			if (FAR_GetDriveType(strRoot) != DRIVE_REMOVABLE || os::fs::IsDiskInDrive(strRoot))
+			if (os::fs::drive::get_type(strRoot) != DRIVE_REMOVABLE || os::fs::IsDiskInDrive(strRoot))
 			{
 				if (!os::fs::is_directory(m_CurDir))
 				{
@@ -481,9 +481,9 @@ void Panel::ShowScreensCount() const
 {
 	if (Global->Opt->ShowScreensNumber && !m_Where.left)
 	{
-		int Viewers = Global->WindowManager->GetWindowCountByType(windowtype_viewer);
-		int Editors = Global->WindowManager->GetWindowCountByType(windowtype_editor);
-		int Dialogs = Global->Opt->ShowScreensNumber > 1 ? Global->WindowManager->GetWindowCountByType(windowtype_dialog) : 0;
+		const auto Viewers = Global->WindowManager->GetWindowCountByType(windowtype_viewer);
+		const auto Editors = Global->WindowManager->GetWindowCountByType(windowtype_editor);
+		const auto Dialogs = Global->Opt->ShowScreensNumber > 1? Global->WindowManager->GetWindowCountByType(windowtype_dialog) : 0;
 
 		if (Viewers>0 || Editors>0 || Dialogs > 0)
 		{
@@ -509,6 +509,11 @@ void Panel::ShowScreensCount() const
 	}
 }
 
+
+void Panel::GetOpenPanelInfo(OpenPanelInfo* Info) const
+{
+	*Info = {};
+}
 
 void Panel::RefreshTitle()
 {
@@ -587,7 +592,7 @@ int Panel::SetPluginCommand(int Command,int Param1,void* Param2)
 			Info->StructSize = sizeof(PanelInfo);
 
 			UpdateIfRequired();
-			Info->OwnerGuid=FarGuid;
+			Info->OwnerGuid = FarUuid;
 			Info->PluginHandle=nullptr;
 
 			switch (GetType())
@@ -612,7 +617,7 @@ int Panel::SetPluginCommand(int Command,int Param1,void* Param2)
 			Info->PanelRect.right = Rect.right;
 			Info->PanelRect.bottom = Rect.bottom;
 			Info->ViewMode=GetViewMode();
-			Info->SortMode = static_cast<OPENPANELINFO_SORTMODES>((GetSortMode() < panel_sort::COUNT? SM_UNSORTED - static_cast<int>(panel_sort::UNSORTED) : 0) + static_cast<int>(GetSortMode()));
+			Info->SortMode = static_cast<OPENPANELINFO_SORTMODES>(internal_sort_mode_to_plugin(GetSortMode()));
 
 			Info->Flags |= Global->Opt->ShowHidden? PFLAGS_SHOWHIDDEN : 0;
 			Info->Flags |= Global->Opt->Highlight? PFLAGS_HIGHLIGHT : 0;
@@ -741,13 +746,13 @@ int Panel::SetPluginCommand(int Command,int Param1,void* Param2)
 				if(Param1>=Result && CheckStructSize(dirInfo))
 				{
 					dirInfo->StructSize=sizeof(FarPanelDirectory);
-					dirInfo->PluginId=Info.PluginGuid;
+					dirInfo->PluginId=Info.PluginUuid;
 					dirInfo->Name = static_cast<wchar_t*>(static_cast<void*>(static_cast<char*>(Param2) + folderOffset));
 					dirInfo->Param = static_cast<wchar_t*>(static_cast<void*>(static_cast<char*>(Param2) + pluginDataOffset));
 					dirInfo->File = static_cast<wchar_t*>(static_cast<void*>(static_cast<char*>(Param2) + pluginFileOffset));
-					*std::copy(ALL_CONST_RANGE(Info.ShortcutFolder), const_cast<wchar_t*>(dirInfo->Name)) = L'\0';
-					*std::copy(ALL_CONST_RANGE(Info.PluginData), const_cast<wchar_t*>(dirInfo->Param)) = L'\0';
-					*std::copy(ALL_CONST_RANGE(Info.PluginFile), const_cast<wchar_t*>(dirInfo->File)) = L'\0';
+					*copy_string(Info.ShortcutFolder, const_cast<wchar_t*>(dirInfo->Name)) = {};
+					*copy_string(Info.PluginData, const_cast<wchar_t*>(dirInfo->Param)) = {};
+					*copy_string(Info.PluginFile, const_cast<wchar_t*>(dirInfo->File)) = {};
 				}
 				Reenter--;
 			}
@@ -926,7 +931,7 @@ bool Panel::GetShortcutInfo(ShortcutInfo& Info) const
 	if (m_PanelMode == panel_mode::PLUGIN_PANEL)
 	{
 		const auto ph = GetPluginHandle();
-		Info.PluginGuid = ph->plugin()->Id();
+		Info.PluginUuid = ph->plugin()->Id();
 		OpenPanelInfo OpInfo;
 		Global->CtrlObject->Plugins->GetOpenPanelInfo(ph, &OpInfo);
 		Info.PluginFile = NullToEmpty(OpInfo.HostFile);
@@ -937,7 +942,7 @@ bool Panel::GetShortcutInfo(ShortcutInfo& Info) const
 	}
 	else
 	{
-		Info.PluginGuid=FarGuid;
+		Info.PluginUuid = FarUuid;
 		Info.PluginFile.clear();
 		Info.PluginData.clear();
 		Info.ShortcutFolder = m_CurDir;
@@ -950,7 +955,7 @@ bool Panel::SaveShortcutFolder(int Pos) const
 	ShortcutInfo Info;
 	if(GetShortcutInfo(Info))
 	{
-		Shortcuts(Pos).Add(Info.ShortcutFolder, Info.PluginGuid, Info.PluginFile, Info.PluginData);
+		Shortcuts(Pos).Add(Info.ShortcutFolder, Info.PluginUuid, Info.PluginFile, Info.PluginData);
 		return true;
 	}
 	return false;
@@ -1006,10 +1011,10 @@ bool Panel::SetPluginDirectory(string_view const Directory, bool Silent)
 bool Panel::ExecShortcutFolder(int Pos)
 {
 	Shortcuts::data Data;
-	return Shortcuts(Pos).Get(Data) && ExecFolder(std::move(Data.Folder), Data.PluginGuid, Data.PluginFile, Data.PluginData, true, true, false);
+	return Shortcuts(Pos).Get(Data) && ExecFolder(std::move(Data.Folder), Data.PluginUuid, Data.PluginFile, Data.PluginData, true, true, false);
 }
 
-bool Panel::ExecFolder(string_view const Folder, const GUID& PluginGuid, const string& strPluginFile, const string& strPluginData, bool CheckType, bool TryClosest, bool Silent)
+bool Panel::ExecFolder(string_view const Folder, const UUID& PluginUuid, const string& strPluginFile, const string& strPluginData, bool CheckType, bool TryClosest, bool Silent)
 {
 	auto SrcPanel = shared_from_this();
 	const auto AnotherPanel = Parent()->GetAnotherPanel(this);
@@ -1032,12 +1037,12 @@ bool Panel::ExecFolder(string_view const Folder, const GUID& PluginGuid, const s
 
 	const auto CheckFullScreen = SrcPanel->IsFullScreen();
 
-	if (PluginGuid != FarGuid)
+	if (PluginUuid != FarUuid)
 	{
 		bool Result = false;
 		ShortcutInfo Info;
 		GetShortcutInfo(Info);
-		if (Info.PluginGuid == PluginGuid && Info.PluginFile == strPluginFile && Info.PluginData == strPluginData)
+		if (Info.PluginUuid == PluginUuid && Info.PluginFile == strPluginFile && Info.PluginData == strPluginData)
 		{
 			Result = SetPluginDirectory(Folder, Silent);
 		}
@@ -1048,7 +1053,7 @@ bool Panel::ExecFolder(string_view const Folder, const GUID& PluginGuid, const s
 				return false;
 			}
 
-			if (const auto pPlugin = Global->CtrlObject->Plugins->FindPlugin(PluginGuid))
+			if (const auto pPlugin = Global->CtrlObject->Plugins->FindPlugin(PluginUuid))
 			{
 				if (pPlugin->has(iOpen))
 				{
@@ -1073,7 +1078,7 @@ bool Panel::ExecFolder(string_view const Folder, const GUID& PluginGuid, const s
 						IsActive? FOSF_ACTIVE : FOSF_NONE
 					};
 
-					if (auto hNewPlugin = Global->CtrlObject->Plugins->Open(pPlugin, OPEN_SHORTCUT, FarGuid, reinterpret_cast<intptr_t>(&info)))
+					if (auto hNewPlugin = Global->CtrlObject->Plugins->Open(pPlugin, OPEN_SHORTCUT, FarUuid, reinterpret_cast<intptr_t>(&info)))
 					{
 						const auto NewPanel = Parent()->ChangePanel(SrcPanel, panel_type::FILE_PANEL, TRUE, TRUE);
 						NewPanel->SetPluginMode(std::move(hNewPlugin), {}, IsActive || !Parent()->GetAnotherPanel(NewPanel)->IsVisible());
@@ -1156,4 +1161,17 @@ string Panel::CreateFullPathName(string_view const Name, bool const Directory, b
 FilePanels* Panel::Parent() const
 {
 	return dynamic_cast<FilePanels*>(GetOwner().get());
+}
+
+const auto PluginSortModesOffset = 1;
+
+int internal_sort_mode_to_plugin(panel_sort const Mode)
+{
+	const auto ModeValue = static_cast<int>(Mode);
+	return Mode < panel_sort::BY_USER? ModeValue + PluginSortModesOffset : ModeValue;
+}
+
+panel_sort plugin_sort_mode_to_internal(int const Mode)
+{
+	return panel_sort{ Mode < SM_USER? Mode - PluginSortModesOffset : Mode };
 }

@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "treelist.hpp"
 
@@ -51,7 +54,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "refreshwindowmanager.hpp"
 #include "TPreRedrawFunc.hpp"
 #include "taskbar.hpp"
-#include "cddrv.hpp"
 #include "interf.hpp"
 #include "message.hpp"
 #include "clipboard.hpp"
@@ -74,9 +76,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "string_sort.hpp"
 #include "cvtname.hpp"
 #include "global.hpp"
+#include "network.hpp"
 #if defined(TREEFILE_PROJECT)
 #include "drivemix.hpp"
-#include "network.hpp"
 #endif
 
 // Platform:
@@ -148,7 +150,7 @@ string ConvertTemplateTreeName(string_view const strTemplate, string_view const 
 static string CreateTreeFileName(string_view const Path)
 {
 #if defined(TREEFILE_PROJECT)
-	const auto strRootDir = ExtractPathRoot(Path);
+	const auto strRootDir = extract_root_directory(Path);
 	string strTreeFileName;
 	string strPath;
 
@@ -160,7 +162,7 @@ static string CreateTreeFileName(string_view const Path)
 		}
 	}
 
-	UINT DriveType = FAR_GetDriveType(strRootDir, 0);
+	const auto DriveType = os::fs::drive::get_type(strRootDir);
 	const auto PathType = ParsePath(strRootDir);
 	/*
 	root_type::unknown,
@@ -180,14 +182,8 @@ static string CreateTreeFileName(string_view const Path)
 		&VolumeNumber, &MaxNameLength, &FileSystemFlags,
 		&strFileSystemName))
 	{
-		if (DriveType == DRIVE_SUBSTITUTE) // Разворачиваем и делаем подмену
-		{
-			DriveType = DRIVE_FIXED; //????
-		}
-
 		switch (DriveType)
 		{
-		case DRIVE_USBDRIVE:
 		case DRIVE_REMOVABLE:
 			if (Global->Opt->Tree.RemovableDisk)
 			{
@@ -196,6 +192,7 @@ static string CreateTreeFileName(string_view const Path)
 				strPath = Global->Opt->Tree.strSaveLocalPath;
 			}
 			break;
+
 		case DRIVE_FIXED:
 			if (Global->Opt->Tree.LocalDisk)
 			{
@@ -204,6 +201,7 @@ static string CreateTreeFileName(string_view const Path)
 				strPath = Global->Opt->Tree.strSaveLocalPath;
 			}
 			break;
+
 		case DRIVE_REMOTE:
 			if (Global->Opt->Tree.NetDisk || Global->Opt->Tree.NetPath)
 			{
@@ -219,15 +217,7 @@ static string CreateTreeFileName(string_view const Path)
 				strPath = Global->Opt->Tree.strSaveNetPath;
 			}
 			break;
-		case DRIVE_CD_RW:
-		case DRIVE_CD_RWDVD:
-		case DRIVE_DVD_ROM:
-		case DRIVE_DVD_RW:
-		case DRIVE_DVD_RAM:
-		case DRIVE_BD_ROM:
-		case DRIVE_BD_RW:
-		case DRIVE_HDDVD_ROM:
-		case DRIVE_HDDVD_RW:
+
 		case DRIVE_CDROM:
 			if (Global->Opt->Tree.CDDisk)
 			{
@@ -236,13 +226,9 @@ static string CreateTreeFileName(string_view const Path)
 				strPath = Global->Opt->Tree.strSaveLocalPath;
 			}
 			break;
-		case DRIVE_VIRTUAL:
+
 		case DRIVE_RAMDISK:
 			break;
-		case DRIVE_REMOTE_NOT_CONNECTED:
-		case DRIVE_NOT_INIT:
-			break;
-
 		}
 
 		return path::join(!strPath.empty()? os::env::expand(strPath) : Path, strTreeFileName);
@@ -277,7 +263,7 @@ static string MkTreeCacheFolderName(const string_view RootDir)
 #endif
 }
 
-static bool GetCacheTreeName(const string& Root, string& strName, int CreateDir)
+static bool GetCacheTreeName(string_view const Root, string& strName, bool const CreateDir)
 {
 	string strVolumeName, strFileSystemName;
 	DWORD dwVolumeSerialNumber;
@@ -313,9 +299,9 @@ static bool GetCacheTreeName(const string& Root, string& strName, int CreateDir)
 	{
 		strRemoteName = Root;
 	}
-	else if (PathType == root_type::drive_letter || PathType == root_type::unc_drive_letter)
+	else if (PathType == root_type::drive_letter || PathType == root_type::win32nt_drive_letter)
 	{
-		if (os::WNetGetConnection(os::fs::get_drive(Root[PathType == root_type::drive_letter ? 0 : 4]), strRemoteName))
+		if (DriveLocalToRemoteName(true, Root, strRemoteName))
 			AddEndSlash(strRemoteName);
 	}
 
@@ -344,7 +330,7 @@ public:
 
 	void remove(string_view const Name)
 	{
-		erase_if(m_Names, [&](const auto& i)
+		std::erase_if(m_Names, [&](const auto& i)
 		{
 			return starts_with_icase(i, Name) && (i.size() == Name.size() || (i.size() > Name.size() && IsSlash(i[Name.size()])));
 		});
@@ -361,7 +347,7 @@ public:
 
 	const string& GetTreeName() const { return m_TreeName; }
 
-	void SetTreeName(const string& Name) { m_TreeName = Name; }
+	void SetTreeName(string_view const Name) { m_TreeName = Name; }
 
 private:
 	using cache_set = std::set<string, string_sort::less_t>;
@@ -390,8 +376,8 @@ static TreeListCache& tempTreeCache()
 
 enum TREELIST_FLAGS
 {
-	FTREELIST_TREEISPREPARED = 0x00010000,
-	FTREELIST_UPDATEREQUIRED = 0x00020000,
+	FTREELIST_TREEISPREPARED = 16_bit,
+	FTREELIST_UPDATEREQUIRED = 17_bit,
 };
 
 tree_panel_ptr TreeList::create(window_ptr Owner, int ModalMode)
@@ -419,7 +405,7 @@ TreeList::~TreeList()
 	FlushCache();
 }
 
-void TreeList::SetRootDir(const string& NewRootDir)
+void TreeList::SetRootDir(string_view const NewRootDir)
 {
 	m_Root = NewRootDir;
 	m_CurDir = NewRootDir;
@@ -529,7 +515,7 @@ void TreeList::DisplayTree(bool Fast)
 	if (Global->Opt->ShowPanelScrollbar)
 	{
 		SetColor(COL_PANELSCROLLBAR);
-		ScrollBarEx(m_Where.right, m_Where.top + 1, m_Where.height() - 4, m_CurTopFile, m_ListData.size());
+		ScrollBar(m_Where.right, m_Where.top + 1, m_Where.height() - 4, m_CurTopFile, m_ListData.size());
 	}
 
 	SetColor(COL_PANELTEXT);
@@ -682,16 +668,16 @@ static void PR_MsgReadTree()
 	});
 }
 
-static os::fs::file OpenTreeFile(const string& Name, bool Writable)
+static os::fs::file OpenTreeFile(string_view const Name, bool const Writable)
 {
 	return os::fs::file(Name, Writable? FILE_WRITE_DATA : FILE_READ_DATA, FILE_SHARE_READ, nullptr, Writable? OPEN_ALWAYS : OPEN_EXISTING);
 }
 
-static bool MustBeCached(const string& Root)
+static bool MustBeCached(string_view const Root)
 {
-	const auto type = FAR_GetDriveType(Root);
+	const auto type = os::fs::drive::get_type(Root);
 
-	if (type==DRIVE_UNKNOWN || type==DRIVE_NO_ROOT_DIR || type==DRIVE_REMOVABLE || IsDriveTypeCDROM(type))
+	if (type == DRIVE_UNKNOWN || type == DRIVE_NO_ROOT_DIR || type == DRIVE_REMOVABLE || type == DRIVE_CDROM)
 	{
 		// кешируются CD, removable и неизвестно что :)
 		return true;
@@ -705,7 +691,7 @@ static bool MustBeCached(const string& Root)
 	return false;
 }
 
-static os::fs::file OpenCacheableTreeFile(const string& Root, string& Name, bool Writable)
+static os::fs::file OpenCacheableTreeFile(string_view const Root, string& Name, bool Writable)
 {
 	os::fs::file Result;
 	if (!MustBeCached(Root))
@@ -740,12 +726,12 @@ template<class string_type, class container_type, class opener_type>
 static void WriteTree(string_type& Name, const container_type& Container, const opener_type& Opener, size_t offset)
 {
 	// получим и сразу сбросим атрибуты (если получится)
-	DWORD SavedAttributes = os::fs::get_file_attributes(Name);
+	const auto SavedAttributes = os::fs::get_file_attributes(Name);
 
 	if (SavedAttributes != INVALID_FILE_ATTRIBUTES)
-		os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL);
+		(void)os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL); //BUGBUG
 
-	error_state_ex ErrorState;
+	std::optional<error_state_ex> ErrorState;
 
 	if (auto TreeFile = Opener(Name))
 	{
@@ -766,11 +752,11 @@ static void WriteTree(string_type& Name, const container_type& Container, const 
 			Stream.flush();
 
 			if (SavedAttributes != INVALID_FILE_ATTRIBUTES) // вернем атрибуты (если получится :-)
-				os::fs::set_file_attributes(Name, SavedAttributes);
+				(void)os::fs::set_file_attributes(Name, SavedAttributes); //BUGBUG
 		}
 		catch (const far_exception& e)
 		{
-			ErrorState = e.error_state();
+			ErrorState = e;
 		}
 
 		TreeFile.SetEnd();
@@ -783,9 +769,9 @@ static void WriteTree(string_type& Name, const container_type& Container, const 
 
 	if (ErrorState)
 	{
-		os::fs::delete_file(TreeCache().GetTreeName());
+		(void)os::fs::delete_file(TreeCache().GetTreeName()); // BUGBUG
 		if (!Global->WindowManager->ManagerIsDown())
-			Message(MSG_WARNING, ErrorState,
+			Message(MSG_WARNING, *ErrorState,
 				msg(lng::MError),
 				{
 					msg(lng::MCannotSaveTree),
@@ -885,7 +871,7 @@ void TreeList::SaveTreeFile()
 
 void TreeList::GetRoot()
 {
-	m_Root = ExtractPathRoot(GetRootPanel()->GetCurDir());
+	m_Root = extract_root_directory(GetRootPanel()->GetCurDir());
 }
 
 panel_ptr TreeList::GetRootPanel()
@@ -1009,17 +995,19 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 	if (!IsVisible())
 		return false;
 
-	if (m_ListData.empty() && LocalKey!=KEY_CTRLR && LocalKey!=KEY_RCTRLR)
+	if (m_ListData.empty() && none_of(LocalKey, KEY_CTRLR, KEY_RCTRLR))
 		return false;
 
-	if ((LocalKey >= KEY_CTRLSHIFT0 && LocalKey <= KEY_CTRLSHIFT9) ||
-	    (LocalKey >= KEY_RCTRLSHIFT0 && LocalKey <= KEY_RCTRLSHIFT9))
+	if (
+		in_closed_range(KEY_CTRLSHIFT0, LocalKey, KEY_CTRLSHIFT9) ||
+		in_closed_range(KEY_RCTRLSHIFT0, LocalKey, KEY_RCTRLSHIFT9)
+	)
 	{
 		SaveShortcutFolder((LocalKey&(~(KEY_CTRL | KEY_RCTRL | KEY_SHIFT | KEY_RSHIFT))) - L'0');
 		return true;
 	}
 
-	if (LocalKey>=KEY_RCTRL0 && LocalKey<=KEY_RCTRL9)
+	if (in_closed_range(KEY_RCTRL0, LocalKey, KEY_RCTRL9))
 	{
 		ExecShortcutFolder(LocalKey-KEY_RCTRL0);
 		return true;
@@ -1051,14 +1039,13 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 			string strQuotedName=m_ListData[m_CurFile].strName;
 			QuoteSpace(strQuotedName);
 
-			if (LocalKey==KEY_CTRLALTINS||LocalKey==KEY_RCTRLRALTINS||LocalKey==KEY_CTRLRALTINS||LocalKey==KEY_RCTRLALTINS||
-				LocalKey==KEY_CTRLALTNUMPAD0||LocalKey==KEY_RCTRLRALTNUMPAD0||LocalKey==KEY_CTRLRALTNUMPAD0||LocalKey==KEY_RCTRLALTNUMPAD0)
+			if (any_of(LocalKey, KEY_CTRLALTINS, KEY_RCTRLRALTINS, KEY_CTRLRALTINS, KEY_RCTRLALTINS, KEY_CTRLALTNUMPAD0, KEY_RCTRLRALTNUMPAD0, KEY_CTRLRALTNUMPAD0, KEY_RCTRLALTNUMPAD0))
 			{
 				SetClipboardText(strQuotedName);
 			}
 			else
 			{
-				if (LocalKey == KEY_SHIFTENTER||LocalKey == KEY_SHIFTNUMENTER)
+				if (any_of(LocalKey, KEY_SHIFTENTER, KEY_SHIFTNUMENTER))
 				{
 					OpenFolderInShell(strQuotedName);
 				}
@@ -1128,14 +1115,22 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 			if (!m_ListData.empty() && SetCurPath())
 			{
 				const auto AnotherPanel = Parent()->GetAnotherPanel(this);
-				const auto Ask = (LocalKey!=KEY_DRAGCOPY && LocalKey!=KEY_DRAGMOVE) || Global->Opt->Confirm.Drag;
-				const auto Move = (LocalKey==KEY_F6 || LocalKey==KEY_DRAGMOVE);
-				int ToPlugin = AnotherPanel->GetMode() == panel_mode::PLUGIN_PANEL &&
-				             AnotherPanel->IsVisible() &&
-				             !Global->CtrlObject->Plugins->UseFarCommand(AnotherPanel->GetPluginHandle(),PLUGIN_FARPUTFILES);
-				const auto Link = (LocalKey==KEY_ALTF6||LocalKey==KEY_RALTF6) && !ToPlugin;
+				const auto Ask = none_of(LocalKey, KEY_DRAGCOPY, KEY_DRAGMOVE) || Global->Opt->Confirm.Drag;
+				const auto Move = any_of(LocalKey, KEY_F6, KEY_DRAGMOVE);
 
-				if ((LocalKey==KEY_ALTF6||LocalKey==KEY_RALTF6) && !Link) // молча отвалим :-)
+				const auto UseInternalCommand = [&]
+				{
+					const auto Handle = AnotherPanel->GetPluginHandle();
+					OpenPanelInfo Info;
+					Global->CtrlObject->Plugins->GetOpenPanelInfo(Handle, &Info);
+					return PluginManager::UseInternalCommand(Handle, PLUGIN_FARPUTFILES, Info);
+				};
+
+				int ToPlugin = AnotherPanel->GetMode() == panel_mode::PLUGIN_PANEL && AnotherPanel->IsVisible() && !UseInternalCommand();
+				const auto IsAltF6 = any_of(LocalKey, KEY_ALTF6, KEY_RALTF6);
+				const auto Link = IsAltF6 && !ToPlugin;
+
+				if (IsAltF6 && !Link) // молча отвалим :-)
 					return true;
 
 				{
@@ -1196,8 +1191,8 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 			if (SetCurPath())
 			{
 				Delete(shared_from_this(),
-					LocalKey == KEY_SHIFTDEL || LocalKey == KEY_SHIFTNUMDEL || LocalKey == KEY_SHIFTDECIMAL? delete_type::remove :
-					LocalKey == KEY_ALTDEL || LocalKey == KEY_RALTDEL || LocalKey == KEY_ALTNUMDEL || LocalKey == KEY_RALTNUMDEL || LocalKey == KEY_ALTDECIMAL || LocalKey == KEY_RALTDECIMAL ? delete_type::erase :
+					any_of(LocalKey, KEY_SHIFTDEL, KEY_SHIFTNUMDEL, KEY_SHIFTDECIMAL)? delete_type::remove :
+					any_of(LocalKey, KEY_ALTDEL, KEY_RALTDEL, KEY_ALTNUMDEL, KEY_RALTNUMDEL, KEY_ALTDECIMAL, KEY_RALTDECIMAL)? delete_type::erase :
 					Global->Opt->DeleteToRecycleBin? delete_type::recycle : delete_type::remove);
 				// Надобно не забыть обновить противоположную панель...
 				const auto AnotherPanel = Parent()->GetAnotherPanel(this);
@@ -1248,7 +1243,7 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 		}
 		case KEY_HOME:        case KEY_NUMPAD7:
 		{
-			Up(0x7fffff);
+			ToBegin();
 
 			if (Global->Opt->Tree.AutoChangeFolder && !m_ModalMode)
 				ProcessKey(Manager::Key(KEY_ENTER));
@@ -1279,7 +1274,7 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 		}
 		case KEY_END:         case KEY_NUMPAD1:
 		{
-			Down(0x7fffff);
+			ToEnd();
 
 			if (Global->Opt->Tree.AutoChangeFolder && !m_ModalMode)
 				ProcessKey(Manager::Key(KEY_ENTER));
@@ -1392,6 +1387,18 @@ int TreeList::GetPrevNavPos() const
 	}
 
 	return PrevPos;
+}
+
+void TreeList::ToBegin()
+{
+	m_CurFile = 0;
+	DisplayTree(true);
+}
+
+void TreeList::ToEnd()
+{
+	m_CurFile = m_ListData.empty()? 0 : static_cast<int>(m_ListData.size() - 1);
+	DisplayTree(true);
 }
 
 void TreeList::Up(int Count)
@@ -1517,8 +1524,11 @@ bool TreeList::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		if (IntKeyState.MousePos.y == ScrollY)
 		{
 			// Press and hold the [▲] button
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
+
 				ProcessKey(Manager::Key(KEY_UP));
 				return true;
 			});
@@ -1532,8 +1542,11 @@ bool TreeList::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		if (IntKeyState.MousePos.y == ScrollY + Height - 1)
 		{
 			// Press and hold the [▼] button
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
+
 				ProcessKey(Manager::Key(KEY_DOWN));
 				return true;
 			});
@@ -1601,7 +1614,7 @@ bool TreeList::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		if (m_ListData.empty())
 			return true;
 
-		while_mouse_button_pressed([&]
+		while_mouse_button_pressed([&](DWORD)
 		{
 			if (IntKeyState.MousePos.y <= m_Where.top + 1)
 				Up(1);
@@ -1697,7 +1710,7 @@ bool TreeList::GetPlainString(string& Dest, int ListPos) const
 	return false;
 }
 
-bool TreeList::FindPartName(const string& Name,int Next,int Direct)
+bool TreeList::FindPartName(string_view const Name,int Next,int Direct)
 {
 	const auto strMask = exclude_sets(Name + L'*');
 
@@ -1775,7 +1788,7 @@ void TreeList::AddTreeName(const string_view Name)
 		return;
 
 	const auto strFullName = ConvertNameToFull(Name);
-	const auto strRoot = ExtractPathRoot(strFullName);
+	const auto strRoot = extract_root_directory(strFullName);
 	string NamePart = strFullName.substr(strRoot.size() - 1);
 
 	if (!ContainsSlash(NamePart))
@@ -1795,20 +1808,20 @@ void TreeList::DelTreeName(const string_view Name)
 		return;
 
 	const auto strFullName = ConvertNameToFull(Name);
-	const auto strRoot = ExtractPathRoot(strFullName);
+	const auto strRoot = extract_root_directory(strFullName);
 	const auto NamePart = string_view(strFullName).substr(strRoot.size() - 1);
 
 	ReadCache(strRoot);
 	TreeCache().remove(NamePart);
 }
 
-void TreeList::RenTreeName(const string& SrcName, const string& DestName)
+void TreeList::RenTreeName(string_view const SrcName, string_view const DestName)
 {
 	if (Global->Opt->Tree.TurnOffCompletely)
 		return;
 
-	const auto strSrcRoot = ExtractPathRoot(ConvertNameToFull(SrcName));
-	const auto strDestRoot = ExtractPathRoot(ConvertNameToFull(DestName));
+	const auto strSrcRoot = extract_root_directory(ConvertNameToFull(SrcName));
+	const auto strDestRoot = extract_root_directory(ConvertNameToFull(DestName));
 
 	if (!equal_icase(strSrcRoot, strDestRoot))
 	{
@@ -1816,14 +1829,14 @@ void TreeList::RenTreeName(const string& SrcName, const string& DestName)
 		ReadSubTree(SrcName);
 	}
 
-	const auto SrcNamePart = string_view(SrcName).substr(strSrcRoot.size() - 1);
-	const auto DestNamePart = string_view(DestName).substr(strDestRoot.size() - 1);
+	const auto SrcNamePart = SrcName.substr(strSrcRoot.size() - 1);
+	const auto DestNamePart = DestName.substr(strDestRoot.size() - 1);
 	ReadCache(strSrcRoot);
 
 	TreeCache().rename(SrcNamePart, DestNamePart);
 }
 
-void TreeList::ReadSubTree(const string& Path)
+void TreeList::ReadSubTree(string_view const Path)
 {
 	if (!os::fs::is_directory(Path))
 		return;
@@ -1866,7 +1879,7 @@ void TreeList::ClearCache()
 	TreeCache().clear();
 }
 
-void TreeList::ReadCache(const string& TreeRoot)
+void TreeList::ReadCache(string_view const TreeRoot)
 {
 	if (Global->Opt->Tree.TurnOffCompletely)
 		return;
@@ -1943,12 +1956,12 @@ long TreeList::FindFile(const string_view Name, const bool OnlyPartName)
 	return ItemIterator == m_ListData.cend()? -1 : ItemIterator - m_ListData.cbegin();
 }
 
-long TreeList::FindFirst(const string& Name)
+long TreeList::FindFirst(string_view const Name)
 {
-	return FindNext(0,Name);
+	return FindNext(0, Name);
 }
 
-long TreeList::FindNext(int StartPos, const string& Name)
+long TreeList::FindNext(int StartPos, string_view const Name)
 {
 	if (static_cast<size_t>(StartPos) < m_ListData.size())
 	{
@@ -1964,7 +1977,7 @@ long TreeList::FindNext(int StartPos, const string& Name)
 	return -1;
 }
 
-bool TreeList::GetFileName(string &strName, int Pos, DWORD &FileAttr) const
+bool TreeList::GetFileName(string &strName, int const Pos, os::fs::attributes& FileAttr) const
 {
 	if (Pos < 0 || static_cast<size_t>(Pos) >= m_ListData.size())
 		return false;

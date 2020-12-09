@@ -52,41 +52,43 @@ namespace os::memory
 		{
 			struct deleter
 			{
-				void operator()(HGLOBAL MemoryBlock) const;
+				void operator()(HGLOBAL MemoryBlock) const noexcept;
 			};
 
 			struct unlocker
 			{
-				void operator()(const void* MemoryBlock) const;
+				void operator()(const void* MemoryBlock) const noexcept;
 			};
 		}
 
 		using ptr = std::unique_ptr<std::remove_pointer_t<HGLOBAL>, detail::deleter>;
 
-		ptr alloc(UINT Flags, size_t size);
+		ptr alloc(unsigned Flags, size_t Size);
 
 		template<class T>
 		using lock_t = std::unique_ptr<std::remove_pointer_t<T>, detail::unlocker>;
 
 		template<class T>
 		[[nodiscard]]
-		auto lock(HGLOBAL Ptr)
+		auto lock(HGLOBAL Ptr) noexcept
 		{
 			return lock_t<T>(static_cast<T>(GlobalLock(Ptr)));
 		}
 
 		template<class T>
 		[[nodiscard]]
-		auto lock(const ptr& Ptr)
+		auto lock(const ptr& Ptr) noexcept
 		{
 			return lock<T>(Ptr.get());
 		}
+
+		ptr copy(HGLOBAL Ptr);
 
 		template<class T>
 		[[nodiscard]]
 		ptr copy(const T& Object)
 		{
-			static_assert(std::is_pod_v<T>);
+			static_assert(std::is_trivially_copyable_v<T>);
 
 			auto Memory = alloc(GMEM_MOVEABLE, sizeof(Object));
 			if (!Memory)
@@ -110,7 +112,7 @@ namespace os::memory
 		{
 			struct deleter
 			{
-				void operator()(const void* MemoryBlock) const;
+				void operator()(const void* MemoryBlock) const noexcept;
 			};
 		}
 
@@ -122,13 +124,6 @@ namespace os::memory
 
 		template<class T>
 		ptr(T*) -> ptr<T>;
-
-		template<class T>
-		[[nodiscard]]
-		auto alloc(UINT Flags, size_t size)
-		{
-			return ptr<T>(static_cast<T*>(LocalAlloc(Flags, size)));
-		}
 
 		template<class T>
 		ptr<T> to_ptr(T* Ptr)

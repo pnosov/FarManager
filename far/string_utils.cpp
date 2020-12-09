@@ -30,6 +30,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "string_utils.hpp"
 
@@ -224,6 +227,39 @@ TEST_CASE("string.eols")
 	}
 }
 
+TEST_CASE("string.traits")
+{
+	REQUIRE(is_alpha(L'A'));
+	REQUIRE(!is_alpha(L'1'));
+
+	REQUIRE(is_alphanumeric(L'0'));
+	REQUIRE(!is_alphanumeric(L'?'));
+
+	REQUIRE(is_upper(L'A'));
+	REQUIRE(!is_upper(L'a'));
+
+	REQUIRE(is_lower(L'a'));
+	REQUIRE(!is_lower(L'A'));
+
+	REQUIRE(!is_upper(L'1'));
+	REQUIRE(!is_lower(L'1'));
+}
+
+TEST_CASE("string.case")
+{
+	REQUIRE(upper(L'a') == L'A');
+	REQUIRE(upper(L'A') == L'A');
+
+	REQUIRE(upper(L"foo"sv) == L"FOO"sv);
+	REQUIRE(upper(L"FOO"sv) == L"FOO"sv);
+
+	REQUIRE(lower(L'A') == L'a');
+	REQUIRE(lower(L'a') == L'a');
+
+	REQUIRE(lower(L"FOO"sv) == L"foo"sv);
+	REQUIRE(lower(L"foo"sv) == L"foo"sv);
+}
+
 TEST_CASE("string.utils")
 {
 	for (const auto& i: GetSpaces())
@@ -241,7 +277,9 @@ TEST_CASE("string.utils.hash")
 {
 	const hash_icase_t hash;
 	REQUIRE(hash(L'A') == hash(L'a'));
+	REQUIRE(hash(L'A') != hash(L'B'));
 	REQUIRE(hash(L"fooBAR"sv) == hash(L"FOObar"sv));
+	REQUIRE(hash(L"fooBAR"sv) != hash(L"Banana"sv));
 }
 
 TEST_CASE("string.utils.icase")

@@ -31,13 +31,15 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "processname.hpp"
 
 // Internal:
 #include "pathmix.hpp"
 #include "string_utils.hpp"
-#include "strmix.hpp"
 
 // Platform:
 
@@ -57,22 +59,21 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // каталог dir1, а в нем файл file1. Нужно сгенерировать имя по маске для dir1.
 // Параметры могут быть следующими: Src="dir1", SelectedFolderNameLength=0
 // или Src="dir1\\file1", а SelectedFolderNameLength=4 (длина "dir1")
-string ConvertWildcards(string_view const SrcName, string_view const Mask, int const SelectedFolderNameLength)
+string ConvertWildcards(string_view const SrcName, string_view const Mask)
 {
 	const auto WildName = PointToName(Mask);
 	if (WildName.find_first_of(L"*?"sv) == WildName.npos)
 		return string(Mask);
 
-	const auto Src = SelectedFolderNameLength? SrcName.substr(0, SelectedFolderNameLength) : SrcName;
-	auto SrcNamePart = PointToName(Src);
+	auto SrcNamePart = PointToName(SrcName);
 
 	string Result;
 	Result.reserve(SrcName.size());
 	Result = Mask.substr(0, Mask.size() - WildName.size());
 
-	const auto BeforeNameLength = Result.empty()? 0 : Src.size() - SrcNamePart.size();
+	const auto BeforeNameLength = Result.empty()? 0 : SrcName.size() - SrcNamePart.size();
 
-	string_view WildPtr = WildName;
+	auto WildPtr = WildName;
 
 	// https://superuser.com/questions/475874/how-does-the-windows-rename-command-interpret-wildcards
 
@@ -147,12 +148,7 @@ string ConvertWildcards(string_view const SrcName, string_view const Mask, int c
 	if (ends_with(Result, L'.'))
 		Result.pop_back();
 
-	Result.insert(0, Src.data(), BeforeNameLength);
-
-	if (SelectedFolderNameLength)
-	{
-		append(Result, SrcName.substr(SelectedFolderNameLength)); //BUGBUG???, was src in 1.7x
-	}
+	Result.insert(0, SrcName.data(), BeforeNameLength);
 
 	return Result;
 }
@@ -383,7 +379,7 @@ TEST_CASE("ConvertWildcards")
 
 	for (const auto& i: Tests)
 	{
-		REQUIRE(i.Expected == ConvertWildcards(i.Src, Masks[i.Mask], 0));
+		REQUIRE(i.Expected == ConvertWildcards(i.Src, Masks[i.Mask]));
 	}
 }
 

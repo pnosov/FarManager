@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "stddlg.hpp"
 
@@ -40,7 +43,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "imports.hpp"
 #include "message.hpp"
 #include "lang.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "interf.hpp"
 #include "dlgedit.hpp"
 #include "cvtname.hpp"
@@ -82,7 +85,7 @@ int GetSearchReplaceString(
 	bool* pPreserveStyle,
 	string_view const HelpTopic,
 	bool HideAll,
-	const GUID* Id,
+	const UUID* Id,
 	function_ref<string(bool)> const Picker)
 {
 	int Result = 0;
@@ -261,7 +264,7 @@ bool GetString(
 	int* const CheckBoxValue,
 	const string_view CheckBoxText,
 	Plugin* const PluginNumber,
-	const GUID* const Id
+	const UUID* const Id
 )
 {
 	int Substract=5; // дополнительная величина :-)
@@ -345,7 +348,7 @@ bool GetString(
 
 	if (!Prompt.empty())
 	{
-		StrDlg[gs_text].strData = truncate_right(string(Prompt), 66);
+		StrDlg[gs_text].strData = truncate_right(Prompt, 66);
 
 		if (Flags&FIB_NOAMPERSAND)
 			StrDlg[gs_text].Flags &= ~DIF_SHOWAMPERSAND;
@@ -506,7 +509,7 @@ static os::com::ptr<IFileIsInUse> CreateIFileIsInUse(const string& File)
 static size_t enumerate_rm_processes(const string& Filename, DWORD& Reasons, function_ref<bool(string&&)> const Handler)
 {
 	DWORD Session;
-	WCHAR SessionKey[CCH_RM_SESSION_KEY + 1] = {};
+	wchar_t SessionKey[CCH_RM_SESSION_KEY + 1] = {};
 	if (imports.RmStartSession(&Session, 0, SessionKey) != ERROR_SUCCESS)
 		return 0;
 
@@ -516,8 +519,7 @@ static size_t enumerate_rm_processes(const string& Filename, DWORD& Reasons, fun
 		return 0;
 
 	DWORD RmGetListResult;
-	UINT ProceccInfoSizeNeeded = 0;
-	UINT ProcessInfoSize = 1;
+	unsigned ProceccInfoSizeNeeded = 0, ProcessInfoSize = 1;
 	std::vector<RM_PROCESS_INFO> ProcessInfos(ProcessInfoSize);
 	while ((RmGetListResult = imports.RmGetList(Session, &ProceccInfoSizeNeeded, &ProcessInfoSize, ProcessInfos.data(), &Reasons)) == ERROR_MORE_DATA)
 	{
@@ -560,11 +562,11 @@ static size_t enumerate_rm_processes(const string& Filename, DWORD& Reasons, fun
 	return ProcessInfos.size();
 }
 
-operation OperationFailed(const error_state_ex& ErrorState, string Object, lng Title, string Description, bool AllowSkip, bool AllowSkipAll)
+operation OperationFailed(const error_state_ex& ErrorState, string_view const Object, lng Title, string Description, bool AllowSkip, bool AllowSkipAll)
 {
 	std::vector<string> Msg;
 	os::com::ptr<IFileIsInUse> FileIsInUse;
-	lng Reason = lng::MObjectLockedReasonOpened;
+	auto Reason = lng::MObjectLockedReasonOpened;
 	bool SwitchBtn = false, CloseBtn = false;
 	const auto Error = ErrorState.Win32Error;
 	if(Error == ERROR_ACCESS_DENIED ||
@@ -648,7 +650,7 @@ operation OperationFailed(const error_state_ex& ErrorState, string Object, lng T
 		}
 	}
 
-	std::vector Msgs{std::move(Description), QuoteOuterSpace(std::move(Object))};
+	std::vector Msgs{std::move(Description), QuoteOuterSpace(string(Object))};
 	if(!Msg.empty())
 	{
 		Msgs.emplace_back(format(msg(lng::MObjectLockedReason), msg(Reason)));
@@ -906,7 +908,7 @@ bool GoToRowCol(goto_coord& Row, goto_coord& Col, bool& Hex, string_view const H
 	}
 }
 
-int RetryAbort(std::vector<string>&& Messages)
+bool RetryAbort(std::vector<string>&& Messages)
 {
 	if (Global->WindowManager && !Global->WindowManager->ManagerIsDown() && far_language::instance().is_loaded())
 	{

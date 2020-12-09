@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "ctrlobj.hpp"
 
@@ -108,8 +111,10 @@ void ControlObject::Init(int DirCount)
 
 	FarChDir(FPanels->ActivePanel()->GetCurDir());
 
-	FPanels->LeftPanel()->SetCustomSortMode(Global->Opt->LeftPanel.SortMode, SO_KEEPCURRENT);
-	FPanels->RightPanel()->SetCustomSortMode(Global->Opt->RightPanel.SortMode, SO_KEEPCURRENT);
+	// BUGBUG
+	FPanels->LeftPanel()->SetCustomSortMode(panel_sort(Global->Opt->LeftPanel.SortMode.Get()), sort_order::keep, false);
+	FPanels->RightPanel()->SetCustomSortMode(panel_sort(Global->Opt->RightPanel.SortMode.Get()), sort_order::keep, false);
+
 	Global->WindowManager->SwitchToPanels();  // otherwise panels are empty
 }
 
@@ -118,7 +123,9 @@ void ControlObject::CreateDummyFilePanels()
 	FPanels = FilePanels::create(false, 0);
 }
 
-ControlObject::~ControlObject()
+ControlObject::~ControlObject() = default;
+
+void ControlObject::close()
 {
 	if (Global->CriticalInternalError)
 	{
@@ -144,6 +151,9 @@ ControlObject::~ControlObject()
 	FileFilter::CloseFilter();
 	History::CompactHistory();
 	FilePositionCache::CompactHistory();
+
+	FPanels.reset();
+	Plugins->UnloadPlugins();
 }
 
 
@@ -155,13 +165,13 @@ void ControlObject::ShowVersion(bool const Direct)
 		return;
 	}
 
-	COORD Size;
+	point Size;
 	console.GetSize(Size);
-	COORD CursorPosition;
+	point CursorPosition;
 	console.GetCursorPosition(CursorPosition);
-	const auto FreeSpace = Size.Y - CursorPosition.Y - 1;
+	const auto FreeSpace = Size.y - CursorPosition.y - 1;
 
-	if (FreeSpace<5)
+	if (FreeSpace < 5 && DoWeReallyHaveToScroll(5))
 		ScrollScreen(5-FreeSpace);
 
 	GotoXY(0,ScrY-4);

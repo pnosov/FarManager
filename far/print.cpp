@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "print.hpp"
 
@@ -187,7 +190,15 @@ void PrintFiles(FileList* SrcPanel)
 		SetCursorType(false, 0);
 		PR_PrintMsg();
 		const auto hPlugin = SrcPanel->GetPluginHandle();
-		const auto PluginMode = SrcPanel->GetMode() == panel_mode::PLUGIN_PANEL && !Global->CtrlObject->Plugins->UseFarCommand(hPlugin, PLUGIN_FARGETFILE);
+
+		const auto UseInternalCommand = [&]
+		{
+			OpenPanelInfo Info;
+			Global->CtrlObject->Plugins->GetOpenPanelInfo(hPlugin, &Info);
+			return PluginManager::UseInternalCommand(hPlugin, PLUGIN_FARGETFILE, Info);
+		};
+
+		const auto PluginMode = SrcPanel->GetMode() == panel_mode::PLUGIN_PANEL && !UseInternalCommand();
 
 		for (const auto& i: SrcPanel->enum_selected())
 		{
@@ -244,7 +255,7 @@ void PrintFiles(FileList* SrcPanel)
 
 				for (;;)
 				{
-					char Buffer[8192];
+					std::byte Buffer[8192];
 					const auto Read = io::read(Stream, Buffer);
 					if (!Read)
 						break;
@@ -258,7 +269,7 @@ void PrintFiles(FileList* SrcPanel)
 			}
 			catch (const far_exception& e)
 			{
-				if (Message(MSG_WARNING, e.error_state(),
+				if (Message(MSG_WARNING, e,
 					msg(lng::MPrintTitle),
 					{
 						msg(lng::MCannotPrint),
@@ -271,7 +282,7 @@ void PrintFiles(FileList* SrcPanel)
 	}
 	catch (const far_exception& e)
 	{
-		Message(MSG_WARNING, e.error_state(),
+		Message(MSG_WARNING, e,
 			msg(lng::MPrintTitle),
 			{},
 			{ lng::MOk });

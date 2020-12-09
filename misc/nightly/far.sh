@@ -39,10 +39,14 @@ dos2unix FarEng.hlf.m4
 dos2unix FarRus.hlf.m4
 dos2unix FarHun.hlf.m4
 dos2unix FarPol.hlf.m4
+dos2unix FarGer.hlf.m4
+dos2unix FarUkr.hlf.m4
 gawk -f ./scripts/mkhlf.awk FarEng.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarEng.hlf
 gawk -f ./scripts/mkhlf.awk FarRus.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarRus.hlf
 gawk -f ./scripts/mkhlf.awk FarHun.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarHun.hlf
 gawk -f ./scripts/mkhlf.awk FarPol.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarPol.hlf
+gawk -f ./scripts/mkhlf.awk FarGer.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarGer.hlf
+gawk -f ./scripts/mkhlf.awk FarUkr.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarUkr.hlf
 
 wine tools/lng.generator.exe -nc -oh ${BOOTSTRAPDIR} -ol $OUTDIR ${BOOTSTRAPDIR}farlang.templ
 
@@ -53,6 +57,7 @@ cd ..
 ( \
 cp $2/$OUTDIR/File_id.diz $2/$OUTDIR/Far.exe $2/$OUTDIR/*.hlf $2/$OUTDIR/Far.map $2/$OUTDIR/Far.pdb $2/$OUTDIR/*.lng $BINDIR/ && \
 cp $2/Include/*.hpp $BINDIR/PluginSDK/Headers.c/ && \
+cp $2/../far.git/plugins/common/unicode/DlgBuilder.hpp $BINDIR/PluginSDK/Headers.c/ && \
 cp $2/Include/*.pas $BINDIR/PluginSDK/Headers.pas/ && \
 cp -f $2/changelog $BINDIR/ && \
 cp -f $2/changelog_eng $BINDIR/ && \
@@ -67,10 +72,8 @@ cd $1 || return 1
 mkdir -p Include
 dos2unix farcolor.hpp
 dos2unix plugin.hpp
-dos2unix DlgBuilder.hpp
 $M4CMD -DINPUT=farcolor.hpp headers.m4 | unix2dos > Include/farcolor.hpp
 $M4CMD -DINPUT=plugin.hpp headers.m4 | unix2dos > Include/plugin.hpp
-$M4CMD -DINPUT=DlgBuilder.hpp headers.m4 | unix2dos > Include/DlgBuilder.hpp
 
 dos2unix PluginW.pas
 dos2unix FarColorW.pas

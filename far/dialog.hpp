@@ -94,15 +94,15 @@ struct DialogItemEx: public FarDialogItem
 	// Структура, описывающая автоматизацию для DIF_AUTOMATION
 	struct DialogItemAutomation;
 
-	int ListPos;
+	int ListPos{};
 	string strHistory;
 	string strMask;
 	string strData;
 	BitFlags IFlags;
 	std::vector<DialogItemAutomation> Auto;
-	void *ObjPtr;
+	void* ObjPtr{};
 	vmenu_ptr ListPtr;
-	struct DlgUserControl *UCData;
+	struct DlgUserControl* UCData{};
 
 	DialogItemEx();
 	~DialogItemEx();
@@ -234,8 +234,8 @@ public:
 
 	intptr_t DlgProc(intptr_t Msg,intptr_t Param1,void* Param2);
 	bool IsInited() const;
-	void SetId(const GUID& Id);
-	const GUID& GetId() const {return m_Id;}
+	void SetId(const UUID& Id);
+	const UUID& GetId() const {return m_Id;}
 	virtual intptr_t SendMessage(intptr_t Msg,intptr_t Param1,void* Param2);
 	intptr_t DefProc(intptr_t Msg,intptr_t Param1,void* Param2);
 	int GetDropDownOpened() const { return DropDownOpened; }
@@ -265,7 +265,7 @@ public:
 	};
 
 protected:
-	size_t InitDialogObjects(size_t ID = static_cast<size_t>(-1));
+	void InitDialogObjects(size_t ID = static_cast<size_t>(-1));
 
 private:
 	friend class History;
@@ -281,7 +281,7 @@ private:
 	void Construct(span<const FarDialogItem> SrcItems);
 	void Init();
 	void DeleteDialogObjects();
-	int LenStrItem(size_t ID, const string& Str) const;
+	int LenStrItem(size_t ID, string_view Str) const;
 	int LenStrItem(size_t ID);
 	int LenStrItem(const DialogItemEx& Item);
 	void ShowDialog(size_t ID=static_cast<size_t>(-1));  //    ID=-1 - отрисовать весь диалог
@@ -292,9 +292,9 @@ private:
 	*/
 	void ChangeFocus2(size_t SetFocusPos);
 	size_t ChangeFocus(size_t CurFocusPos, int Step, bool SkipGroup) const;
-	bool SelectFromEditHistory(const DialogItemEx *CurItem, DlgEdit *EditLine, const string& HistoryName);
+	bool SelectFromEditHistory(DialogItemEx const* CurItem, DlgEdit* EditLine, string_view HistoryName);
 	int SelectFromComboBox(DialogItemEx *CurItem,DlgEdit*EditLine);
-	bool AddToEditHistory(const DialogItemEx* CurItem, const string& AddStr) const;
+	bool AddToEditHistory(DialogItemEx const* CurItem, string_view AddStr) const;
 	void ProcessLastHistory(DialogItemEx *CurItem, int MsgIndex);  // обработка DIF_USELASTHISTORY
 	bool ProcessHighlighting(int Key, size_t FocusPos, bool Translate);
 	int CheckHighlights(WORD CheckSymbol, int StartPos = 0);
@@ -343,7 +343,7 @@ private:
 	int DropDownOpened{}; // Содержит статус комбобокса и хистори: TRUE - открыт, FALSE - закрыт.
 	int RealWidth{};
 	int RealHeight{};
-	GUID m_Id{};
+	UUID m_Id{};
 	bool IdExist{};
 	MOUSE_EVENT_RECORD PrevMouseRecord{};
 	string m_ConsoleTitle;

@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "fileview.hpp"
 
@@ -58,6 +61,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "constitle.hpp"
 #include "pathmix.hpp"
 #include "global.hpp"
+#include "exception.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
@@ -70,14 +74,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //----------------------------------------------------------------------------
 
 FileViewer::FileViewer(private_tag, bool const DisableEdit, string_view const Title):
-	m_RedrawTitle(),
-	m_F3KeyOnly(),
-	m_bClosing(),
-	m_FullScreen(true),
 	m_DisableEdit(DisableEdit),
-	m_DisableHistory(),
-	m_SaveToSaveAs(),
-	m_DeleteOnClose(),
 	m_StrTitle(Title)
 {
 }
@@ -225,18 +222,24 @@ void FileViewer::Init(
 
 void FileViewer::InitKeyBar()
 {
-	m_windowKeyBar->SetLabels(Global->OnlyEditorViewerUsed? lng::MSingleViewF1 : lng::MViewF1);
+	auto& Keybar = *m_windowKeyBar;
+
+	Keybar.SetLabels(lng::MViewF1);
+
+	if (Global->OnlyEditorViewerUsed)
+		Keybar[KBL_CTRL][F10].clear();
 
 	if (m_DisableEdit)
-		(*m_windowKeyBar)[KBL_MAIN][F6].clear();
+		Keybar[KBL_MAIN][F6].clear();
 
 	if (!GetCanLoseFocus())
 	{
-		(*m_windowKeyBar)[KBL_MAIN][F12].clear();
-		(*m_windowKeyBar)[KBL_ALT][F11].clear();
+		Keybar[KBL_MAIN][F12].clear();
+		Keybar[KBL_ALT][F11].clear();
 	}
 
-	m_windowKeyBar->SetCustomLabels(KBA_VIEWER);
+	Keybar.SetCustomLabels(KBA_VIEWER);
+
 	m_View->SetPosition({ m_Where.left, m_Where.top + (IsTitleBarVisible()? 1 : 0), m_Where.right, m_Where.bottom - (IsKeyBarVisible()? 1 : 0) });
 	m_View->SetViewKeyBar(m_windowKeyBar.get());
 }
@@ -307,7 +310,7 @@ bool FileViewer::ProcessKey(const Manager::Key& Key)
 	if (m_RedrawTitle && ((LocalKey & 0x00ffffff) < KEY_END_FKEY || IsInternalKeyReal(LocalKey & 0x00ffffff)))
 		ShowConsoleTitle();
 
-	if (LocalKey!=KEY_F3 && LocalKey!=KEY_IDLE)
+	if (none_of(LocalKey, KEY_F3, KEY_IDLE))
 		m_F3KeyOnly=false;
 
 	switch (LocalKey)
@@ -478,7 +481,7 @@ void FileViewer::ShowConsoleTitle()
 }
 
 
-void FileViewer::SetTempViewName(const string& Name, bool DeleteFolder)
+void FileViewer::SetTempViewName(string_view const Name, bool const DeleteFolder)
 {
 	m_DeleteOnClose = (DeleteFolder ? 1 : 2);
 	m_View->SetTempViewName(Name, DeleteFolder);

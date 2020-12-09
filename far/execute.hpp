@@ -46,15 +46,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-bool GetShellType(string_view Ext, string& strType, ASSOCIATIONTYPE aType = AT_FILEEXTENSION);
+void OpenFolderInShell(string_view Folder);
 
-void OpenFolderInShell(const string& Folder);
+void Execute(struct execute_info& Info, function_ref<void(bool)> ConsoleActivator = [](bool){});
 
-void Execute(struct execute_info& Info, bool FolderRun, function_ref<void(bool)> ConsoleActivator = nullptr);
-
-bool IsExecutable(string_view Filename);
-
-bool ExpandOSAliases(string& strStr);
+bool ExpandOSAliases(string& FullCommand);
 
 bool ExtractIfExistCommand(string& strCommandText);
 

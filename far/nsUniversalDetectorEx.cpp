@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "nsUniversalDetectorEx.hpp"
 
@@ -51,9 +54,14 @@ namespace ucd
 {
 WARNING_PUSH(2)
 
+WARNING_DISABLE_MSC(5219) // implicit conversion from 'type1' to 'type2', possible loss of data
+
 WARNING_DISABLE_GCC("-Wcast-qual")
 WARNING_DISABLE_GCC("-Wdouble-promotion")
+WARNING_DISABLE_GCC("-Wnon-virtual-dtor")
 WARNING_DISABLE_GCC("-Wold-style-cast")
+WARNING_DISABLE_GCC("-Wsuggest-override")
+WARNING_DISABLE_GCC("-Wzero-as-null-pointer-constant")
 
 WARNING_DISABLE_CLANG("-Weverything")
 WARNING_DISABLE_CLANG("-Wold-style-cast")
@@ -94,7 +102,7 @@ namespace
 {
 	SCOPED_ACTION(components::component)([]
 	{
-		return components::component::info{ L"Mozilla Universal Charset Detector"sv, {} }; // BUGBUG, version unknown
+		return components::info{ L"Mozilla Universal Charset Detector"sv, {} }; // BUGBUG, version unknown
 	});
 }
 

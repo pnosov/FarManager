@@ -54,10 +54,7 @@ struct PluginPanelItem;
 
 namespace path
 {
-	inline auto separators()
-	{
-		return L"\\/"sv;
-	}
+	inline constexpr auto separators = L"\\/"sv;
 
 	namespace detail
 	{
@@ -70,20 +67,20 @@ namespace path
 			}
 
 			explicit append_arg(const wchar_t& Char):
-				string_view(&Char, contains(separators(), Char)? 0 : 1)
+				string_view(&Char, contains(separators, Char)? 0 : 1)
 			{
 			}
 
 		private:
 			string_view process(string_view Str)
 			{
-				const auto Begin = Str.find_first_not_of(separators());
+				const auto Begin = Str.find_first_not_of(separators);
 				if (Begin == Str.npos)
 					return {};
 
 				Str.remove_prefix(Begin);
 
-				const auto LastCharPos = Str.find_last_not_of(separators());
+				const auto LastCharPos = Str.find_last_not_of(separators);
 				if (LastCharPos == Str.npos)
 					return {};
 
@@ -95,7 +92,7 @@ namespace path
 
 		inline void append_impl(string& Str, const std::initializer_list<append_arg>& Args)
 		{
-			const auto LastCharPos = Str.find_last_not_of(separators());
+			const auto LastCharPos = Str.find_last_not_of(separators);
 			Str.resize(LastCharPos == string::npos? 0 : LastCharPos + 1);
 
 			const auto TotalSize = std::accumulate(ALL_RANGE(Args), Str.size() + (Args.size() - 1), [](size_t const Value, const append_arg& Element)
@@ -108,7 +105,7 @@ namespace path
 			for (const auto& i: Args)
 			{
 				if (!Str.empty() && (!i.empty() || &i + 1 == Args.end()))
-					Str += separators().front();
+					Str += separators.front();
 
 				Str += i;
 			}
@@ -146,27 +143,29 @@ public:
 
 
 string KernelPath(string_view NtPath);
-string KernelPath(string&& NtPath);
+string KernelPath(string NtPath);
 
-inline bool IsSlash(wchar_t x) { return x==L'\\' || x==L'/'; }
+inline constexpr bool IsSlash(wchar_t x) noexcept { return x==L'\\' || x==L'/'; }
 
 enum class root_type
 {
 	unknown,
 	drive_letter,
-	unc_drive_letter,
+	win32nt_drive_letter,
 	remote,
 	unc_remote,
 	volume,
 	pipe,
+	unknown_rootlike
 };
 
-root_type ParsePath(string_view Path, size_t* DirectoryOffset = nullptr, bool* Root = nullptr);
+root_type ParsePath(string_view Path, size_t* RootSize = {}, bool* RootOnly = {});
 
 inline bool IsRelativeRoot(string_view Path) { return Path.size() == 1 && IsSlash(Path.front()); }
 bool IsAbsolutePath(string_view Path);
 bool IsRootPath(string_view Path);
 bool HasPathPrefix(string_view Path);
+string_view ExtractPathPrefix(string_view Path);
 bool PathStartsWith(string_view Path, string_view Start);
 bool PathCanHoldRegularFile(string_view Path);
 bool IsPluginPrefixPath(string_view Path);
@@ -179,12 +178,14 @@ string_view PointToName(string_view Path);
 [[nodiscard]]
 string_view PointToFolderNameIfFolder(string_view Path);
 [[nodiscard]]
-string_view PointToExt(string_view Path);
+std::pair<string_view, string_view> name_ext(string_view Path);
 
 void AddEndSlash(string &strPath, wchar_t TypeSlash);
 void AddEndSlash(string &strPath);
 bool AddEndSlash(wchar_t *Path, wchar_t TypeSlash);
 bool AddEndSlash(wchar_t *Path);
+[[nodiscard]]
+string AddEndSlash(string_view Path);
 void DeleteEndSlash(wchar_t* Path);
 void DeleteEndSlash(string& Path);
 [[nodiscard]]
@@ -205,7 +206,8 @@ bool IsParentDirectory(const PluginPanelItem& Data);
 
 bool IsCurrentDirectory(string_view Str);
 
-string ExtractPathRoot(string_view Path);
+string_view extract_root_device(string_view Path);
+string extract_root_directory(string_view Path);
 string_view ExtractFileName(string_view Path);
 string ExtractFilePath(string_view Path);
 

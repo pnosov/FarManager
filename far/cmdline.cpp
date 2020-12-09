@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "cmdline.hpp"
 
@@ -89,7 +92,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 enum
 {
-	FCMDOBJ_LOCKUPDATEPANEL   = 0x00010000,
+	FCMDOBJ_LOCKUPDATEPANEL = 16_bit,
 	DEFAULT_CMDLINE_WIDTH = 50,
 };
 
@@ -202,7 +205,7 @@ void CommandLine::DisplayObject()
 	Text(L'\x2191'); // up arrow
 }
 
-void CommandLine::DrawFakeCommand(const string& FakeCommand)
+void CommandLine::DrawFakeCommand(string_view const FakeCommand)
 {
 	DrawPrompt();
 	SetColor(COL_COMMANDLINE);
@@ -244,7 +247,7 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 {
 	auto LocalKey = Key;
 
-	if ((LocalKey()==KEY_CTRLEND || LocalKey()==KEY_RCTRLEND || LocalKey()==KEY_CTRLNUMPAD1 || LocalKey()==KEY_RCTRLNUMPAD1) && (CmdStr.GetCurPos()==CmdStr.GetLength()))
+	if (any_of(LocalKey(), KEY_CTRLEND, KEY_RCTRLEND, KEY_CTRLNUMPAD1, KEY_RCTRLNUMPAD1) && CmdStr.GetCurPos() == CmdStr.GetLength())
 	{
 		if (LastCmdPartLength==-1)
 			strLastCmdStr = CmdStr.GetString();
@@ -269,14 +272,14 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 		return true;
 	}
 
-	if (LocalKey() == KEY_UP || LocalKey() == KEY_NUMPAD8)
+	if (any_of(LocalKey(), KEY_UP, KEY_NUMPAD8))
 	{
 		if (Global->CtrlObject->Cp()->LeftPanel()->IsVisible() || Global->CtrlObject->Cp()->RightPanel()->IsVisible())
 			return false;
 
 		LocalKey=KEY_CTRLE;
 	}
-	else if (LocalKey() == KEY_DOWN || LocalKey() == KEY_NUMPAD2)
+	else if (any_of(LocalKey(), KEY_DOWN, KEY_NUMPAD2))
 	{
 		if (Global->CtrlObject->Cp()->LeftPanel()->IsVisible() || Global->CtrlObject->Cp()->RightPanel()->IsVisible())
 			return false;
@@ -309,7 +312,7 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 				}
 
 				SCOPED_ACTION(SetAutocomplete)(&CmdStr);
-				const auto strStr = LocalKey() == KEY_CTRLE || LocalKey() == KEY_RCTRLE?
+				const auto strStr = any_of(LocalKey(), KEY_CTRLE, KEY_RCTRLE)?
 					Global->CtrlObject->CmdHistory->GetPrev() :
 					Global->CtrlObject->CmdHistory->GetNext();
 				SetString(Global->CtrlObject->CmdHistory->IsOnTop()? m_CurCmdStr : strStr, true);
@@ -399,9 +402,9 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 		case KEY_RALTF12:
 		{
 			history_record_type Type;
-			GUID Guid;
+			UUID Uuid;
 			string strFile, strData, strStr;
-			const auto SelectType = Global->CtrlObject->FolderHistory->Select(msg(lng::MFolderHistoryTitle), L"HistoryFolders"sv, strStr, Type, &Guid, &strFile, &strData);
+			const auto SelectType = Global->CtrlObject->FolderHistory->Select(msg(lng::MFolderHistoryTitle), L"HistoryFolders"sv, strStr, Type, &Uuid, &strFile, &strData);
 
 			switch(SelectType)
 			{
@@ -421,7 +424,7 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 
 					//Type==1 - плагиновый путь
 					//Type==0 - обычный путь
-					Panel->ExecFolder(std::move(strStr), Guid, strFile, strData, true, true, false);
+					Panel->ExecFolder(std::move(strStr), Uuid, strFile, strData, true, true, false);
 					// Panel may be changed
 					if(SelectType == HRT_CTRLSHIFTENTER)
 					{
@@ -486,7 +489,7 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 				execute_info Info;
 				Info.DisplayCommand = strStr;
 				Info.Command = strStr;
-				Info.NewWindow = IsNewWindow;
+				Info.WaitMode = IsNewWindow? execute_info::wait_mode::no_wait : execute_info::wait_mode::if_needed;
 				Info.RunAs = IsRunAs;
 
 				SetString({}, false);
@@ -556,10 +559,10 @@ bool CommandLine::ProcessKey(const Manager::Key& Key)
 				}
 			}
 
-			if (LocalKey() == KEY_CTRLD || LocalKey() == KEY_RCTRLD)
+			if (any_of(LocalKey(), KEY_CTRLD, KEY_RCTRLD))
 				LocalKey=KEY_RIGHT;
 
-			if(LocalKey() == KEY_CTRLSPACE || LocalKey() == KEY_RCTRLSPACE)
+			if(any_of(LocalKey(), KEY_CTRLSPACE, KEY_RCTRLSPACE))
 			{
 				SCOPED_ACTION(SetAutocomplete)(&CmdStr, true);
 				CmdStr.AutoComplete(true,false);
@@ -588,7 +591,7 @@ void CommandLine::SetCurDir(string_view const CurDir)
 	}
 }
 
-void CommandLine::SetString(const string& Str, bool Redraw)
+void CommandLine::SetString(string_view const Str, bool Redraw)
 {
 	LastCmdPartLength=-1;
 	CmdStr.SetString(Str);
@@ -598,7 +601,7 @@ void CommandLine::SetString(const string& Str, bool Redraw)
 		Refresh();
 }
 
-void CommandLine::InsertString(const string& Str)
+void CommandLine::InsertString(string_view const Str)
 {
 	LastCmdPartLength=-1;
 	CmdStr.InsertString(Str);
@@ -715,7 +718,7 @@ std::list<CommandLine::segment> CommandLine::GetPrompt()
 							case L'M': // $M - Отображение полного имени удаленного диска, связанного с именем текущего диска, или пустой строки, если текущий диск не является сетевым.
 							{
 								string strTemp;
-								if (DriveLocalToRemoteName(DRIVE_UNKNOWN, m_CurDir[0], strTemp))
+								if (DriveLocalToRemoteName(true, m_CurDir, strTemp))
 								{
 									AddCollapsible(std::move(strTemp));
 								}
@@ -775,7 +778,7 @@ std::list<CommandLine::segment> CommandLine::GetPrompt()
 								const auto Type = ParsePath(m_CurDir);
 								if(Type == root_type::drive_letter)
 									strDestStr += upper(m_CurDir[0]);
-								else if(Type == root_type::unc_drive_letter)
+								else if(Type == root_type::win32nt_drive_letter)
 									strDestStr += upper(m_CurDir[4]);
 								else
 									strDestStr += L'?';
@@ -878,7 +881,7 @@ void CommandLine::ShowViewEditHistory()
 					execute_info Info;
 					Info.DisplayCommand = strStr;
 					Info.Command = strStr;
-					Info.WaitMode = Type == HR_EXTERNAL_WAIT? execute_info::wait_mode::wait_finish : execute_info::wait_mode::no_wait;
+					Info.WaitMode = Type == HR_EXTERNAL_WAIT? execute_info::wait_mode::wait_finish : execute_info::wait_mode::if_needed;
 
 					ExecString(Info);
 					break;
@@ -903,8 +906,10 @@ void CommandLine::SetPromptSize(int NewSize)
 	PromptSize = NewSize? std::clamp(NewSize, 5, 95) : DEFAULT_CMDLINE_WIDTH;
 }
 
-static bool ProcessFarCommands(const string& Command, function_ref<void(bool)> const ConsoleActivatior)
+static bool ProcessFarCommands(string_view Command, function_ref<void(bool)> const ConsoleActivatior)
 {
+	inplace::trim(Command);
+
 	if (equal_icase(Command, L"far:config"sv))
 	{
 		ConsoleActivatior(false);
@@ -923,18 +928,13 @@ static bool ProcessFarCommands(const string& Command, function_ref<void(bool)> c
 			std::wcout << L"\nSCM revision:\n"sv << Revision << L'\n';
 		}
 
-		const auto CompilerInfo = []
-		{
-			return
+		const auto CompilerInfo =
 #ifdef _MSC_BUILD
-				format(FSTR(L".{0}"), _MSC_BUILD)
-#else
-				L""s
+			L"." WSTR(_MSC_BUILD)
 #endif
-				;
-		};
+			L""sv;
 
-		std::wcout << L"\nCompiler:\n"sv << format(FSTR(L"{0}, version {1}.{2}.{3}{4}"), COMPILER_NAME, COMPILER_VERSION_MAJOR, COMPILER_VERSION_MINOR, COMPILER_VERSION_PATCH, CompilerInfo()) << L'\n';
+		std::wcout << L"\nCompiler:\n"sv << format(FSTR(L"{0}, version {1}.{2}.{3}{4}"), COMPILER_NAME, COMPILER_VERSION_MAJOR, COMPILER_VERSION_MINOR, COMPILER_VERSION_PATCH, CompilerInfo) << L'\n';
 
 		if (const auto& ComponentsInfo = components::GetComponentsInfo(); !ComponentsInfo.empty())
 		{
@@ -1014,7 +1014,7 @@ void CommandLine::ExecString(execute_info& Info)
 		if (Global->Opt->Clock)
 			ShowTime();
 
-		if (!Info.Silent)
+		if (Info.WaitMode != execute_info::wait_mode::no_wait)
 		{
 			Global->ScrBuf->Flush();
 		}
@@ -1044,7 +1044,7 @@ void CommandLine::ExecString(execute_info& Info)
 
 	FarChDir(m_CurDir);
 
-	if (Info.ExecMode != execute_info::exec_mode::direct && Info.SourceMode != execute_info::source_mode::known)
+	if (Info.SourceMode != execute_info::source_mode::known)
 	{
 		ProcessEcho(Info);
 		if (starts_with(Info.Command, L'@'))
@@ -1070,9 +1070,8 @@ void CommandLine::ExecString(execute_info& Info)
 			return;
 		}
 
-		if (!Info.NewWindow && !Info.RunAs)
+		if (Info.WaitMode != execute_info::wait_mode::no_wait && !Info.RunAs)
 		{
-
 			if (ProcessFarCommands(Info.Command, Activator))
 				return;
 
@@ -1084,7 +1083,7 @@ void CommandLine::ExecString(execute_info& Info)
 		}
 	}
 
-	Execute(Info, false, Activator);
+	Execute(Info, Activator);
 
 	// BUGBUG do we really need to update panels at all?
 	IsUpdateNeeded = true;
@@ -1122,9 +1121,9 @@ bool CommandLine::ProcessOSCommands(string_view const CmdLine, function_ref<void
 		ConsoleActivatior(false);
 
 		const auto DriveLetter = upper(CmdLine[0]);
-		if (!FarChDir(os::fs::get_drive(DriveLetter)))
+		if (!FarChDir(os::fs::drive::get_device_path(DriveLetter)))
 		{
-			FarChDir(os::fs::get_root_directory(DriveLetter));
+			FarChDir(os::fs::drive::get_root_directory(DriveLetter));
 		}
 		SetPanel->ChangeDirToCurrent();
 		return true;
@@ -1151,7 +1150,7 @@ bool CommandLine::ProcessOSCommands(string_view const CmdLine, function_ref<void
 			if (std::find_first_of(ALL_CONST_RANGE(SetParams), ALL_CONST_RANGE(CharsToFind)) != SetParams.cend())
 				return false;
 
-			const auto UnquotedSetParams = unquote(string(SetParams));
+			const auto UnquotedSetParams = unquote(SetParams);
 
 			ConsoleActivatior(true);
 
@@ -1171,7 +1170,7 @@ bool CommandLine::ProcessOSCommands(string_view const CmdLine, function_ref<void
 		ConsoleActivatior(false);
 
 		const auto VariableValue = trim_right(SetParams.substr(pos + 1));
-		const auto VariableName = unquote(string(SetParams.substr(0, pos)));
+		const auto VariableName = unquote(SetParams.substr(0, pos));
 
 		if (VariableValue.empty()) //set var=
 		{
@@ -1353,32 +1352,7 @@ bool CommandLine::IntChDir(string_view const CmdLine, bool const ClosePanel, boo
 		}
 	}
 
-	size_t DirOffset = 0;
-	ParsePath(strExpandedDir, &DirOffset);
-	if (strExpandedDir.find_first_of(L"?*"sv, DirOffset) != string::npos) // это маска?
-	{
-		os::fs::find_data wfd;
-
-		if (os::fs::get_find_data(strExpandedDir, wfd))
-		{
-			const auto pos = FindLastSlash(strExpandedDir);
-			if (pos != string::npos)
-			{
-				strExpandedDir.resize(pos + 1);
-			}
-			else
-			{
-				strExpandedDir.clear();
-			}
-			strExpandedDir += wfd.FileName;
-		}
-	}
-
-	/* $ 15.11.2001 OT
-		Сначала проверяем есть ли такая "обычная" директория.
-		если уж нет, то тогда начинаем думать, что это директория плагинная
-	*/
-	if (os::fs::is_directory(strExpandedDir) && IsAbsolutePath(strExpandedDir))
+	if (IsAbsolutePath(strExpandedDir))
 	{
 		ReplaceSlashToBackslash(strExpandedDir);
 		SetPanel->SetCurDir(strExpandedDir,true);

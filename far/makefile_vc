@@ -181,7 +181,6 @@ LINK_OBJS = \
 	"$(INTDIR)\keybar.obj" \
 	"$(INTDIR)\keyboard.obj" \
 	"$(INTDIR)\language.obj" \
-	"$(INTDIR)\lasterror.obj" \
 	"$(INTDIR)\locale.obj" \
 	"$(INTDIR)\lockscrn.obj" \
 	"$(INTDIR)\macro.obj" \
@@ -209,6 +208,7 @@ LINK_OBJS = \
 	"$(INTDIR)\platform.env.obj" \
 	"$(INTDIR)\platform.fs.obj" \
 	"$(INTDIR)\platform.memory.obj" \
+	"$(INTDIR)\platform.process.obj" \
 	"$(INTDIR)\platform.reg.obj" \
 	"$(INTDIR)\platform.security.obj" \
 	"$(INTDIR)\platform.version.obj" \
@@ -285,7 +285,7 @@ DEFINES=\
 	/D "_HAS_AUTO_PTR_ETC=0"\
 	/D "_CRT_SECURE_NO_WARNINGS"
 
-DISABLED_WARNINGS=/FI disabled_warnings.hpp
+DISABLED_WARNINGS=/FI disabled_warnings.hpp /wd5045
 
 ADDINCLUDE=/I $(BOOTSTRAPDIR)..
 
@@ -294,11 +294,12 @@ CPPFLAGS=\
 	/c\
 	/J\
 	/EHsc\
-	/std:c++17\
+	/std:c++latest\
 	/permissive-\
 	/Zc:__cplusplus,externConstexpr,inline,throwingNew\
 	/volatile:iso\
 	/Wall\
+	/utf-8\
 	/Gy\
 	/GF\
 	/Fd"$(INTDIR)\\"\
@@ -332,7 +333,19 @@ RFLAGS=/nologo /l 0x409 /fo"$(RES_FILE)" $(ADDINCLUDE) /d $(USEDEBUG)
 
 !ifdef CLANG
 CPP = clang-cl
-CPPFLAGS = $(CPPFLAGS) -Qunused-arguments -Werror=old-style-cast
+CPPFLAGS =\
+	$(CPPFLAGS)\
+	-Qunused-arguments\
+	/clang:-fvisibility=hidden\
+	-Weverything\
+	-Werror=array-bounds\
+	-Werror=dangling\
+	-Werror=odr\
+	-Werror=old-style-cast\
+	-Werror=reorder\
+	-Werror=return-type\
+
+
 NOBATCH=1
 NO_RELEASE_LTCG=1
 !elseifdef ICL
@@ -419,17 +432,21 @@ include: \
 	"$(FARINCLUDE)\FarColorW.pas" \
 	"$(FARINCLUDE)\farcolor.hpp" \
 	"$(FARINCLUDE)\plugin.hpp" \
-	"$(FARINCLUDE)\DlgBuilder.hpp" \
 	"$(FARINCLUDE)\vc_crt_fix_impl.cpp" \
 	"$(FARINCLUDE)\vc_crt_fix.asm" \
 	"$(FARINCLUDE)\vc_crt_fix_ulink.cpp"
 
+HLFS = \
+	"$(OUTDIR)\FarEng.hlf" \
+	"$(OUTDIR)\FarRus.hlf" \
+	"$(OUTDIR)\FarHun.hlf" \
+	"$(OUTDIR)\FarPol.hlf" \
+	"$(OUTDIR)\FarGer.hlf" \
+	"$(OUTDIR)\FarUkr.hlf" \
+
 .PHONY: docs
 docs: \
-	"$(OUTDIR)\FarEng.hlf"\
-	"$(OUTDIR)\FarRus.hlf"\
-	"$(OUTDIR)\FarHun.hlf"\
-	"$(OUTDIR)\FarPol.hlf"\
+	$(HLFS) \
 	"$(OUTDIR)\File_id.diz"\
 	"$(OUTDIR)\Far.exe.example.ini"
 
@@ -504,7 +521,7 @@ $(INTDIR)\vc_crt_fix_ulink.obj: vc_crt_fix_ulink.cpp
 	$(MASM) /nologo /c $(MASM_DEFINES) /Fo$@ $<
 
 $(RES_FILE): far.rc $(BOOTSTRAPDIR)far.rc.inc $(BOOTSTRAPDIR)Far.exe.manifest Far.ico Far.red.ico Far.black.ico Far.hack.ico Far.mono.ico Far.msg.ico
-	@echo Compiling resource file
+	@echo far.rc
 	$(RC) $(RFLAGS) far.rc
 
 !ifdef USEDEPS
@@ -516,41 +533,39 @@ $(INTDIR)\api_test_c.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.hp
 	@echo Testing C plugin API
 	$(CPP) /nologo /c /Fo"$@" /TC api_test.c
 
-$(INTDIR)\api_test_c++.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.hpp $(FARINCLUDE)/DlgBuilder.hpp api_test.c
+$(INTDIR)\api_test_c++.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.hpp api_test.c
 	@echo Testing C++ plugin API
 	$(CPP) /nologo /c /Fo"$@" /TP api_test.c
 
 MSG=@echo Generating $@
+
+VERSION_DEPS=farversion.m4 tools.m4 vbuild.m4
 
 $(BOOTSTRAPDIR)Far.exe.manifest \
 $(BOOTSTRAPDIR)copyright.inc \
 $(BOOTSTRAPDIR)farversion.inc \
 $(BOOTSTRAPDIR)farlang.templ \
 $(BOOTSTRAPDIR)far.rc.inc \
-$(OUTDIR)\File_id.diz: $(@F).m4 farversion.m4 tools.m4 vbuild.m4
+$(OUTDIR)\File_id.diz: $(@F).m4 $(VERSION_DEPS)
 	$(MSG)
 	$(M4) $(@F).m4 > $@
 
-$(FARINCLUDE)\vc_crt_fix_impl.cpp \
-$(FARINCLUDE)\plugin.hpp \
-$(FARINCLUDE)\DlgBuilder.hpp \
-$(FARINCLUDE)\farcolor.hpp: $(@F) farversion.m4 tools.m4 vbuild.m4
-	$(MSG)
-	$(M4) -DINPUT=$(@F) headers.m4 > $@
+$(HLFS): $(VERSION_DEPS)
 
-$(OUTDIR)\FarEng.hlf \
-$(OUTDIR)\FarRus.hlf \
-$(OUTDIR)\FarHun.hlf \
-$(OUTDIR)\FarPol.hlf: $(@F).m4 farversion.m4 tools.m4 vbuild.m4
+.SUFFIXES: .hlf.m4
+.hlf.m4{$(OUTDIR)}.hlf:
 	$(MSG)
-	$(GAWK) -f scripts\mkhlf.awk $(@F).m4 | $(M4) > $@
+	$(GAWK) -f scripts\mkhlf.awk $< | $(M4) > $@
 
 $(OUTDIR)\Far.exe.example.ini: $(@F)
 	$(MSG)
 	copy /Y $(@F) $@ > nul
 
+$(FARINCLUDE)\vc_crt_fix_impl.cpp \
+$(FARINCLUDE)\plugin.hpp \
+$(FARINCLUDE)\farcolor.hpp \
 $(FARINCLUDE)\PluginW.pas \
-$(FARINCLUDE)\FarColorW.pas: $(@F) farversion.m4 tools.m4 vbuild.m4
+$(FARINCLUDE)\FarColorW.pas: $(@F) $(VERSION_DEPS)
 	$(MSG)
 	$(M4) -DINPUT=$(@F) headers.m4 > $@
 
@@ -587,6 +602,7 @@ PASINSTDIR=$(INSTALLDIR)\PluginSDK\Headers.pas
 install: instdir
 	@echo Installing to $(INSTALLDIR)
 	@copy /Y "$(FARINCLUDE)\*.hpp" "$(HPPINSTDIR)\" > nul
+	@copy /Y "$(FARINCLUDE)\..\..\plugins\common\unicode\DlgBuilder.hpp" "$(HPPINSTDIR)\" > nul
 	@copy /Y "$(FARINCLUDE)\*.pas" "$(PASINSTDIR)\" > nul
 	for %%i in (changelog changelog_eng "$(OUTDIR)\Far.*" "$(OUTDIR)\*.lng" "$(OUTDIR)\File_id.diz" "$(OUTDIR)\*.hlf" "$(OUTDIR)\Far.exe.example.ini") do @copy /Y %%i "$(INSTALLDIR)\" > nul
 

@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "mix.hpp"
 
@@ -54,9 +57,42 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
+constexpr auto max_integer_in_double = bit(std::numeric_limits<double>::digits);
+
+unsigned int ToPercent(unsigned long long const Value, unsigned long long const Base)
+{
+	if (!Value || !Base)
+		return 0;
+
+	if (Value == Base)
+		return 100;
+
+	if (Value <= max_integer_in_double && Base <= max_integer_in_double)
+		return static_cast<int>(static_cast<double>(Value) / static_cast<double>(Base) * 100);
+
+	const auto Step = Base / 100;
+	const auto Result = Value / Step;
+
+	return Result == 100? 99 : Result;
+}
+
+unsigned long long FromPercent(unsigned int const Percent, unsigned long long const Base)
+{
+	if (!Percent || !Base)
+		return 0;
+
+	if (Percent == 100)
+		return Base;
+
+	if (Base <= max_integer_in_double)
+		return static_cast<double>(Base) / 100 * Percent;
+
+	return Base / 100 * Percent;
+}
+
 string MakeTemp(string_view Prefix, bool const WithTempPath, string_view const UserTempPath)
 {
-	static UINT s_shift = 0;
+	static unsigned s_shift = 0;
 
 	Prefix = Prefix.empty()? L"FAR"sv : Prefix.substr(0, 3);
 
@@ -104,7 +140,7 @@ string MakeTemp(string_view Prefix, bool const WithTempPath, string_view const U
 		const auto Str = Generator();
 
 		const auto Find = os::fs::enum_files(Str, false);
-		if (Find.begin() == Find.end())
+		if (Find.empty())
 			return Str;
 
 		if ((++Unique & 0xffff) == (UniqueCopy & 0xffff))
@@ -150,7 +186,7 @@ void FindDataExToPluginPanelItemHolder(const os::fs::find_data& Src, PluginPanel
 	const auto MakeCopy = [](string_view const Str)
 	{
 		auto Buffer = std::make_unique<wchar_t[]>(Str.size() + 1);
-		*std::copy(ALL_CONST_RANGE(Str), Buffer.get()) = L'\0';
+		*copy_string(Str, Buffer.get()) = {};
 		return Buffer.release();
 	};
 
@@ -160,13 +196,16 @@ void FindDataExToPluginPanelItemHolder(const os::fs::find_data& Src, PluginPanel
 
 PluginPanelItemHolder::~PluginPanelItemHolder()
 {
-	FreePluginPanelItemNames(Item);
+	FreePluginPanelItemData(Item);
 }
 
-void FreePluginPanelItemNames(const PluginPanelItem& Data)
+void FreePluginPanelItemData(const PluginPanelItem& Data)
 {
 	delete[] Data.FileName;
 	delete[] Data.AlternateFileName;
+	delete[] Data.Description;
+	delete[] Data.Owner;
+	DeleteRawArray(span(Data.CustomColumnData, Data.CustomColumnNumber));
 }
 
 void FreePluginPanelItemUserData(HANDLE hPlugin, const UserDataItem& Data)
@@ -178,24 +217,17 @@ void FreePluginPanelItemUserData(HANDLE hPlugin, const UserDataItem& Data)
 	Data.FreeData(Data.Data, &info);
 }
 
-void FreePluginPanelItemDescriptionOwnerAndColumns(const PluginPanelItem & Data)
-{
-	delete[] Data.Description;
-	delete[] Data.Owner;
-	DeleteRawArray(span(Data.CustomColumnData, Data.CustomColumnNumber));
-}
-
-void FreePluginPanelItemsNames(const std::vector<PluginPanelItem>& Items)
+void FreePluginPanelItemsData(span<PluginPanelItem> const Items)
 {
 	for (const auto& i: Items)
 	{
-		FreePluginPanelItemNames(i);
+		FreePluginPanelItemData(i);
 	}
 }
 
 plugin_item_list::~plugin_item_list()
 {
-	FreePluginPanelItemsNames(m_Data);
+	FreePluginPanelItemsData(m_Data);
 }
 
 const PluginPanelItem* plugin_item_list::data() const
@@ -285,11 +317,11 @@ SetAutocomplete::~SetAutocomplete()
 
 void ReloadEnvironment()
 {
-	std::vector<std::pair<string_view, string>> PreservedVariables;
+	std::unordered_map<string_view, string> PreservedVariables;
 
 	if (os::IsWow64Process())
 	{
-		PreservedVariables.emplace_back(L"PROCESSOR_ARCHITECTURE"sv, L""sv); // Incorrect under WOW64
+		PreservedVariables.emplace(L"PROCESSOR_ARCHITECTURE"sv, L""sv); // Incorrect under WOW64
 	}
 
 	for (auto& [Name, Value]: PreservedVariables)
@@ -301,7 +333,7 @@ void ReloadEnvironment()
 		const os::env::provider::block EnvBlock;
 		for (const auto& i: enum_substrings(EnvBlock.data()))
 		{
-			const auto [Name, Value] = split_name_value(i);
+			const auto [Name, Value] = split(i);
 			os::env::set(Name, Value);
 		}
 	}
@@ -312,7 +344,7 @@ void ReloadEnvironment()
 	}
 }
 
-string version_to_string(const VersionInfo& PluginVersion)
+string version_to_string(const VersionInfo& Version)
 {
 	static const string_view Stage[]
 	{
@@ -324,17 +356,92 @@ string version_to_string(const VersionInfo& PluginVersion)
 		L"Private"sv
 	};
 
-	auto strVersion = format(FSTR(L"{0}.{1}.{2}.{3}"), PluginVersion.Major, PluginVersion.Minor, PluginVersion.Revision, PluginVersion.Build);
-	if (PluginVersion.Stage != VS_RELEASE && static_cast<size_t>(PluginVersion.Stage) < std::size(Stage))
+	static_assert(std::size(Stage) == VS_PRIVATE + 1);
+
+	auto VersionStr = format(FSTR(L"{0}.{1}.{2}.{3}"), Version.Major, Version.Minor, Version.Build, Version.Revision);
+	if (Version.Stage != VS_RELEASE && static_cast<size_t>(Version.Stage) < std::size(Stage))
 	{
-		append(strVersion, L" ("sv, Stage[PluginVersion.Stage], L')');
+		append(VersionStr, L" ("sv, Stage[Version.Stage], L')');
 	}
-	return strVersion;
+	return VersionStr;
 }
 
 #ifdef ENABLE_TESTS
 
 #include "testing.hpp"
+
+
+TEST_CASE("to_percent")
+{
+	const auto Max = std::numeric_limits<unsigned long long>::max();
+
+	static const struct
+	{
+		unsigned long long Value, Base, Result;
+	}
+	Tests[]
+	{
+		{ 0,                     0,                      0   },
+		{ 1,                     0,                      0   },
+		{ 1,                     1,                      100 },
+		{ 0,                     1,                      0   },
+		{ 1,                     2,                      50  },
+		{ 2,                     1,                      200 },
+		{ 3,                     4,                      75  },
+		{ 0,                     Max,                    0   },
+		{ 1,                     Max,                    0   },
+		{ Max,                   0,                      0   },
+		{ Max,                   Max,                    100 },
+		{ 50_bit - 2,            50_bit - 1,             99  },
+		{ 51_bit - 2,            51_bit - 1,             99  },
+		{ 52_bit - 2,            52_bit - 1,             99  },
+		{ 53_bit - 2,            53_bit - 1,             99  },
+		{ 54_bit - 2,            54_bit - 1,             99  },
+		{ Max - 1,               Max,                    99  },
+		{ (50_bit - 2) / 2,      50_bit - 1,             49  },
+		{ (51_bit - 2) / 2,      51_bit - 1,             49  },
+		{ (52_bit - 2) / 2,      52_bit - 1,             49  },
+		{ (53_bit - 2) / 2,      53_bit - 1,             49  },
+		{ (54_bit - 2) / 2,      54_bit - 1,             50  },
+		{ (Max - 2) / 2,         Max,                    50  },
+		{ 850536266682995018u,   3335436339933313800u,   25  },
+		{ 3552239702028979196u,  10006309019799941400u,  35  },
+		{ 1680850982666015624u,  2384185791015625000u,   70  },
+	};
+
+	for (const auto& i: Tests)
+	{
+		REQUIRE(ToPercent(i.Value, i.Base) == i.Result);
+	}
+}
+
+TEST_CASE("from_percent")
+{
+	const auto Max = std::numeric_limits<unsigned long long>::max();
+
+	static const struct
+	{
+		unsigned long long Value, Base, Result;
+	}
+	Tests[]
+	{
+		{ 0,           0,       0   },
+		{ 1,           0,       0   },
+		{ 100,         1,       1   },
+		{ 0,           1,       0   },
+		{ 50,          1,       0   },
+		{ 50,          2,       1   },
+		{ 200,         1,       2   },
+		{ 75,          4,       3   },
+		{ 0,           Max,     0   },
+		{ 100,         Max,     Max },
+	};
+
+	for (const auto& i: Tests)
+	{
+		REQUIRE(FromPercent(i.Value, i.Base) == i.Result);
+	}
+}
 
 TEST_CASE("version_to_string")
 {
@@ -345,12 +452,12 @@ TEST_CASE("version_to_string")
 	}
 	Tests[]
 	{
-		{ { 0,  1,  2,  3,  VS_RELEASE },    L"0.1.2.3"sv,               },
-		{ { 4,  5,  6,  7,  VS_ALPHA   },    L"4.5.6.7 (Alpha)"sv,       },
-		{ { 8,  9,  10, 11, VS_BETA    },    L"8.9.10.11 (Beta)"sv,      },
-		{ { 12, 13, 14, 15, VS_RC      },    L"12.13.14.15 (RC)"sv,      },
-		{ { 16, 17, 18, 19, VS_SPECIAL },    L"16.17.18.19 (Special)"sv, },
-		{ { 20, 21, 22, 23, VS_PRIVATE },    L"20.21.22.23 (Private)"sv, },
+		{ { 0,  1,  3,  2,  VS_RELEASE },    L"0.1.2.3"sv,               },
+		{ { 4,  5,  7,  6,  VS_ALPHA   },    L"4.5.6.7 (Alpha)"sv,       },
+		{ { 8,  9,  11, 10, VS_BETA    },    L"8.9.10.11 (Beta)"sv,      },
+		{ { 12, 13, 15, 14, VS_RC      },    L"12.13.14.15 (RC)"sv,      },
+		{ { 16, 17, 19, 18, VS_SPECIAL },    L"16.17.18.19 (Special)"sv, },
+		{ { 20, 21, 23, 22, VS_PRIVATE },    L"20.21.22.23 (Private)"sv, },
 	};
 
 	for (const auto& i: Tests)

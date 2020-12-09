@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "message.hpp"
 
@@ -60,29 +63,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "format.hpp"
 
 //----------------------------------------------------------------------------
-
-string GetErrorString(const error_state_ex& ErrorState)
-{
-	auto Str = ErrorState.What;
-	if (!Str.empty())
-		append(Str, L": "sv);
-
-	const auto UseNtMessages = false;
-
-	return Str + (UseNtMessages? ErrorState.NtErrorStr() : ErrorState.Win32ErrorStr());
-}
-
-std::array<string, 3> FormatSystemErrors(error_state const& ErrorState)
-{
-	const auto Format = FSTR(L"0x{0:0>8X} - {1}");
-
-	return
-	{
-		format(Format, as_unsigned(ErrorState.Errno), ErrorState.ErrnoStr()),
-		format(Format, as_unsigned(ErrorState.Win32Error), ErrorState.Win32ErrorStr()),
-		format(Format, as_unsigned(ErrorState.NtError), ErrorState.NtErrorStr())
-	};
-}
 
 intptr_t Message::MsgDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,void* Param2)
 {
@@ -127,7 +107,7 @@ intptr_t Message::MsgDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,void* Para
 				case KEY_F3:
 					if(IsErrorType)
 					{
-						const auto Errors = FormatSystemErrors(m_ErrorState);
+						const auto Errors = m_ErrorState.format_errors();
 						const auto MaxStr = std::max(Errors[0].size(), Errors[1].size());
 						const auto SysArea = 5 * 2;
 						const auto FieldsWidth = std::max(80 - SysArea, std::min(static_cast<int>(MaxStr), ScrX - SysArea));
@@ -185,7 +165,7 @@ intptr_t Message::MsgDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,void* Para
 	return Dlg->DefProc(Msg,Param1,Param2);
 }
 
-Message::Message(DWORD const Flags, string_view const Title, std::vector<string> Strings, span<lng const> const Buttons, string_view const HelpTopic, const GUID* const Id)
+Message::Message(unsigned const Flags, string_view const Title, std::vector<string> Strings, span<lng const> const Buttons, string_view const HelpTopic, const UUID* const Id)
 {
 	std::vector<string> StrButtons;
 	StrButtons.reserve(Buttons.size());
@@ -193,7 +173,7 @@ Message::Message(DWORD const Flags, string_view const Title, std::vector<string>
 	Init(Flags, Title, std::move(Strings), std::move(StrButtons), nullptr, {}, HelpTopic, nullptr, Id);
 }
 
-Message::Message(DWORD const Flags, const error_state_ex& ErrorState, string_view  const Title, std::vector<string> Strings, span<lng const> const Buttons, string_view const HelpTopic, const GUID* const Id, span<string const> const Inserts)
+Message::Message(unsigned const Flags, const error_state_ex& ErrorState, string_view  const Title, std::vector<string> Strings, span<lng const> const Buttons, string_view const HelpTopic, const UUID* const Id, span<string const> const Inserts)
 {
 	std::vector<string> StrButtons;
 	StrButtons.reserve(Buttons.size());
@@ -201,13 +181,13 @@ Message::Message(DWORD const Flags, const error_state_ex& ErrorState, string_vie
 	Init(Flags, Title, std::move(Strings), std::move(StrButtons), &ErrorState, Inserts, HelpTopic, nullptr, Id);
 }
 
-Message::Message(DWORD const Flags, const error_state_ex* const ErrorState, string_view const Title, std::vector<string> Strings, std::vector<string> Buttons, string_view const HelpTopic, const GUID* const Id, Plugin* const PluginNumber)
+Message::Message(unsigned const Flags, const error_state_ex* const ErrorState, string_view const Title, std::vector<string> Strings, std::vector<string> Buttons, string_view const HelpTopic, const UUID* const Id, Plugin* const PluginNumber)
 {
 	Init(Flags, Title, std::move(Strings), std::move(Buttons), ErrorState, {}, HelpTopic, PluginNumber, Id);
 }
 
 void Message::Init(
-	DWORD const Flags,
+	unsigned const Flags,
 	string_view const Title,
 	std::vector<string>&& Strings,
 	std::vector<string>&& Buttons,
@@ -215,7 +195,7 @@ void Message::Init(
 	span<string const> const Inserts,
 	string_view const HelpTopic,
 	Plugin* const PluginNumber,
-	const GUID* const Id
+	const UUID* const Id
 	)
 {
 	IsWarningStyle = (Flags&MSG_WARNING) != 0;
@@ -226,7 +206,7 @@ void Message::Init(
 	if (IsErrorType)
 	{
 		m_ErrorState = *ErrorState;
-		strErrStr = GetErrorString(m_ErrorState);
+		strErrStr = m_ErrorState.format_error();
 		if (!strErrStr.empty())
 		{
 			size_t index = 1;
@@ -367,7 +347,7 @@ void Message::Init(
 			Item.X1 = (Flags & MSG_LEFTALIGN) ? 5 : -1;
 			Item.Y1 = i + 2;
 
-			if (!Strings[i].empty() && (Strings[i].front() == L'\1' || Strings[i].front() == L'\2'))
+			if (!Strings[i].empty() && any_of(Strings[i].front(), L'\1', L'\2'))
 			{
 				Item.Flags |= (Strings[i].front() == L'\2' ? DIF_SEPARATOR2 : DIF_SEPARATOR);
 				if(i == Strings.size() - 1)
@@ -494,7 +474,7 @@ void Message::Init(
 	{
 		const auto& SrcItem = Strings[i];
 
-		if (!SrcItem.empty() && (SrcItem.front() == L'\1' || SrcItem.front() == L'\2'))
+		if (!SrcItem.empty() && any_of(SrcItem.front(), L'\1', L'\2'))
 		{
 			int Length = m_Position.width() - 1;
 			if (Length > 5)

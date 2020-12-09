@@ -60,9 +60,10 @@ enum
 };
 
 class Dialog;
-struct FarDialogBuilderListItem2;
+class DialogBuilderListItem;
 class VMenu2;
 enum CodePagesCallbackCallSource: int;
+struct cp_info;
 
 class codepages: public singleton<codepages>
 {
@@ -72,12 +73,12 @@ public:
 	NONCOPYABLE(codepages);
 	~codepages();
 
-	bool SelectCodePage(uintptr_t& CodePage, bool bShowUnicode, bool ViewOnly, bool bShowAutoDetect);
+	bool SelectCodePage(uintptr_t& CodePage, bool ViewOnly, bool bShowAutoDetect);
 	size_t FillCodePagesList(Dialog* Dlg, size_t controlId, uintptr_t codePage, bool allowAuto, bool allowAll, bool allowDefault, bool allowChecked, bool bViewOnly);
-	void FillCodePagesList(std::vector<FarDialogBuilderListItem2> &List, bool allowAuto, bool allowAll, bool allowDefault, bool allowChecked, bool bViewOnly);
+	void FillCodePagesList(std::vector<DialogBuilderListItem> &List, bool allowAuto, bool allowAll, bool allowDefault, bool allowChecked, bool bViewOnly);
 
 	static bool IsCodePageSupported(uintptr_t CodePage, size_t MaxCharSize = size_t(-1));
-	static void FormatCodePageName(uintptr_t CodePage, string& CodePageName);
+	static std::optional<cp_info> GetInfo(uintptr_t CodePage);
 	static long long GetFavorite(uintptr_t cp);
 	static void SetFavorite(uintptr_t cp, long long value);
 	static void DeleteFavorite(uintptr_t cp);
@@ -97,7 +98,7 @@ private:
 
 	codepages();
 
-	static void FormatCodePageName(uintptr_t CodePage, string& CodePageName, bool &IsCodePageNameCustom);
+	static bool GetCodePageCustomName(uintptr_t CodePage, string& CodePageName);
 	size_t GetMenuItemCodePage(size_t Position = -1) const;
 	size_t GetListItemCodePage(size_t Position) const;
 	bool IsPositionStandard(size_t position) const;
@@ -111,19 +112,19 @@ private:
 	size_t GetCodePageInsertPosition(uintptr_t codePage, size_t start, size_t length);
 	void AddCodePages(DWORD codePages);
 	void SetFavorite(bool State);
-	void FillCodePagesVMenu(bool bShowUnicode, bool bViewOnly, bool bShowAutoDetect);
+	void FillCodePagesVMenu(bool bViewOnly, bool bShowAutoDetect);
 	intptr_t EditDialogProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2);
 	void EditCodePageName();
 
 	static string_view FavoriteCodePagesKey();
 
-	Dialog* dialog;
-	size_t control;
-	std::vector<FarDialogBuilderListItem2> *DialogBuilderList;
-	vmenu2_ptr CodePagesMenu;
-	uintptr_t currentCodePage;
-	int favoriteCodePages, normalCodePages;
-	bool selectedCodePages;
+	Dialog* dialog{};
+	size_t control{};
+	std::vector<DialogBuilderListItem> *DialogBuilderList{};
+	vmenu2_ptr CodePagesMenu{};
+	uintptr_t currentCodePage{};
+	int favoriteCodePages{}, normalCodePages{};
+	bool selectedCodePages{};
 	CodePagesCallbackCallSource CallbackCallSource;
 };
 

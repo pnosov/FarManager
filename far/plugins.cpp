@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "plugins.hpp"
 
@@ -54,10 +57,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "processname.hpp"
 #include "interf.hpp"
 #include "message.hpp"
-#include "FarGuid.hpp"
+#include "uuids.far.hpp"
 #include "configdb.hpp"
 #include "FarDlgBuilder.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "mix.hpp"
 #include "manager.hpp"
 #include "lang.hpp"
@@ -66,6 +69,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cvtname.hpp"
 #include "delete.hpp"
 #include "global.hpp"
+#include "keyboard.hpp"
 
 // Platform:
 #include "platform.env.hpp"
@@ -74,6 +78,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Common:
 #include "common/enum_tokens.hpp"
 #include "common/scope_exit.hpp"
+#include "common/uuid.hpp"
 #include "common/view/zip.hpp"
 
 // External:
@@ -100,9 +105,9 @@ static string GetHotKeyPluginKey(Plugin const* const pPlugin)
 	return PluginKey;
 }
 
-static wchar_t GetPluginHotKey(Plugin *pPlugin, const GUID& Guid, hotkey_type HotKeyType)
+static wchar_t GetPluginHotKey(Plugin *pPlugin, const UUID& Uuid, hotkey_type HotKeyType)
 {
-	const auto strHotKey = ConfigProvider().PlHotkeyCfg()->GetHotkey(GetHotKeyPluginKey(pPlugin), Guid, HotKeyType);
+	const auto strHotKey = ConfigProvider().PlHotkeyCfg()->GetHotkey(GetHotKeyPluginKey(pPlugin), Uuid, HotKeyType);
 	return strHotKey.empty()? L'\0' : strHotKey.front();
 }
 
@@ -113,7 +118,7 @@ bool PluginManager::plugin_less::operator()(const Plugin* a, const Plugin *b) co
 
 static void CallPluginSynchroEvent(const std::any& Payload)
 {
-	const auto& [Id, Param] = std::any_cast<const std::pair<GUID, void*>&>(Payload);
+	const auto& [Id, Param] = std::any_cast<const std::pair<UUID, void*>&>(Payload);
 	if (const auto pPlugin = Global->CtrlObject->Plugins->FindPlugin(Id))
 	{
 		ProcessSynchroEventInfo Info = { sizeof(Info) };
@@ -145,7 +150,7 @@ PluginManager::PluginManager():
 {
 }
 
-PluginManager::~PluginManager()
+void PluginManager::UnloadPlugins()
 {
 	Plugin *Luamacro=nullptr; // обеспечить выгрузку данного плагина последним.
 
@@ -198,13 +203,13 @@ Plugin* PluginManager::AddPlugin(std::unique_ptr<Plugin>&& pPlugin)
 	return PluginPtr;
 }
 
-bool PluginManager::UpdateId(Plugin *pPlugin, const GUID& Id)
+bool PluginManager::UpdateId(Plugin *pPlugin, const UUID& Id)
 {
 	const auto Iterator = m_Plugins.find(pPlugin->Id());
 	// important, do not delete Plugin instance
 	Iterator->second.release();
 	m_Plugins.erase(Iterator);
-	pPlugin->SetGuid(Id);
+	pPlugin->SetUuid(Id);
 	const auto [NewIterator, IsEmplaced] = m_Plugins.try_emplace(pPlugin->Id());
 	if (!IsEmplaced)
 	{
@@ -472,7 +477,7 @@ void PluginManager::LoadPluginsFromCache()
 {
 	string strModuleName;
 
-	for (DWORD i=0; ConfigProvider().PlCacheCfg()->EnumPlugins(i, strModuleName); i++)
+	for (size_t i = 0; ConfigProvider().PlCacheCfg()->EnumPlugins(i, strModuleName); ++i)
 	{
 		ReplaceSlashToBackslash(strModuleName);
 
@@ -679,7 +684,7 @@ std::unique_ptr<plugin_panel> PluginManager::OpenFilePlugin(const string* Name, 
 
 		OpenInfo oInfo{ sizeof(oInfo) };
 		oInfo.OpenFrom = OPEN_ANALYSE;
-		oInfo.Guid = &FarGuid;
+		oInfo.Guid = &FarUuid;
 		oInfo.Data = reinterpret_cast<intptr_t>(&oainfo);
 
 		// If we have reached this point, the analyse handle will be passed to the plugin
@@ -731,7 +736,7 @@ std::unique_ptr<plugin_panel> PluginManager::OpenFindListPlugin(span<const Plugi
 
 		OpenInfo Info{ sizeof(Info) };
 		Info.OpenFrom = OPEN_FINDLIST;
-		Info.Guid = &FarGuid;
+		Info.Guid = &FarUuid;
 		Info.Data = 0;
 
 		const auto PluginHandle = i->Open(&Info);
@@ -1016,7 +1021,7 @@ bool PluginManager::GetFile(const plugin_panel* hPlugin, PluginPanelItem *PanelI
 	const auto ItemIterator = std::find_if(CONST_RANGE(Find, i) { return !(i.Attributes & FILE_ATTRIBUTE_DIRECTORY); });
 	if (ItemIterator != Find.cend())
 	{
-		string_view Name = PanelItem->FileName;
+		const string_view Name = PanelItem->FileName;
 		const auto isADS = GetCode == 1 && starts_with(Name, ItemIterator->FileName) && starts_with(Name.substr(ItemIterator->FileName.size()), L':');
 		auto Result = path::join(Info.DestPath, isADS? Name : ItemIterator->FileName);
 
@@ -1027,8 +1032,8 @@ bool PluginManager::GetFile(const plugin_panel* hPlugin, PluginPanelItem *PanelI
 		}
 		else
 		{
-			os::fs::set_file_attributes(Result,FILE_ATTRIBUTE_NORMAL);
-			os::fs::delete_file(Result); //BUGBUG
+			(void)os::fs::set_file_attributes(Result,FILE_ATTRIBUTE_NORMAL); // BUGBUG
+			(void)os::fs::delete_file(Result); //BUGBUG
 		}
 	}
 
@@ -1156,10 +1161,10 @@ intptr_t PluginManager::Compare(const plugin_panel* hPlugin, const PluginPanelIt
 	return hPlugin->plugin()->Compare(&Info);
 }
 
-void PluginManager::ConfigureCurrent(Plugin *pPlugin, const GUID& Guid)
+void PluginManager::ConfigureCurrent(Plugin *pPlugin, const UUID& Uuid)
 {
 	ConfigureInfo Info = {sizeof(Info)};
-	Info.Guid = &Guid;
+	Info.Guid = &Uuid;
 
 	if (pPlugin->Configure(&Info))
 	{
@@ -1186,7 +1191,7 @@ void PluginManager::ConfigureCurrent(Plugin *pPlugin, const GUID& Guid)
 struct PluginMenuItemData
 {
 	Plugin *pPlugin;
-	GUID Guid;
+	UUID Uuid;
 };
 
 static string AddHotkey(const string& Item, wchar_t Hotkey)
@@ -1216,7 +1221,7 @@ void PluginManager::Configure(int StartPos)
 			PluginList->clear();
 			LoadIfCacheAbsent();
 			string strName;
-			GUID guid;
+			UUID Uuid;
 
 			for (const auto& i: SortedPlugins)
 			{
@@ -1238,7 +1243,7 @@ void PluginManager::Configure(int StartPos)
 				{
 					if (bCached)
 					{
-						if (!ConfigProvider().PlCacheCfg()->GetPluginsConfigMenuItem(id, J, strName, guid))
+						if (!ConfigProvider().PlCacheCfg()->GetPluginsConfigMenuItem(id, J, strName, Uuid))
 							break;
 					}
 					else
@@ -1247,10 +1252,10 @@ void PluginManager::Configure(int StartPos)
 							break;
 
 						strName = NullToEmpty(Info.PluginConfig.Strings[J]);
-						guid = Info.PluginConfig.Guids[J];
+						Uuid = Info.PluginConfig.Guids[J];
 					}
 
-					const auto Hotkey = GetPluginHotKey(i, guid, hotkey_type::config_menu);
+					const auto Hotkey = GetPluginHotKey(i, Uuid, hotkey_type::config_menu);
 					MenuItemEx ListItem;
 #ifndef NO_WRAPPER
 					if (i->IsOemPlugin())
@@ -1261,7 +1266,7 @@ void PluginManager::Configure(int StartPos)
 					else
 						ListItem.Name = AddHotkey(strName, Hotkey);
 
-					PluginMenuItemData item = { i, guid };
+					PluginMenuItemData item = { i, Uuid };
 
 					ListItem.ComplexUserData = item;
 
@@ -1270,7 +1275,7 @@ void PluginManager::Configure(int StartPos)
 			}
 
 			PluginList->AssignHighlights();
-			PluginList->SetBottomTitle(msg(lng::MPluginHotKeyBottom));
+			PluginList->SetBottomTitle(KeysToLocalizedText(KEY_SHIFTF1, KEY_F4, KEY_F3));
 			PluginList->SortItems(false, HotKeysPresent? 3 : 0);
 			PluginList->SetSelectPos(StartPos,1);
 			NeedUpdateItems = false;
@@ -1302,7 +1307,7 @@ void PluginManager::Configure(int StartPos)
 				case KEY_F3:
 					if (item)
 					{
-						ShowPluginInfo(item->pPlugin, item->Guid);
+						ShowPluginInfo(item->pPlugin, item->Uuid);
 					}
 					break;
 
@@ -1310,7 +1315,7 @@ void PluginManager::Configure(int StartPos)
 					if (item)
 					{
 						const auto nOffset = HotKeysPresent? 3 : 0;
-						if (SetHotKeyDialog(item->pPlugin, item->Guid, hotkey_type::config_menu, trim(string_view(PluginList->current().Name).substr(nOffset))))
+						if (SetHotKeyDialog(item->pPlugin, item->Uuid, hotkey_type::config_menu, trim(string_view(PluginList->current().Name).substr(nOffset))))
 						{
 							NeedUpdateItems = true;
 							StartPos = SelPos;
@@ -1334,7 +1339,7 @@ void PluginManager::Configure(int StartPos)
 				break;
 
 			const auto item = PluginList->GetComplexUserDataPtr<PluginMenuItemData>(StartPos);
-			ConfigureCurrent(item->pPlugin, item->Guid);
+			ConfigureCurrent(item->pPlugin, item->Uuid);
 		}
 		PluginList->ClearDone();
 	}
@@ -1372,7 +1377,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 				PluginList->clear();
 				LoadIfCacheAbsent();
 				string strName;
-				GUID guid;
+				UUID Uuid;
 
 				for (const auto& i: SortedPlugins)
 				{
@@ -1404,7 +1409,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 					{
 						if (bCached)
 						{
-							if (!ConfigProvider().PlCacheCfg()->GetPluginsMenuItem(id, J, strName, guid))
+							if (!ConfigProvider().PlCacheCfg()->GetPluginsMenuItem(id, J, strName, Uuid))
 								break;
 						}
 						else
@@ -1413,10 +1418,10 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 								break;
 
 							strName = NullToEmpty(Info.PluginMenu.Strings[J]);
-							guid = Info.PluginMenu.Guids[J];
+							Uuid = Info.PluginMenu.Guids[J];
 						}
 
-						const auto Hotkey = GetPluginHotKey(i, guid, hotkey_type::plugins_menu);
+						const auto Hotkey = GetPluginHotKey(i, Uuid, hotkey_type::plugins_menu);
 						MenuItemEx ListItem;
 #ifndef NO_WRAPPER
 						if (i->IsOemPlugin())
@@ -1429,7 +1434,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 
 						PluginMenuItemData itemdata;
 						itemdata.pPlugin = i;
-						itemdata.Guid = guid;
+						itemdata.Uuid = Uuid;
 
 						ListItem.ComplexUserData = itemdata;
 
@@ -1438,7 +1443,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 				}
 
 				PluginList->AssignHighlights();
-				PluginList->SetBottomTitle(msg(lng::MPluginHotKeyBottom));
+				PluginList->SetBottomTitle(KeysToLocalizedText(KEY_SHIFTF1, KEY_F4, KEY_F3));
 				PluginList->SortItems(false, HotKeysPresent? 3 : 0);
 				PluginList->SetSelectPos(StartPos,1);
 				NeedUpdateItems = false;
@@ -1462,7 +1467,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 					case KEY_F3:
 						if (ItemPtr)
 						{
-							ShowPluginInfo(ItemPtr->pPlugin, ItemPtr->Guid);
+							ShowPluginInfo(ItemPtr->pPlugin, ItemPtr->Uuid);
 						}
 						break;
 
@@ -1470,7 +1475,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 						if (ItemPtr)
 						{
 							const auto nOffset = HotKeysPresent? 3 : 0;
-							if (SetHotKeyDialog(ItemPtr->pPlugin, ItemPtr->Guid, hotkey_type::plugins_menu, trim(string_view(PluginList->current().Name).substr(nOffset))))
+							if (SetHotKeyDialog(ItemPtr->pPlugin, ItemPtr->Uuid, hotkey_type::plugins_menu, trim(string_view(PluginList->current().Name).substr(nOffset))))
 							{
 								NeedUpdateItems = true;
 								StartPos = SelPos;
@@ -1500,7 +1505,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 							StartPos=SelPos;
 
 							if (ItemPtr->pPlugin->has(iConfigure))
-								ConfigureCurrent(ItemPtr->pPlugin, ItemPtr->Guid);
+								ConfigureCurrent(ItemPtr->pPlugin, ItemPtr->Uuid);
 
 							PluginList->Close(SelPos);
 						}
@@ -1546,7 +1551,7 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 		Item = reinterpret_cast<intptr_t>(&pd);
 	}
 
-	auto hPlugin = Open(item.pPlugin, OpenCode, item.Guid, Item);
+	auto hPlugin = Open(item.pPlugin, OpenCode, item.Uuid, Item);
 
 	if (hPlugin && !Editor && !Viewer && !Dialog)
 	{
@@ -1572,10 +1577,10 @@ int PluginManager::CommandsMenu(int ModalType,int StartPos,const wchar_t *Histor
 	return TRUE;
 }
 
-bool PluginManager::SetHotKeyDialog(Plugin* const pPlugin, const GUID& Guid, const hotkey_type HotKeyType, const string_view DlgPluginTitle)
+bool PluginManager::SetHotKeyDialog(Plugin* const pPlugin, const UUID& Uuid, const hotkey_type HotKeyType, const string_view DlgPluginTitle)
 {
 	const auto strPluginKey = GetHotKeyPluginKey(pPlugin);
-	auto strHotKey = ConfigProvider().PlHotkeyCfg()->GetHotkey(strPluginKey, Guid, HotKeyType);
+	auto strHotKey = ConfigProvider().PlHotkeyCfg()->GetHotkey(strPluginKey, Uuid, HotKeyType);
 
 	DialogBuilder Builder(lng::MPluginHotKeyTitle, L"SetHotKeyDialog"sv);
 	Builder.AddText(lng::MPluginHotKey);
@@ -1584,18 +1589,18 @@ bool PluginManager::SetHotKeyDialog(Plugin* const pPlugin, const GUID& Guid, con
 	if(Builder.ShowDialog())
 	{
 		if (!strHotKey.empty() && strHotKey.front() != L' ')
-			ConfigProvider().PlHotkeyCfg()->SetHotkey(strPluginKey, Guid, HotKeyType, strHotKey);
+			ConfigProvider().PlHotkeyCfg()->SetHotkey(strPluginKey, Uuid, HotKeyType, strHotKey);
 		else
-			ConfigProvider().PlHotkeyCfg()->DelHotkey(strPluginKey, Guid, HotKeyType);
+			ConfigProvider().PlHotkeyCfg()->DelHotkey(strPluginKey, Uuid, HotKeyType);
 		return true;
 	}
 	return false;
 }
 
-void PluginManager::ShowPluginInfo(Plugin *pPlugin, const GUID& Guid)
+void PluginManager::ShowPluginInfo(Plugin* pPlugin, const UUID& Uuid)
 {
-	const auto strPluginGuid = GuidToStr(pPlugin->Id());
-	const auto strItemGuid = GuidToStr(Guid);
+	const auto strPluginUuid = uuid::str(pPlugin->Id());
+	const auto strItemUuid = uuid::str(Uuid);
 	string strPluginPrefix;
 	if (pPlugin->CheckWorkFlags(PIWF_CACHED))
 	{
@@ -1623,10 +1628,10 @@ void PluginManager::ShowPluginInfo(Plugin *pPlugin, const GUID& Guid)
 	Builder.AddConstEditField(version_to_string(pPlugin->version()), Width);
 	Builder.AddText(lng::MPluginModulePath);
 	Builder.AddConstEditField(pPlugin->ModuleName(), Width);
-	Builder.AddText(lng::MPluginGUID);
-	Builder.AddConstEditField(strPluginGuid, Width);
-	Builder.AddText(lng::MPluginItemGUID);
-	Builder.AddConstEditField(strItemGuid, Width);
+	Builder.AddText(lng::MPluginUUID);
+	Builder.AddConstEditField(strPluginUuid, Width);
+	Builder.AddText(lng::MPluginItemUUID);
+	Builder.AddConstEditField(strItemUuid, Width);
 	Builder.AddText(lng::MPluginPrefix);
 	Builder.AddConstEditField(strPluginPrefix, Width);
 	Builder.AddOK();
@@ -1663,13 +1668,13 @@ static wchar_t* StrToBuf(const string& Str, char*& Buf, size_t& Rest, size_t& Si
 	const auto Res = reinterpret_cast<wchar_t*>(BufReserve(Buf, Count, Rest, Size));
 	if (Res)
 	{
-		*std::copy(ALL_CONST_RANGE(Str), Res) = L'\0';
+		*copy_string(Str, Res) = {};
 	}
 	return Res;
 }
 
 
-static void ItemsToBuf(PluginMenuItem& Menu, const std::vector<string>& NamesArray, const std::vector<GUID>& GuidsArray, char*& Buf, size_t& Rest, size_t& Size)
+static void ItemsToBuf(PluginMenuItem& Menu, const std::vector<string>& NamesArray, const std::vector<UUID>& UuidsArray, char*& Buf, size_t& Rest, size_t& Size)
 {
 	Menu.Count = NamesArray.size();
 	Menu.Strings = nullptr;
@@ -1678,9 +1683,9 @@ static void ItemsToBuf(PluginMenuItem& Menu, const std::vector<string>& NamesArr
 	if (Menu.Count)
 	{
 		const auto Items = reinterpret_cast<wchar_t**>(BufReserve(Buf, Menu.Count * sizeof(wchar_t*), Rest, Size));
-		const auto Guids = reinterpret_cast<GUID*>(BufReserve(Buf, Menu.Count * sizeof(GUID), Rest, Size));
+		const auto Uuids = reinterpret_cast<UUID*>(BufReserve(Buf, Menu.Count * sizeof(UUID), Rest, Size));
 		Menu.Strings = Items;
-		Menu.Guids = Guids;
+		Menu.Guids = Uuids;
 
 		for (size_t i = 0; i < Menu.Count; ++i)
 		{
@@ -1690,9 +1695,9 @@ static void ItemsToBuf(PluginMenuItem& Menu, const std::vector<string>& NamesArr
 				Items[i] = pStr;
 			}
 
-			if (Guids)
+			if (Uuids)
 			{
-				Guids[i] = GuidsArray[i];
+				Uuids[i] = UuidsArray[i];
 			}
 		}
 	}
@@ -1704,7 +1709,7 @@ size_t PluginManager::GetPluginInformation(Plugin *pPlugin, FarGetPluginInformat
 	string Prefix;
 	PLUGIN_FLAGS Flags = 0;
 
-	using menu_items = std::pair<std::vector<string>, std::vector<GUID>>;
+	using menu_items = std::pair<std::vector<string>, std::vector<UUID>>;
 	menu_items MenuItems, DiskItems, ConfItems;
 
 	if (pPlugin->CheckWorkFlags(PIWF_CACHED))
@@ -1714,14 +1719,14 @@ size_t PluginManager::GetPluginInformation(Plugin *pPlugin, FarGetPluginInformat
 		Prefix = ConfigProvider().PlCacheCfg()->GetCommandPrefix(id);
 
 		string Name;
-		GUID Guid;
+		UUID Uuid;
 
 		const auto ReadCache = [&](const auto& Getter, menu_items& Items)
 		{
-			for (size_t i = 0; std::invoke(Getter, ConfigProvider().PlCacheCfg(), id, i, Name, Guid); ++i)
+			for (size_t i = 0; std::invoke(Getter, ConfigProvider().PlCacheCfg(), id, i, Name, Uuid); ++i)
 			{
 				Items.first.emplace_back(Name);
-				Items.second.emplace_back(Guid);
+				Items.second.emplace_back(Uuid);
 			}
 		};
 
@@ -1808,7 +1813,7 @@ size_t PluginManager::GetPluginInformation(Plugin *pPlugin, FarGetPluginInformat
 	return Size;
 }
 
-bool PluginManager::GetDiskMenuItem(Plugin *pPlugin, size_t PluginItem, bool &ItemPresent, wchar_t& PluginHotkey, string &strPluginText, GUID &Guid) const
+bool PluginManager::GetDiskMenuItem(Plugin* pPlugin, size_t PluginItem, bool& ItemPresent, wchar_t& PluginHotkey, string& strPluginText, UUID& Uuid) const
 {
 	LoadIfCacheAbsent();
 
@@ -1816,7 +1821,7 @@ bool PluginManager::GetDiskMenuItem(Plugin *pPlugin, size_t PluginItem, bool &It
 
 	if (pPlugin->CheckWorkFlags(PIWF_CACHED))
 	{
-		ItemPresent = ConfigProvider().PlCacheCfg()->GetDiskMenuItem(ConfigProvider().PlCacheCfg()->GetCacheID(pPlugin->CacheName()), PluginItem, strPluginText, Guid) && !strPluginText.empty();
+		ItemPresent = ConfigProvider().PlCacheCfg()->GetDiskMenuItem(ConfigProvider().PlCacheCfg()->GetCacheID(pPlugin->CacheName()), PluginItem, strPluginText, Uuid) && !strPluginText.empty();
 	}
 	else
 	{
@@ -1829,40 +1834,37 @@ bool PluginManager::GetDiskMenuItem(Plugin *pPlugin, size_t PluginItem, bool &It
 		else
 		{
 			strPluginText = NullToEmpty(Info.DiskMenu.Strings[PluginItem]);
-			Guid = Info.DiskMenu.Guids[PluginItem];
+			Uuid = Info.DiskMenu.Guids[PluginItem];
 			ItemPresent = true;
 		}
 	}
 	if (ItemPresent)
 	{
-		PluginHotkey = GetPluginHotKey(pPlugin, Guid, hotkey_type::drive_menu);
+		PluginHotkey = GetPluginHotKey(pPlugin, Uuid, hotkey_type::drive_menu);
 	}
 
 	return true;
 }
 
-int PluginManager::UseFarCommand(const plugin_panel* const hPlugin, int const CommandType)
+bool PluginManager::UseInternalCommand(const plugin_panel* const hPlugin, int const CommandType, OpenPanelInfo const& Info)
 {
-	OpenPanelInfo Info;
-	GetOpenPanelInfo(hPlugin,&Info);
-
 	if (!(Info.Flags & OPIF_REALNAMES))
-		return FALSE;
+		return false;
 
 	switch (CommandType)
 	{
-		case PLUGIN_FARGETFILE:
-		case PLUGIN_FARGETFILES:
-			return !hPlugin->plugin()->has(iGetFiles) || (Info.Flags & OPIF_EXTERNALGET);
-		case PLUGIN_FARPUTFILES:
-			return !hPlugin->plugin()->has(iPutFiles) || (Info.Flags & OPIF_EXTERNALPUT);
-		case PLUGIN_FARDELETEFILES:
-			return !hPlugin->plugin()->has(iDeleteFiles) || (Info.Flags & OPIF_EXTERNALDELETE);
-		case PLUGIN_FARMAKEDIRECTORY:
-			return !hPlugin->plugin()->has(iMakeDirectory) || (Info.Flags & OPIF_EXTERNALMKDIR);
+	case PLUGIN_FARGETFILE:
+	case PLUGIN_FARGETFILES:
+		return !hPlugin->plugin()->has(iGetFiles) || (Info.Flags & OPIF_EXTERNALGET);
+	case PLUGIN_FARPUTFILES:
+		return !hPlugin->plugin()->has(iPutFiles) || (Info.Flags & OPIF_EXTERNALPUT);
+	case PLUGIN_FARDELETEFILES:
+		return !hPlugin->plugin()->has(iDeleteFiles) || (Info.Flags & OPIF_EXTERNALDELETE);
+	case PLUGIN_FARMAKEDIRECTORY:
+		return !hPlugin->plugin()->has(iMakeDirectory) || (Info.Flags & OPIF_EXTERNALMKDIR);
+	default:
+		return true;
 	}
-
-	return TRUE;
 }
 
 
@@ -1973,7 +1975,7 @@ bool PluginManager::ProcessCommandLine(const string& Command)
 	// Copy instead of string_view as it goes into the wild
 	const auto PluginCommand = Command.substr(PluginIterator->PluginFlags & PF_FULLCMDLINE? 0 : Prefix.size() + 1);
 	const OpenCommandLineInfo info{ sizeof(OpenCommandLineInfo), PluginCommand.c_str() };
-	if (auto hPlugin = Global->CtrlObject->Plugins->Open(PluginIterator->pPlugin, OPEN_COMMANDLINE, FarGuid, reinterpret_cast<intptr_t>(&info)))
+	if (auto hPlugin = Global->CtrlObject->Plugins->Open(PluginIterator->pPlugin, OPEN_COMMANDLINE, FarUuid, reinterpret_cast<intptr_t>(&info)))
 	{
 		const auto NewPanel = Global->CtrlObject->Cp()->ChangePanel(Global->CtrlObject->Cp()->ActivePanel(), panel_type::FILE_PANEL, TRUE, TRUE);
 		NewPanel->SetPluginMode(std::move(hPlugin), {}, true);
@@ -1988,7 +1990,7 @@ bool PluginManager::ProcessCommandLine(const string& Command)
   Функция CallPlugin - найти плагин по ID и запустить
   в зачаточном состоянии!
 */
-bool PluginManager::CallPlugin(const GUID& SysID,int OpenFrom, void *Data,void **Ret) const
+bool PluginManager::CallPlugin(const UUID& SysID,int OpenFrom, void *Data,void **Ret) const
 {
 	if (const auto Dlg = std::dynamic_pointer_cast<Dialog>(Global->WindowManager->GetCurrentWindow()))
 	{
@@ -2003,7 +2005,7 @@ bool PluginManager::CallPlugin(const GUID& SysID,int OpenFrom, void *Data,void *
 	if (!pPlugin || !pPlugin->has(iOpen) || Global->ProcessException)
 		return false;
 
-	auto PluginPanel = Open(pPlugin, OpenFrom, FarGuid, reinterpret_cast<intptr_t>(Data));
+	auto PluginPanel = Open(pPlugin, OpenFrom, FarUuid, reinterpret_cast<intptr_t>(Data));
 	bool process=false;
 
 	if (OpenFrom == OPEN_FROMMACRO)
@@ -2065,7 +2067,7 @@ bool PluginManager::CallPlugin(const GUID& SysID,int OpenFrom, void *Data,void *
 }
 
 // поддержка макрофункций plugin.call, plugin.cmd, plugin.config и т.п
-bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
+bool PluginManager::CallPluginItem(const UUID& Uuid, CallPluginInfo *Data) const
 {
 	auto Result = false;
 
@@ -2083,7 +2085,7 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 
 	if (Data->CallFlags & CPT_CHECKONLY)
 	{
-		Data->pPlugin = FindPlugin(Guid);
+		Data->pPlugin = FindPlugin(Uuid);
 		if (!Data->pPlugin || !Data->pPlugin->Load())
 			return false;
 
@@ -2128,7 +2130,7 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 		if (!GetPluginInfo(Data->pPlugin, &Info))
 			return false;
 
-		auto IFlags = Info.Flags;
+		const auto IFlags = Info.Flags;
 		PluginMenuItem* MenuItems = nullptr;
 
 		// Разрешен ли вызов данного типа в текущей области
@@ -2164,21 +2166,21 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 		if ((Data->CallFlags & CPT_MASK)==CPT_MENU || (Data->CallFlags & CPT_MASK)==CPT_CONFIGURE)
 		{
 			auto ItemFound = false;
-			if (!Data->ItemGuid)
+			if (!Data->ItemUuid)
 			{
 				if (MenuItems->Count == 1)
 				{
-					Data->FoundGuid = MenuItems->Guids[0];
-					Data->ItemGuid = &Data->FoundGuid;
+					Data->FoundUuid = MenuItems->Guids[0];
+					Data->ItemUuid = &Data->FoundUuid;
 					ItemFound = true;
 				}
 			}
 			else
 			{
-				if (contains(span(MenuItems->Guids, MenuItems->Count), *Data->ItemGuid))
+				if (contains(span(MenuItems->Guids, MenuItems->Count), *Data->ItemUuid))
 				{
-					Data->FoundGuid = *Data->ItemGuid;
-					Data->ItemGuid = &Data->FoundGuid;
+					Data->FoundUuid = *Data->ItemUuid;
+					Data->ItemUuid = &Data->FoundUuid;
 					ItemFound = true;
 				}
 			}
@@ -2219,13 +2221,13 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 				Item = reinterpret_cast<intptr_t>(&pd);
 			}
 
-			hPlugin=Open(Data->pPlugin,OpenCode,Data->FoundGuid,Item);
+			hPlugin=Open(Data->pPlugin,OpenCode,Data->FoundUuid,Item);
 			Result = true;
 		}
 		break;
 
 	case CPT_CONFIGURE:
-		Global->CtrlObject->Plugins->ConfigureCurrent(Data->pPlugin,Data->FoundGuid);
+		Global->CtrlObject->Plugins->ConfigureCurrent(Data->pPlugin,Data->FoundUuid);
 		return true;
 
 	case CPT_CMDLINE:
@@ -2233,7 +2235,7 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 			ActivePanel=Global->CtrlObject->Cp()->ActivePanel();
 			const string command = Data->Command; // Нужна копия строки
 			OpenCommandLineInfo info{ sizeof(OpenCommandLineInfo), command.c_str() };
-			hPlugin = Open(Data->pPlugin, OPEN_COMMANDLINE, FarGuid, reinterpret_cast<intptr_t>(&info));
+			hPlugin = Open(Data->pPlugin, OPEN_COMMANDLINE, FarUuid, reinterpret_cast<intptr_t>(&info));
 			Result = true;
 		}
 		break;
@@ -2274,17 +2276,17 @@ bool PluginManager::CallPluginItem(const GUID& Guid, CallPluginInfo *Data) const
 	return Result;
 }
 
-Plugin *PluginManager::FindPlugin(const GUID& SysID) const
+Plugin *PluginManager::FindPlugin(const UUID& SysID) const
 {
 	const auto Iterator = m_Plugins.find(SysID);
 	return Iterator == m_Plugins.cend()? nullptr : Iterator->second.get();
 }
 
-std::unique_ptr<plugin_panel> PluginManager::Open(Plugin *pPlugin,int OpenFrom,const GUID& Guid,intptr_t Item) const
+std::unique_ptr<plugin_panel> PluginManager::Open(Plugin* pPlugin, int OpenFrom, const UUID& Uuid, intptr_t Item) const
 {
 	OpenInfo Info = {sizeof(Info)};
 	Info.OpenFrom = static_cast<OPENFROM>(OpenFrom);
-	Info.Guid = &Guid;
+	Info.Guid = &Uuid;
 	Info.Data = Item;
 
 	const auto PluginHandle = pPlugin->Open(&Info);
@@ -2307,37 +2309,37 @@ std::vector<Plugin*> PluginManager::GetContentPlugins(const std::vector<const wc
 
 void PluginManager::GetContentData(
 	const std::vector<Plugin*>& Plugins,
-	const string& Name,
+	string_view const FilePath,
 	const std::vector<const wchar_t*>& ColNames,
 	std::vector<const wchar_t*>& ColValues,
 	std::unordered_map<string,string>& ContentData
 ) const
 {
-	const NTPath FilePath(Name);
+	const NTPath Path(FilePath);
 	const auto Count = ColNames.size();
 
 	for (const auto& i: Plugins)
 	{
-		GetContentDataInfo GetInfo{ sizeof(GetContentDataInfo), FilePath.c_str(), Count, ColNames.data(), ColValues.data() };
+		GetContentDataInfo GetInfo{ sizeof(GetContentDataInfo), Path.c_str(), Count, ColNames.data(), ColValues.data() };
 		ColValues.assign(ColValues.size(), nullptr);
 
-		if (i->GetContentData(&GetInfo) && GetInfo.Values)
-		{
-			for (const auto& [ColName, Value]: zip(ColNames, span(GetInfo.Values, Count)))
-			{
-				if (Value)
-					ContentData[ColName] += Value;
-			}
+		if (!i->GetContentData(&GetInfo) || !GetInfo.Values)
+			continue;
 
-			if (i->has(iFreeContentData))
-			{
-				i->FreeContentData(&GetInfo);
-			}
+		for (const auto& [ColName, Value]: zip(ColNames, span(GetInfo.Values, Count)))
+		{
+			if (Value)
+				ContentData[ColName] += Value;
+		}
+
+		if (i->has(iFreeContentData))
+		{
+			i->FreeContentData(&GetInfo);
 		}
 	}
 }
 
-const GUID& PluginManager::GetGUID(const plugin_panel* hPlugin)
+const UUID& PluginManager::GetUUID(const plugin_panel* hPlugin)
 {
 	return hPlugin->plugin()->Id();
 }

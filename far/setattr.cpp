@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "setattr.hpp"
 
@@ -54,7 +57,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "network.hpp"
 #include "fileowner.hpp"
 #include "wakeful.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "interf.hpp"
 #include "plugins.hpp"
 #include "imports.hpp"
@@ -162,7 +165,7 @@ enum DIALOGMODE
 static const struct
 {
 	int Id;
-	DWORD Attribute;
+	os::fs::attributes Attribute;
 	lng LngId;
 }
 AttributeMap[]
@@ -301,7 +304,7 @@ static void AdvancedAttributesDialog(SetAttrDlgParam* const DlgParam)
 		const auto AbsoluteIndex = main_attributes_count + i;
 		auto& Attr = DlgParam->Attributes[main_attributes_count + i];
 		SavedState[i] = Attr.CurrentValue;
-		Builder.AddCheckbox(AttributeMap[AbsoluteIndex].LngId, &Attr.CurrentValue, 0, flags::check_any(Attr.Flags, DIF_3STATE));
+		Builder.AddCheckbox(AttributeMap[AbsoluteIndex].LngId, Attr.CurrentValue, 0, flags::check_any(Attr.Flags, DIF_3STATE));
 	}
 
 	Builder.AddOKCancel();
@@ -542,7 +545,7 @@ struct AttrPreRedrawItem : public PreRedrawItem
 	string Name;
 };
 
-static void ShellSetFileAttributesMsgImpl(const string& Name)
+static void ShellSetFileAttributesMsgImpl(string_view const Name)
 {
 	static int Width=54;
 	int WidthTemp;
@@ -564,7 +567,7 @@ static void ShellSetFileAttributesMsgImpl(const string& Name)
 		{});
 }
 
-static void ShellSetFileAttributesMsg(const string& Name)
+static void ShellSetFileAttributesMsg(string_view const Name)
 {
 	ShellSetFileAttributesMsgImpl(Name);
 
@@ -585,8 +588,8 @@ static void PR_ShellSetFileAttributesMsg()
 static bool construct_time(
 	os::chrono::time_point const OriginalFileTime,
 	os::chrono::time_point& FileTime,
-	const string& OSrcDate,
-	const string& OSrcTime)
+	string_view const OSrcDate,
+	string_view const OSrcTime)
 {
 	SYSTEMTIME ost;
 	if (!utc_to_local(OriginalFileTime, ost))
@@ -601,7 +604,7 @@ static bool construct_time(
 		std::invoke(Field, st) = New != time_none? New : std::invoke(Field, ost);
 	};
 
-	const auto Milliseconds = Point.Tick == time_none? time_none : os::chrono::duration(Point.Tick) / 1ms;
+	const auto Milliseconds = Point.Hectonanosecond == time_none? time_none : os::chrono::hectonanoseconds(Point.Hectonanosecond) / 1ms;
 
 	set_or_inherit(&SYSTEMTIME::wYear,         Point.Year);
 	set_or_inherit(&SYSTEMTIME::wMonth,        Point.Month);
@@ -614,8 +617,8 @@ static bool construct_time(
 	if (!local_to_utc(st, FileTime))
 		return false;
 
-	FileTime += (Point.Tick != time_none?
-		os::chrono::duration(Point.Tick) :
+	FileTime += (Point.Hectonanosecond != time_none?
+		os::chrono::hectonanoseconds(Point.Hectonanosecond) :
 		OriginalFileTime.time_since_epoch()) % 1ms;
 
 	return true;
@@ -665,7 +668,7 @@ static bool process_single_file(
 
 	ESetFileSparse(Name, (New.FindData.Attributes & FILE_ATTRIBUTE_SPARSE_FILE) != 0, Current.FindData.Attributes, SkipErrors);
 
-	const auto IsChanged = [&](DWORD const Attributes)
+	const auto IsChanged = [&](os::fs::attributes const Attributes)
 	{
 		return (New.FindData.Attributes & Attributes) != (Current.FindData.Attributes & Attributes);
 	};
@@ -686,7 +689,7 @@ static bool process_single_file(
 
 static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 {
-	short DlgX = 66, DlgY = 22;
+	short DlgX = 74, DlgY = 22;
 
 	const auto C1 = 5;
 	const auto C2 = C1 + (DlgX - 10) / 2;
@@ -835,7 +838,7 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 			AttrDlg[i.TimeId].strMask = TimeMask;
 		}
 
-		bool FolderPresent=false,LinkPresent=false;
+		bool LinkPresent=false;
 		string strLinkName;
 
 		const auto EnableSubfolders = [&]
@@ -865,11 +868,10 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 				}
 			}
 
-			if (os::fs::is_directory(SingleSelFindData.Attributes))
-			{
-				FolderPresent = true;
+			const auto FolderPresent = os::fs::is_directory(SingleSelFindData.Attributes);
+
+			if (FolderPresent)
 				EnableSubfolders();
-			}
 
 			if (SingleSelFindData.Attributes != INVALID_FILE_ATTRIBUTES)
 			{
@@ -891,26 +893,25 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 			{
 				bool IsRoot = false;
 				const auto PathType = ParsePath(SingleSelFileName, nullptr, &IsRoot);
-				IsMountPoint = IsRoot && ((PathType == root_type::drive_letter || PathType == root_type::unc_drive_letter));
+				IsMountPoint = IsRoot && ((PathType == root_type::drive_letter || PathType == root_type::win32nt_drive_letter));
 			}
 
 			if ((SingleSelFindData.Attributes != INVALID_FILE_ATTRIBUTES && (SingleSelFindData.Attributes & FILE_ATTRIBUTE_REPARSE_POINT)) || IsMountPoint)
 			{
+				auto ID_Msg = IsMountPoint? lng::MSetAttrVolMount : lng::MSetAttrSymlink;
 				DWORD ReparseTag = SingleSelFindData.ReparseTag;
-				DWORD ReparseTagAlternative = 0;
 				bool KnownReparsePoint = false;
 				if (!DlgParam.Plugin)
 				{
 					if (IsMountPoint)
 					{
 						// BUGBUG, cheating
-						KnownReparsePoint = true;
 						ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
-						// BUGBUG check result
-						(void)os::fs::GetVolumeNameForVolumeMountPoint(SingleSelFileName, strLinkName);
+						KnownReparsePoint = os::fs::GetVolumeNameForVolumeMountPoint(SingleSelFileName, strLinkName);
 					}
 					else
 					{
+						DWORD ReparseTagAlternative = 0;
 						KnownReparsePoint = GetReparsePointInfo(SingleSelFileName, strLinkName, &ReparseTagAlternative);
 						if (ReparseTagAlternative && !ReparseTag)
 						{
@@ -969,9 +970,8 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 
 				LinkPresent=true;
 				NormalizeSymlinkName(strLinkName);
-				auto ID_Msg = lng::MSetAttrSymlink;
 
-				if (ReparseTag==IO_REPARSE_TAG_MOUNT_POINT)
+				if (!IsMountPoint && ReparseTag==IO_REPARSE_TAG_MOUNT_POINT)
 				{
 					bool Root;
 					if(ParsePath(strLinkName, nullptr, &Root) == root_type::volume && Root)
@@ -989,11 +989,14 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 
 				AttrDlg[SA_TEXT_SYMLINK].Flags &= ~DIF_HIDDEN;
 				AttrDlg[SA_TEXT_SYMLINK].strData = msg(ID_Msg);
+
 				if (ReparseTag != IO_REPARSE_TAG_DFS)
 					AttrDlg[SA_EDIT_SYMLINK].Flags &= ~DIF_HIDDEN;
+
 				AttrDlg[SA_EDIT_SYMLINK].strData = strLinkName;
-				if (ReparseTag == IO_REPARSE_TAG_DEDUP)
-					AttrDlg[SA_EDIT_SYMLINK].Flags |= DIF_DISABLE;
+
+				if (IsMountPoint || ReparseTag == IO_REPARSE_TAG_DEDUP)
+					AttrDlg[SA_EDIT_SYMLINK].Flags |= DIF_READONLY;
 			}
 
 			// обработка случая "несколько хардлинков"
@@ -1052,7 +1055,7 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 
 			// проверка - есть ли среди выделенных - каталоги?
 			// так же проверка на атрибуты
-			FolderPresent=false;
+			auto FolderPresent = false;
 
 			const auto strComputerName = ExtractComputerName(SrcPanel->GetCurDir());
 
@@ -1215,7 +1218,7 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 				if (SingleSelFindData.Attributes == INVALID_FILE_ATTRIBUTES)
 					return true;
 
-				DWORD SetAttr = 0, ClearAttr = 0;
+				os::fs::attributes SetAttr = 0, ClearAttr = 0;
 
 				for (const auto& [i, Attr]: zip(DlgParam.Attributes, AttributeMap))
 				{
@@ -1350,7 +1353,7 @@ static bool ShellSetFileAttributesImpl(Panel* SrcPanel, const string* Object)
 					AddEndSlash(strFullName);
 				}
 				seInfo.lpFile = strFullName.c_str();
-				if (!IsWindowsVistaOrGreater() && ParsePath(seInfo.lpFile) == root_type::unc_drive_letter)
+				if (!IsWindowsVistaOrGreater() && ParsePath(seInfo.lpFile) == root_type::win32nt_drive_letter)
 				{	// "\\?\c:\..." fails on old windows
 					seInfo.lpFile += 4;
 				}
@@ -1385,6 +1388,6 @@ void ShellSetFileAttributes(Panel* SrcPanel, const string* Object)
 	}
 	catch (const operation_cancelled&)
 	{
-		;
+		// Nop
 	}
 }

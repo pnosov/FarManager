@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "language.hpp"
 
@@ -43,7 +46,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "config.hpp"
 #include "filestr.hpp"
 #include "interf.hpp"
-#include "lasterror.hpp"
 #include "string_utils.hpp"
 #include "pathmix.hpp"
 #include "exception.hpp"
@@ -75,19 +77,19 @@ std::tuple<os::fs::file, string, uintptr_t> OpenLangFile(string_view const Path,
 		auto& [CurrentFile, CurrentLngName, CurrentCodepage] = CurrentFileData;
 
 		CurrentFile = os::fs::file(CurrentFileName, FILE_READ_DATA, FILE_SHARE_READ, nullptr, OPEN_EXISTING);
-		if (CurrentFile)
+		if (!CurrentFile)
+			continue;
+
+		CurrentCodepage = GetFileCodepage(CurrentFile, encoding::codepage::oem(), nullptr, false);
+
+		if (GetLangParam(CurrentFile, L"Language"sv, CurrentLngName, nullptr, CurrentCodepage) && equal_icase(CurrentLngName, Language))
 		{
-			CurrentCodepage = GetFileCodepage(CurrentFile, encoding::codepage::oem(), nullptr, false);
+			return CurrentFileData;
+		}
 
-			if (GetLangParam(CurrentFile, L"Language"sv, CurrentLngName, nullptr, CurrentCodepage) && equal_icase(CurrentLngName, Language))
-			{
-				return CurrentFileData;
-			}
-
-			if (equal_icase(CurrentLngName, L"English"sv))
-			{
-				EnglishFileData = std::move(CurrentFileData);
-			}
+		if (equal_icase(CurrentLngName, L"English"sv))
+		{
+			EnglishFileData = std::move(CurrentFileData);
 		}
 	}
 
@@ -113,31 +115,27 @@ bool GetLangParam(const os::fs::file& LangFile, string_view const ParamName, str
 		if (starts_with_icase(i.Str, strFullParamName))
 		{
 			const auto EqPos = i.Str.find(L'=');
+			if (EqPos == string::npos)
+				continue;
 
-			if (EqPos != string::npos)
+			strParam1 = i.Str.substr(EqPos + 1);
+
+			if (strParam2)
+				strParam2->clear();
+
+			if (const auto pos = strParam1.find(L','); pos != string::npos)
 			{
-				strParam1 = i.Str.substr(EqPos + 1);
-
 				if (strParam2)
-					strParam2->clear();
+					*strParam2 = trim_right(strParam1.substr(pos + 1));
 
-				const auto pos = strParam1.find(L',');
-
-				if (pos != string::npos)
-				{
-					if (strParam2)
-					{
-						*strParam2 = trim_right(strParam1.substr(pos + 1));
-					}
-
-					strParam1.resize(pos);
-				}
-
-				inplace::trim_right(strParam1);
-				return true;
+				strParam1.resize(pos);
 			}
+
+			inplace::trim_right(strParam1);
+			return true;
 		}
-		else if (starts_with(i.Str, L'"'))
+
+		if (starts_with(i.Str, L'"'))
 		{
 			// '"' indicates some meaningful string.
 			// Parameters can be only in the header, no point to go deeper
@@ -178,29 +176,26 @@ static bool SelectLanguage(bool HelpLanguage, string& Dest)
 
 		string strLangName, strLangDescr;
 
-		if (GetLangParam(LangFile, L"Language"sv, strLangName, &strLangDescr, Codepage))
-		{
-			string strEntryName;
+		if (!GetLangParam(LangFile, L"Language"sv, strLangName, &strLangDescr, Codepage))
+			continue;
 
-			if (!HelpLanguage || (
-				!GetLangParam(LangFile, L"PluginContents"sv, strEntryName, nullptr, Codepage) &&
-				!GetLangParam(LangFile, L"DocumentContents"sv, strEntryName, nullptr, Codepage)))
-			{
-				MenuItemEx LangMenuItem(!strLangDescr.empty()? strLangDescr : strLangName);
+		string strEntryName;
 
-				/* $ 01.08.2001 SVS
-				   Не допускаем дубликатов!
-				   Если в каталог с ФАРом положить еще один HLF с одноименным
-				   языком, то... фигня получается при выборе языка.
-				*/
-				if (LangMenu->FindItem(0,LangMenuItem.Name,LIFIND_EXACTMATCH) == -1)
-				{
-					LangMenuItem.SetSelect(equal_icase(Dest, strLangName));
-					LangMenuItem.ComplexUserData = strLangName;
-					LangMenu->AddItem(LangMenuItem);
-				}
-			}
-		}
+		if (HelpLanguage && (
+			GetLangParam(LangFile, L"PluginContents"sv, strEntryName, nullptr, Codepage) ||
+			GetLangParam(LangFile, L"DocumentContents"sv, strEntryName, nullptr, Codepage)
+		))
+			continue;
+
+		MenuItemEx LangMenuItem(!strLangDescr.empty()? strLangDescr : strLangName);
+
+		// No duplicate languages
+		if (LangMenu->FindItem(0, LangMenuItem.Name, LIFIND_EXACTMATCH) != -1)
+			continue;
+
+		LangMenuItem.SetSelect(equal_icase(Dest, strLangName));
+		LangMenuItem.ComplexUserData = strLangName;
+		LangMenu->AddItem(LangMenuItem);
 	}
 
 	LangMenu->AssignHighlights();
@@ -216,68 +211,54 @@ static bool SelectLanguage(bool HelpLanguage, string& Dest)
 bool SelectInterfaceLanguage(string& Dest) {return SelectLanguage(false, Dest);}
 bool SelectHelpLanguage(string& Dest) {return SelectLanguage(true, Dest);}
 
+static wchar_t extract(string_view::const_iterator& Iterator, string_view::const_iterator const End)
+{
+	switch (*Iterator)
+	{
+	case L'\\':
+		if (++Iterator == End)
+			return L'\\';
+
+		switch (*Iterator)
+		{
+		case L'\\': return L'\\';
+		case L'"':  return L'"';
+		case L'n':  return L'\n';
+		case L'r':  return L'\r';
+		case L'b':  return L'\b';
+		case L't':  return L'\t';
+
+		default:
+			--Iterator;
+			return L'\\';
+		}
+
+	case L'"':
+		if (++Iterator != End && *Iterator != L'"')
+			--Iterator;
+		return L'"';
+
+	default:
+		return *Iterator;
+	}
+}
+
 static string ConvertString(const string_view Src)
 {
+	const auto SpecialPos = Src.find_first_of(L"\\\""sv);
+	if (SpecialPos == Src.npos)
+		return string(Src);
+
 	string Result;
 	Result.reserve(Src.size());
 
-	for (auto i = Src.begin(); i != Src.end(); ++i)
+	Result.assign(Src.substr(0, SpecialPos));
+
+	for (auto i = Src.begin() + SpecialPos, End = Src.end(); i != End; ++i)
 	{
-		switch (*i)
-		{
-		case L'\\':
-			if (++i == Src.end())
-			{
-				Result.push_back(L'\\');
-				return Result;
-			}
-
-			switch (*i)
-			{
-			case L'\\':
-				Result.push_back(L'\\');
-				break;
-
-			case L'"':
-				Result.push_back(L'"');
-				break;
-
-			case L'n':
-				Result.push_back(L'\n');
-				break;
-
-			case L'r':
-				Result.push_back(L'\r');
-				break;
-
-			case L'b':
-				Result.push_back(L'\b');
-				break;
-
-			case L't':
-				Result.push_back('\t');
-				break;
-
-			default:
-				Result.push_back(L'\\');
-				--i;
-				break;
-			}
+		Result.push_back(extract(i, End));
+		if (i == End)
 			break;
-
-		case L'"':
-			Result.push_back(L'"');
-			if (++i == Src.end())
-				return Result;
-
-			if (*i != L'"')
-				--i;
-			break;
-
-		default:
-			Result.push_back(*i);
-			break;
-		}
 	}
 
 	return Result;
@@ -315,19 +296,17 @@ static lng_line_type parse_lng_line(const string_view str, bool ParseLabels, str
 	}
 
 	//-- MLabel="Text"
-	if (ParseLabels && !str.empty() && str.back() == L'"')
+	if (ParseLabels && ends_with(str, L'"') && std::iswalpha(str.front()))
 	{
-		const auto eq_pos = str.find(L'=');
-		if (eq_pos != str.npos && std::iswalpha(str[0]))
-		{
-			const auto Value = trim(str.substr(eq_pos + 1));
+		auto [Name, Value] = split(str);
+		inplace::trim(Name);
+		inplace::trim(Value);
 
-			if (starts_with(Value, L'"'))
-			{
-				Label = trim(str.substr(0, eq_pos));
-				Data = Value.substr(1, Value.size() - 2);
-				return lng_line_type::both;
-			}
+		if (!Name.empty() && Value.size() > 1 && starts_with(Value, L'"'))
+		{
+			Label = Name;
+			Data = Value.substr(1, Value.size() - 2);
+			return lng_line_type::both;
 		}
 	}
 
@@ -342,14 +321,15 @@ public:
 	void reserve(size_t Size) override { return m_Messages.reserve(Size); }
 	void add(string&& Str) override { m_Messages.emplace_back(std::move(Str)); }
 	void set_at(size_t Index, string&& Str) override { m_Messages[Index] = std::move(Str); }
-	const string& at(size_t Index) const override { return m_Messages[Index]; }
 	size_t size() const override { return m_Messages.size(); }
+
+	const string& at(size_t Index) const { return m_Messages[Index]; }
 
 private:
 	std::vector<string> m_Messages;
 };
 
-static void LoadCustomStrings(const string& FileName, std::unordered_map<string, string>& Strings)
+static void LoadCustomStrings(string_view const FileName, std::unordered_map<string, string>& Strings)
 {
 	const os::fs::file CustomFile(FileName, FILE_READ_DATA, FILE_SHARE_READ, nullptr, OPEN_EXISTING);
 	if (!CustomFile)
@@ -387,9 +367,9 @@ static void LoadCustomStrings(const string& FileName, std::unordered_map<string,
 	}
 }
 
-void language::load(string_view const Path, string_view const Language, int CountNeed) const
+void language::load(string_view const Path, string_view const Language, int CountNeed)
 {
-	SCOPED_ACTION(GuardLastError);
+	SCOPED_ACTION(os::last_error_guard);
 
 	auto Data = m_Data->create();
 
@@ -490,21 +470,19 @@ bool i_language_data::validate(size_t MsgId) const
 }
 
 plugin_language::plugin_language(string_view const Path, string_view const Language):
-	language(m_Data),
-	m_Data(std::make_unique<language_data>())
+	language(std::make_unique<language_data>())
 {
 	load(Path, Language);
 }
 
 const wchar_t* plugin_language::Msg(intptr_t Id) const
 {
-	return m_Data->validate(Id)? m_Data->at(Id).c_str() : L"";
+	return m_Data->validate(Id)? static_cast<const language_data&>(*m_Data).at(Id).c_str() : L"";
 }
 
 
 far_language::far_language():
-	language(m_Data),
-	m_Data(std::make_unique<language_data>())
+	language(std::make_unique<language_data>())
 {
 }
 
@@ -537,15 +515,16 @@ TEST_CASE("language.parser")
 	}
 	Tests[]
 	{
-		{ L"\"Text\""sv,    {},          L"Text"sv,  lng_line_type::text,  },
-		{ L"\"Text"sv,      {},          L"Text"sv,  lng_line_type::text,  },
-		{ L"//[Label]"sv,   L"Label"sv,  {},         lng_line_type::label, },
-		{ L"//[Lab"sv,      {},          {},         lng_line_type::none,  },
-		{ L"foo=\"bar\""sv, L"foo"sv,    L"bar"sv,   lng_line_type::both,  },
-		{ L"foo=\"bar"sv,   {},          {},         lng_line_type::none,  },
-		{ L"foo=bar"sv,     {},          {},         lng_line_type::none,  },
-		{ L"foo="sv,        {},          {},         lng_line_type::none,  },
-		{ L"foo"sv,         {},          {},         lng_line_type::none,  },
+		{ L"\"Text\""sv,      {},          L"Text"sv,  lng_line_type::text,  },
+		{ L"\"Text"sv,        {},          L"Text"sv,  lng_line_type::text,  },
+		{ L"//[Label]"sv,     L"Label"sv,  {},         lng_line_type::label, },
+		{ L"//[Lab"sv,        {},          {},         lng_line_type::none,  },
+		{ L"foo = \"bar\""sv, L"foo"sv,    L"bar"sv,   lng_line_type::both,  },
+		{ L"foo=\"bar"sv,     {},          {},         lng_line_type::none,  },
+		{ L"foo=bar\""sv,     {},          {},         lng_line_type::none,  },
+		{ L"foo=bar"sv,       {},          {},         lng_line_type::none,  },
+		{ L"foo="sv,          {},          {},         lng_line_type::none,  },
+		{ L"foo"sv,           {},          {},         lng_line_type::none,  },
 	};
 
 	for (const auto& i: Tests)
@@ -555,6 +534,34 @@ TEST_CASE("language.parser")
 		REQUIRE(i.Result == Result);
 		REQUIRE(i.Label == Label);
 		REQUIRE(i.Data == Data);
+	}
+}
+
+TEST_CASE("language.escape")
+{
+	static const struct
+	{
+		string_view Str, Result;
+	}
+	Tests[]
+	{
+		{ {},          {},         },
+		{ L"y"sv,      L"y"sv,     },
+		{ L"\\y"sv,    L"\\y"sv,   },
+		{ L"\\"sv,     L"\\"sv,    },
+		{ L"\\x"sv,    L"\\x"sv,   },
+		{ L"\\r"sv,    L"\r"sv,    },
+		{ L"\\n"sv,    L"\n"sv,    },
+		{ L"\\t"sv,    L"\t"sv,    },
+		{ L"\""sv,     L"\""sv,    },
+		{ L"\\\\"sv,   L"\\"sv,    },
+		{ L"\\b"sv,    L"\b"sv,    },
+	};
+
+	for (const auto& i: Tests)
+	{
+		const auto Result = ConvertString(i.Str);
+		REQUIRE(i.Result == Result);
 	}
 }
 #endif

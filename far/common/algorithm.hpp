@@ -37,17 +37,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-// for_each with embedded counter
-template<class I, class F>
-F for_each_cnt(I First, I Last, F Func)
-{
-	for (size_t Cnt = 0; First != Last; ++First, ++Cnt)
-	{
-		Func(*First, Cnt);
-	}
-	return Func;
-}
-
 template<class T>
 void repeat(size_t count, const T& f)
 {
@@ -55,30 +44,6 @@ void repeat(size_t count, const T& f)
 	{
 		f();
 	}
-}
-
-template <class I, class T, class P>
-void fill_if(I First, I Last, const T& Value, P Predicate)
-{
-	while (First != Last)
-	{
-		if (Predicate(*First))
-			*First = Value;
-		++First;
-	}
-}
-
-template <class I, class N, class T, class P>
-I fill_n_if(I First, N Size, const T& Value, P Predicate)
-{
-	while (Size > 0)
-	{
-		if (Predicate(*First))
-			*First = Value;
-		++First;
-		--Size;
-	}
-	return First;
 }
 
 template<typename Iter1, typename Iter2>
@@ -113,53 +78,6 @@ void apply_permutation(Iter1 first, Iter1 last, Iter2 indices)
 
 namespace detail
 {
-	template <typename container, typename predicate>
-	void associative_erase_if(container& Container, const predicate& Predicate)
-	{
-		for (auto i = Container.begin(), End = Container.end(); i != End; )
-		{
-			if (Predicate(*i))
-			{
-				i = Container.erase(i);
-			}
-			else
-			{
-				++i;
-			}
-		}
-	}
-}
-
-// TODO: add proper overloads as per Library fundamentals TS v2: Uniform container erasure.
-// Consider moving to cpp.hpp / std::experimental namespace for GCC, or just #include <experimental/...> for VS.
-
-template <typename predicate, typename... traits>
-void erase_if(std::set<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::multiset<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::map<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::multimap<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::unordered_set<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::unordered_multiset<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::unordered_map<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-template <typename predicate, typename... traits>
-void erase_if(std::unordered_multimap<traits...>& Container, predicate Predicate) { detail::associative_erase_if(Container, Predicate); }
-
-
-namespace detail
-{
 	template<typename T>
 	using try_emplace_hint = decltype(std::declval<T&>().emplace_hint(std::declval<T&>().end(), *std::declval<T&>().begin()));
 
@@ -190,7 +108,7 @@ namespace detail
 
 template<typename container, typename element, REQUIRES(is_range_v<container>)>
 [[nodiscard]]
-bool contains(const container& Container, const element& Element)
+constexpr bool contains(const container& Container, const element& Element)
 {
 	if constexpr (detail::has_find_v<container>)
 	{
@@ -206,9 +124,23 @@ bool contains(const container& Container, const element& Element)
 }
 
 template<typename min_type, typename value_type, typename max_type>
-constexpr bool in_range(min_type const& Min, value_type const& Value, max_type const& Max)
+constexpr bool in_closed_range(min_type const& Min, value_type const& Value, max_type const& Max)
 {
 	return Min <= Value && Value <= Max;
+}
+
+template<typename arg, typename... args>
+constexpr bool any_of(arg const& Arg, args const... Args)
+{
+	static_assert(sizeof...(Args));
+
+	return (... || (Arg == Args));
+}
+
+template<typename... args>
+constexpr bool none_of(args const... Args)
+{
+	return !any_of(Args...);
 }
 
 #endif // ALGORITHM_HPP_BBD588C0_4752_46B2_AAB9_65450622FFF0

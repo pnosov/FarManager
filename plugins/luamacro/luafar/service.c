@@ -196,7 +196,7 @@ static TSynchroData* CreateSynchroData(TTimerData *td, int action, int data)
 	return SD;
 }
 
-HANDLE OptHandle(lua_State *L)
+static HANDLE OptHandle(lua_State *L)
 {
 	switch(lua_type(L,1))
 	{
@@ -204,7 +204,11 @@ HANDLE OptHandle(lua_State *L)
 		case LUA_TNIL:
 			break;
 		case LUA_TNUMBER:
-			return (HANDLE)lua_tointeger(L,1);
+		{
+			lua_Integer whatPanel = lua_tointeger(L,1);
+			HANDLE hh = (HANDLE)whatPanel;
+			return (hh==PANEL_PASSIVE || hh==PANEL_ACTIVE) ? hh : whatPanel%2 ? PANEL_ACTIVE:PANEL_PASSIVE;
+		}
 		case LUA_TUSERDATA:
 			return *(HANDLE*)luaL_checkudata(L, 1, PluginHandleType);
 		case LUA_TLIGHTUSERDATA:
@@ -215,7 +219,7 @@ HANDLE OptHandle(lua_State *L)
 	return NULL;
 }
 
-HANDLE OptHandle2(lua_State *L)
+static HANDLE OptHandle2(lua_State *L)
 {
 	return lua_isnoneornil(L,1) ? (luaL_checkinteger(L,2) % 2 ? PANEL_ACTIVE:PANEL_PASSIVE) : OptHandle(L);
 }
@@ -528,7 +532,7 @@ static void FillEditorSetPosition(lua_State *L, struct EditorSetPosition *esp)
 	esp->Overtype  = GetOptIntFromTable(L, "Overtype", -1);
 }
 
-void PushPanelItem(lua_State *L, const struct PluginPanelItem *PanelItem)
+void PushPanelItem(lua_State *L, const struct PluginPanelItem *PanelItem, int NoUserData)
 {
 	lua_createtable(L, 0, 16); // "PanelItem"
 	//-----------------------------------------------------------------------
@@ -564,29 +568,42 @@ void PushPanelItem(lua_State *L, const struct PluginPanelItem *PanelItem)
 		lua_setfield(L, -2, "CustomColumnData");
 	}
 
-	if(PanelItem->UserData.Data && PanelItem->UserData.FreeData==FarPanelItemFreeCallback)
+	if (PanelItem->UserData.Data)
 	{
-		// This is a panel of a LuaFAR plugin
-		FarPanelItemUserData* ud = (FarPanelItemUserData*)PanelItem->UserData.Data;
-
-		// Compare registries rather than Lua states to allow for different coroutines of the same state
-		if(lua_topointer(ud->L, LUA_REGISTRYINDEX) == lua_topointer(L, LUA_REGISTRYINDEX))
+		if (!NoUserData)
 		{
-			lua_rawgeti(L, LUA_REGISTRYINDEX, ud->ref);
-			lua_setfield(L, -2, "UserData");
+			if (PanelItem->UserData.FreeData==FarPanelItemFreeCallback)
+			{
+				// This is a panel of a LuaFAR plugin
+				FarPanelItemUserData* ud = (FarPanelItemUserData*)PanelItem->UserData.Data;
+
+				// Compare registries rather than Lua states to allow for different coroutines of the same state
+				if(lua_topointer(ud->L, LUA_REGISTRYINDEX) == lua_topointer(L, LUA_REGISTRYINDEX))
+				{
+					lua_rawgeti(L, LUA_REGISTRYINDEX, ud->ref);
+					lua_setfield(L, -2, "UserData");
+				}
+			}
+		}
+		else
+		{
+			lua_pushlightuserdata(L, PanelItem->UserData.Data);
+			lua_setfield(L, -2, "ExtUserData"); //use field name different from "UserData" to distinguish later
+			lua_pushlightuserdata(L, PanelItem->UserData.FreeData);
+			lua_setfield(L, -2, "FreeUserData");
 		}
 	}
 }
 //---------------------------------------------------------------------------
 
-void PushPanelItems(lua_State *L, const struct PluginPanelItem *PanelItems, size_t ItemsNumber)
+void PushPanelItems(lua_State *L, const struct PluginPanelItem *PanelItems, size_t ItemsNumber, int NoUserData)
 {
 	int i;
 	lua_createtable(L, (int)ItemsNumber, 0); // "PanelItems"
 
 	for(i=0; i < (int)ItemsNumber; i++)
 	{
-		PushPanelItem(L, PanelItems + i);
+		PushPanelItem(L, PanelItems + i, NoUserData);
 		lua_rawseti(L, -2, i+1);
 	}
 }
@@ -1758,7 +1775,7 @@ static int far_Menu(lua_State *L)
 		lua_replace(L,3);
 	}
 	else
-	  NumBreakCodes = lua_istable(L,3) ? (int)lua_objlen(L,3) : 0;
+		NumBreakCodes = lua_istable(L,3) ? (int)lua_objlen(L,3) : 0;
 
 	if(NumBreakCodes)
 	{
@@ -2171,7 +2188,7 @@ static int get_panel_item(lua_State *L, int command)
 			fgppi.Item = (struct PluginPanelItem*)lua_newuserdata(L, fgppi.Size);
 			if(Info->PanelControl(handle, command, index, &fgppi))
 			{
-				PushPanelItem(L, fgppi.Item);
+				PushPanelItem(L, fgppi.Item, 0);
 				return 1;
 			}
 		}
@@ -2586,7 +2603,7 @@ static int far_GetDirList(lua_State *L)
 
 		for(i=0; i < (int)ItemsNumber; i++)
 		{
-			PushPanelItem(L, PanelItems + i);
+			PushPanelItem(L, PanelItems + i, 0);
 			lua_rawseti(L, -2, i+1);
 		}
 
@@ -2611,7 +2628,7 @@ static int far_GetPluginDirList(lua_State *L)
 
 	if(pd->Info->GetPluginDirList(pd->PluginId, handle, Dir, &PanelItems, &ItemsNumber))
 	{
-		PushPanelItems(L, PanelItems, ItemsNumber);
+		PushPanelItems(L, PanelItems, ItemsNumber, 0);
 		pd->Info->FreePluginDirList(handle, PanelItems, ItemsNumber);
 	}
 	else
@@ -2925,8 +2942,7 @@ static int SetDlgItem(lua_State *L, HANDLE hDlg, int numitem, int pos_table,
 	return 1;
 }
 
-TDialogData* NewDialogData(lua_State* L, PSInfo *Info, HANDLE hDlg,
-                           BOOL isOwned)
+TDialogData* NewDialogData(lua_State* L, PSInfo *Info, HANDLE hDlg, BOOL isOwned)
 {
 	TDialogData *dd = (TDialogData*) lua_newuserdata(L, sizeof(TDialogData));
 	dd->L        = GetPluginData(L)->MainLuaState;
@@ -4512,7 +4528,7 @@ static int WINAPI FrsUserFunc(const struct PluginPanelItem *FData, const wchar_t
 		return TRUE; // attributes mismatch
 
 	lua_pushvalue(L, 3); // push the Lua function
-	PushPanelItem(L, FData);
+	PushPanelItem(L, FData, 0);
 	push_utf8_string(L, FullName, -1);
 	for (i=1; i<=Data->nparams; i++)
 		lua_pushvalue(L, 4+i);
@@ -5155,8 +5171,7 @@ static int far_CreateFileFilter(lua_State *L)
 	int filterType = CAST(int, check_env_flag(L,2));
 	HANDLE* pOutHandle = (HANDLE*)lua_newuserdata(L, sizeof(HANDLE));
 
-	if(Info->FileFilterControl(hHandle, FFCTL_CREATEFILEFILTER, filterType,
-	                           pOutHandle))
+	if(Info->FileFilterControl(hHandle, FFCTL_CREATEFILEFILTER, filterType, pOutHandle))
 	{
 		luaL_getmetatable(L, FarFileFilterType);
 		lua_setmetatable(L, -2);
@@ -5975,6 +5990,260 @@ static int far_FileTimeResolution(lua_State *L)
 	return 1;
 }
 
+static HMODULE GetPluginModuleHandle(const PSInfo *psInfo, GUID* PluginGuid)
+{
+	HMODULE dll_handle = NULL;
+	intptr_t plug_handle;
+	if (0 != (plug_handle = psInfo->PluginsControl(NULL, PCTL_FINDPLUGIN, PFM_GUID, PluginGuid)))
+	{
+		size_t size = psInfo->PluginsControl((HANDLE)plug_handle, PCTL_GETPLUGININFORMATION, 0, NULL);
+		if (size != 0)
+		{
+			struct FarGetPluginInformation *piInfo = (struct FarGetPluginInformation *) malloc(size);
+			if (piInfo != NULL)
+			{
+				piInfo->StructSize = sizeof(*piInfo);
+				if (psInfo->PluginsControl((HANDLE)plug_handle, PCTL_GETPLUGININFORMATION, size, piInfo))
+					dll_handle = GetModuleHandleW(piInfo->ModuleName);
+				free(piInfo);
+			}
+		}
+	}
+	return dll_handle;
+}
+
+static int far_host_GetFiles(lua_State *L)
+{
+	typedef intptr_t (WINAPI * T_GetFilesW)(struct GetFilesInfo *);
+	T_GetFilesW getfiles;
+	struct PanelInfo panInfo;
+	struct GetFilesInfo gfInfo;
+	HMODULE dll_handle;
+	PSInfo *psInfo = GetPluginData(L)->Info;
+	HANDLE panHandle = OptHandle(L); //1-st argument
+	int collectorPos;
+	struct PluginPanelItem *ppi, *ppi_curr;
+	size_t i, numLines;
+
+	luaL_checktype(L, 2, LUA_TTABLE);  //2-nd argument
+	numLines = lua_objlen(L, 2);
+	memset(&gfInfo, 0, sizeof(gfInfo));
+	gfInfo.StructSize = sizeof(gfInfo);
+	gfInfo.Move = lua_toboolean(L, 3); //3-rd argument
+	gfInfo.DestPath = check_utf8_string(L, 4, NULL); //4-th argument
+	gfInfo.OpMode = luaL_optinteger(L, 5, (lua_Integer)(OPM_FIND|OPM_SILENT)); //5-th argument
+
+	lua_pushinteger(L,0);  //prepare to return 0
+
+	panInfo.StructSize = sizeof(panInfo);
+	if (! (panHandle && psInfo->PanelControl(panHandle,FCTL_GETPANELINFO,0,&panInfo) && panInfo.PluginHandle) )
+		return 1;
+	gfInfo.hPanel = panInfo.PluginHandle;
+
+	if (NULL == (dll_handle = GetPluginModuleHandle(psInfo, &panInfo.OwnerGuid)))
+		return 1;
+
+	if (NULL == (getfiles = (T_GetFilesW)GetProcAddress(dll_handle, "GetFilesW")))
+		return 1;
+
+	ppi = (struct PluginPanelItem *)malloc(sizeof(struct PluginPanelItem) * numLines);
+	if (ppi == NULL)
+		return luaL_error(L, "insufficient memory");
+
+	lua_newtable(L);
+	collectorPos = lua_gettop(L);
+	for(i=1,ppi_curr=ppi; i<=numLines; i++)
+	{
+		lua_pushinteger(L, i);
+		lua_gettable(L, 2);
+		if(lua_istable(L,-1))
+			FillPluginPanelItem(L, ppi_curr++, collectorPos);
+		lua_pop(L,1);
+	}
+	gfInfo.ItemsNumber = ppi_curr - ppi;
+	gfInfo.PanelItem = ppi;
+
+	lua_pushinteger(L, getfiles(&gfInfo));
+	free(ppi);
+	return 1;
+}
+
+static int far_host_PutFiles(lua_State *L)
+{
+	typedef intptr_t (WINAPI * T_PutFilesW)(const struct PutFilesInfo *);
+	T_PutFilesW putfiles;
+	struct PanelInfo panInfo;
+	struct PutFilesInfo pfInfo;
+	HMODULE dll_handle;
+	PSInfo *psInfo = GetPluginData(L)->Info;
+	HANDLE panHandle = OptHandle(L); //1-st argument
+	int collectorPos;
+	struct PluginPanelItem *ppi, *ppi_curr;
+	size_t i, numLines;
+
+	luaL_checktype(L, 2, LUA_TTABLE);  //2-nd argument
+	numLines = lua_objlen(L, 2);
+	memset(&pfInfo, 0, sizeof(pfInfo));
+	pfInfo.StructSize = sizeof(pfInfo);
+	pfInfo.Move = lua_toboolean(L, 3); //3-rd argument
+	pfInfo.SrcPath = check_utf8_string(L, 4, NULL); //4-th argument
+	pfInfo.OpMode = luaL_optinteger(L, 5, (lua_Integer)(OPM_SILENT)); //5-th argument
+
+	lua_pushinteger(L,0);  //prepare to return 0
+
+	panInfo.StructSize = sizeof(panInfo);
+	if (! (panHandle && psInfo->PanelControl(panHandle,FCTL_GETPANELINFO,0,&panInfo) && panInfo.PluginHandle) )
+		return 1;
+	pfInfo.hPanel = panInfo.PluginHandle;
+
+	if (NULL == (dll_handle = GetPluginModuleHandle(psInfo, &panInfo.OwnerGuid)))
+		return 1;
+
+	if (NULL == (putfiles = (T_PutFilesW)GetProcAddress(dll_handle, "PutFilesW")))
+		return 1;
+
+	ppi = (struct PluginPanelItem *)malloc(sizeof(struct PluginPanelItem) * numLines);
+	if (ppi == NULL)
+		return luaL_error(L, "insufficient memory");
+
+	lua_newtable(L);
+	collectorPos = lua_gettop(L);
+	for(i=1,ppi_curr=ppi; i<=numLines; i++)
+	{
+		lua_pushinteger(L, i);
+		lua_gettable(L, 2);
+		if(lua_istable(L,-1))
+			FillPluginPanelItem(L, ppi_curr++, collectorPos);
+		lua_pop(L,1);
+	}
+	pfInfo.ItemsNumber = ppi_curr - ppi;
+	pfInfo.PanelItem = ppi;
+
+	lua_pushinteger(L, putfiles(&pfInfo));
+	free(ppi);
+	return 1;
+}
+
+static int far_host_GetFindData(lua_State *L)
+{
+	typedef intptr_t (WINAPI * T_GetFindDataW)(const struct GetFindDataInfo *);
+	typedef void     (WINAPI * T_FreeFindDataW)(const struct FreeFindDataInfo *);
+	T_GetFindDataW getfinddata;
+	T_FreeFindDataW freefinddata;
+	struct PanelInfo panInfo;
+	struct GetFindDataInfo gfdInfo;
+	HMODULE dll_handle;
+	PSInfo *psInfo = GetPluginData(L)->Info;
+	HANDLE panHandle = OptHandle(L); //1-st argument
+
+	lua_settop(L, 2); //2 arguments at most
+	lua_pushnil(L);  //prepare to return nil
+	panInfo.StructSize = sizeof(panInfo);
+	if (! (panHandle && psInfo->PanelControl(panHandle,FCTL_GETPANELINFO,0,&panInfo) && panInfo.PluginHandle) )
+		return 1;
+
+	if (NULL == (dll_handle = GetPluginModuleHandle(psInfo, &panInfo.OwnerGuid)))
+		return 1;
+
+	getfinddata = (T_GetFindDataW)GetProcAddress(dll_handle, "GetFindDataW");
+	memset(&gfdInfo, 0, sizeof(gfdInfo));
+	gfdInfo.StructSize = sizeof(gfdInfo);
+	gfdInfo.OpMode = luaL_optinteger(L, 2, (lua_Integer)(OPM_FIND | OPM_SILENT)); //2-nd argument
+	gfdInfo.hPanel = panInfo.PluginHandle;
+	if (! (getfinddata && getfinddata(&gfdInfo)))
+		return 1;
+
+	PushPanelItems(L, gfdInfo.PanelItem, gfdInfo.ItemsNumber, 1); //this will be returned
+
+	//as the panel items have been copied (internalized) they should be freed
+	freefinddata = (T_FreeFindDataW)GetProcAddress(dll_handle, "FreeFindDataW");
+	if (freefinddata)
+	{
+		struct FreeFindDataInfo ffdInfo;
+		ffdInfo.StructSize = sizeof(ffdInfo);
+		ffdInfo.hPanel = panInfo.PluginHandle;
+		ffdInfo.PanelItem = gfdInfo.PanelItem;
+		ffdInfo.ItemsNumber = gfdInfo.ItemsNumber;
+		freefinddata(&ffdInfo);
+	}
+	return 1;
+}
+
+static int far_host_FreeUserData(lua_State *L)
+{
+	struct FarPanelItemFreeInfo freeInfo;
+	size_t ItemsNumber, idx;
+
+	luaL_checktype(L, 1, LUA_TUSERDATA);
+	freeInfo.hPlugin = lua_touserdata(L, 1);
+
+	luaL_checktype(L, 2, LUA_TTABLE);
+	ItemsNumber = lua_objlen(L, 2);
+
+	freeInfo.StructSize = sizeof(freeInfo);
+	for (idx=0; idx < ItemsNumber; idx++)
+	{
+		lua_rawgeti(L, 2, (int)idx+1);
+		if (lua_istable(L, -1))
+		{
+			void *UserData;
+			FARPANELITEMFREECALLBACK FreeData;
+
+			lua_getfield(L, -1, "ExtUserData");
+			UserData = lua_touserdata(L, -1);
+			lua_pop(L, 1);
+
+			lua_getfield(L, -1, "FreeUserData");
+			FreeData = (FARPANELITEMFREECALLBACK) lua_touserdata(L, -1);
+			lua_pop(L, 1);
+
+			if (UserData && FreeData)
+				FreeData(UserData, &freeInfo);
+		}
+		lua_pop(L, 1);
+	}
+	return 0;
+}
+
+static int far_host_SetDirectory(lua_State *L)
+{
+	typedef intptr_t (WINAPI * T_SetDirectoryW)(const struct SetDirectoryInfo *);
+	T_SetDirectoryW setdirectory;
+	struct PanelInfo panInfo;
+	struct SetDirectoryInfo sdInfo;
+	HMODULE dll_handle;
+	PSInfo *psInfo = GetPluginData(L)->Info;
+	HANDLE panHandle = OptHandle(L); //1-st argument
+	const wchar_t *dir_name = check_utf8_string(L, 2, NULL); //2-nd argument
+
+	lua_settop(L, 3); //3 arguments at most
+	lua_pushboolean(L,0);  //prepare to return false
+	panInfo.StructSize = sizeof(panInfo);
+	if (! (panHandle && psInfo->PanelControl(panHandle, FCTL_GETPANELINFO, 0, &panInfo) && panInfo.PluginHandle) )
+		return 1;
+
+	if (NULL == (dll_handle = GetPluginModuleHandle(psInfo, &panInfo.OwnerGuid)))
+		return 1;
+
+	memset(&sdInfo, 0, sizeof(sdInfo));
+	sdInfo.StructSize = sizeof(sdInfo);
+	sdInfo.Dir = dir_name;
+	sdInfo.OpMode = luaL_optinteger(L, 3, (lua_Integer)(OPM_FIND | OPM_SILENT)); //3-rd argument
+	sdInfo.hPanel = panInfo.PluginHandle;
+
+	setdirectory = (T_SetDirectoryW)GetProcAddress(dll_handle, "SetDirectoryW");
+	if (setdirectory && setdirectory(&sdInfo))
+	{
+		if (sdInfo.UserData.FreeData)
+		{
+			struct FarPanelItemFreeInfo fInfo = { sizeof(struct FarPanelItemFreeInfo), panInfo.PluginHandle };
+			sdInfo.UserData.FreeData(sdInfo.UserData.Data, &fInfo);
+		}
+		lua_pushboolean(L,1);  //prepare to return true
+	}
+	return 1;
+}
+
 const luaL_Reg timer_methods[] =
 {
 	{"__gc",                timer_gc},
@@ -6201,6 +6470,17 @@ const luaL_Reg far_funcs[] =
 	{NULL, NULL}
 };
 
+const luaL_Reg far_host_funcs[] =
+{
+	{"GetFiles",      far_host_GetFiles},
+	{"PutFiles",      far_host_PutFiles},
+	{"GetFindData",   far_host_GetFindData},
+	{"SetDirectory",  far_host_SetDirectory},
+	{"FreeUserData",  far_host_FreeUserData},
+
+	{NULL, NULL}
+};
+
 const char far_Dialog[] =
 "function far.Dialog (Id,X1,Y1,X2,Y2,HelpTopic,Items,Flags,DlgProc)\n\
   local hDlg = far.DialogInit(Id,X1,Y1,X2,Y2,HelpTopic,Items,Flags,DlgProc)\n\
@@ -6237,6 +6517,10 @@ static int luaopen_far(lua_State *L)
 	NewVirtualKeyTable(L, FALSE);
 	lua_setfield(L, LUA_REGISTRYINDEX, FAR_VIRTUALKEYS);
 	luaL_register(L, "far", far_funcs);
+
+	lua_newtable(L); //far.Host namespace
+	luaL_register(L, NULL, far_host_funcs);
+	lua_setfield(L, -2, "Host");
 
 	if (GetPluginData(L)->Info->Private)
 	{

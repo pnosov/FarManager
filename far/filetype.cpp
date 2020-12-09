@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "filetype.hpp"
 
@@ -51,9 +54,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fnparce.hpp"
 #include "configdb.hpp"
 #include "lang.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "global.hpp"
-#include "delete.hpp"
+#include "keyboard.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
@@ -98,9 +101,9 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 		{
 			strCommand.clear();
 
-			if (FMask.Set(Mask, FMF_SILENT))
+			if (FMask.assign(Mask, FMF_SILENT))
 			{
-				if (FMask.Compare(Context.Name))
+				if (FMask.check(Context.Name))
 				{
 					ConfigProvider().AssocConfig()->GetCommand(Id, Mode, strCommand);
 
@@ -117,7 +120,7 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 
 			string strCommandText = strCommand;
 			if (
-				!SubstFileName(strCommandText, Context, nullptr, nullptr, true) ||
+				!SubstFileName(strCommandText, Context, {}, true) ||
 				// все "подставлено", теперь проверим условия "if exist"
 				!ExtractIfExistCommand(strCommandText)
 			)
@@ -126,7 +129,7 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 			ActualCmdCount++;
 
 			if (!strDescription.empty())
-				SubstFileName(strDescription, Context, nullptr, nullptr, true, {}, true);
+				SubstFileName(strDescription, Context, {}, true, {}, true);
 			else
 				strDescription = strCommandText;
 
@@ -163,16 +166,15 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 		strCommand = *TypesMenu->GetComplexUserDataPtr<string>(ExitCode);
 	}
 
-	delayed_deleter ListNames(false);
 	bool PreserveLFN = false;
-	if (SubstFileName(strCommand, Context, &ListNames, &PreserveLFN) && !strCommand.empty())
+	if (SubstFileName(strCommand, Context, &PreserveLFN) && !strCommand.empty())
 	{
-		SCOPED_ACTION(PreserveLongName)(ShortName, PreserveLFN);
+		SCOPED_ACTION(PreserveLongName)(Name, PreserveLFN);
 
 		execute_info Info;
 		Info.DisplayCommand = strCommand;
 		Info.Command = strCommand;
-		Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : ListNames.any()? execute_info::wait_mode::wait_idle : execute_info::wait_mode::no_wait;
+		Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : execute_info::wait_mode::if_needed;
 		Info.RunAs = RunAs;
 		// We've already processed them!
 		Info.UseAssociations = false;
@@ -263,20 +265,19 @@ bool GetFiletypeOpenMode(int keyPressed, FILETYPE_MODE& mode, bool& shouldForceI
 void ProcessExternal(string_view const Command, string_view const Name, string_view const ShortName, bool const AlwaysWaitFinish)
 {
 	string strExecStr(Command);
-	delayed_deleter ListNames(false);
 	bool PreserveLFN = false;
-	if (!SubstFileName(strExecStr, subst_context(Name, ShortName), &ListNames, &PreserveLFN) || strExecStr.empty())
+	if (!SubstFileName(strExecStr, subst_context(Name, ShortName), &PreserveLFN) || strExecStr.empty())
 		return;
 
 	// If you want your history to be usable - use full paths yourself. We cannot reliably substitute them.
 	Global->CtrlObject->ViewHistory->AddToHistory(strExecStr, AlwaysWaitFinish? HR_EXTERNAL_WAIT : HR_EXTERNAL);
 
-	SCOPED_ACTION(PreserveLongName)(ShortName, PreserveLFN);
+	SCOPED_ACTION(PreserveLongName)(Name, PreserveLFN);
 
 	execute_info Info;
 	Info.DisplayCommand = strExecStr;
 	Info.Command = strExecStr;
-	Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : ListNames.any()? execute_info::wait_mode::wait_idle : execute_info::wait_mode::no_wait;
+	Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : execute_info::wait_mode::if_needed;
 
 	Global->CtrlObject->CmdLine()->ExecString(Info);
 }
@@ -368,7 +369,7 @@ static intptr_t EditTypeRecordDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,v
 
 			if (Param1==ETR_BUTTON_OK)
 			{
-				return filemasks().Set(reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ETR_EDIT_MASKS, nullptr)));
+				return filemasks().assign(reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ETR_EDIT_MASKS, nullptr)));
 			}
 			break;
 
@@ -445,18 +446,20 @@ static bool EditTypeRecord(unsigned long long EditPos,bool NewRec)
 
 	if (Dlg->GetExitCode()==ETR_BUTTON_OK)
 	{
+		auto& Cfg = *ConfigProvider().AssocConfig();
+
 		if (NewRec)
 		{
-			EditPos = ConfigProvider().AssocConfig()->AddType(EditPos,EditDlg[ETR_EDIT_MASKS].strData,EditDlg[ETR_EDIT_DESCR].strData);
+			EditPos = Cfg.AddType(EditPos, EditDlg[ETR_EDIT_MASKS].strData, EditDlg[ETR_EDIT_DESCR].strData);
 		}
 		else
 		{
-			ConfigProvider().AssocConfig()->UpdateType(EditPos,EditDlg[ETR_EDIT_MASKS].strData,EditDlg[ETR_EDIT_DESCR].strData);
+			Cfg.UpdateType(EditPos, EditDlg[ETR_EDIT_MASKS].strData, EditDlg[ETR_EDIT_DESCR].strData);
 		}
 
 		for (int i=FILETYPE_EXEC,Item=ETR_EDIT_EXEC; i<=FILETYPE_ALTEDIT; i++,Item+=2)
 		{
-			ConfigProvider().AssocConfig()->SetCommand(EditPos,i,EditDlg[Item].strData,EditDlg[Item-1].Selected==BSTATE_CHECKED);
+			Cfg.SetCommand(EditPos, i, EditDlg[Item].strData, EditDlg[Item - 1].Selected == BSTATE_CHECKED);
 		}
 
 		return true;
@@ -492,7 +495,7 @@ void EditFileTypes()
 	const auto TypesMenu = VMenu2::create(msg(lng::MAssocTitle), {}, ScrY - 4);
 	TypesMenu->SetHelp(L"FileAssoc"sv);
 	TypesMenu->SetMenuFlags(VMENU_WRAPMODE);
-	TypesMenu->SetBottomTitle(msg(lng::MAssocBottom));
+	TypesMenu->SetBottomTitle(KeysToLocalizedText(KEY_INS, KEY_DEL, KEY_F4, KEY_CTRLUP, KEY_CTRLDOWN));
 	TypesMenu->SetId(FileAssocMenuId);
 
 	bool Changed = false;
@@ -551,10 +554,10 @@ void EditFileTypes()
 				case KEY_CTRLDOWN:
 				case KEY_RCTRLDOWN:
 				{
-					if (!((Key==KEY_CTRLUP || Key==KEY_RCTRLUP) && !MenuPos) &&
-						!((Key == KEY_CTRLDOWN || Key == KEY_RCTRLDOWN) && MenuPos == static_cast<int>(TypesMenu->size() - 1)))
+					if (!(any_of(Key, KEY_CTRLUP, KEY_RCTRLUP) && !MenuPos) &&
+						!(any_of(Key, KEY_CTRLDOWN, KEY_RCTRLDOWN) && MenuPos == static_cast<int>(TypesMenu->size() - 1)))
 					{
-						const auto NewMenuPos = MenuPos + ((Key == KEY_CTRLUP || Key == KEY_RCTRLUP) ? -1 : +1);
+						const auto NewMenuPos = MenuPos + (any_of(Key, KEY_CTRLUP, KEY_RCTRLUP) ? -1 : 1);
 						if (const auto IdPtr = TypesMenu->GetComplexUserDataPtr<unsigned long long>(MenuPos))
 						{
 							if (const auto IdPtr2 = TypesMenu->GetComplexUserDataPtr<unsigned long long>(NewMenuPos))

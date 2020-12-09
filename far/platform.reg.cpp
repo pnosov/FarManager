@@ -29,6 +29,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "platform.reg.hpp"
 
@@ -48,7 +51,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace
 {
-	static bool is_string_type(DWORD Type)
+	static constexpr bool is_string_type(DWORD Type)
 	{
 		return Type == REG_SZ || Type == REG_EXPAND_SZ || Type == REG_MULTI_SZ;
 	}
@@ -64,7 +67,7 @@ namespace
 		return Result == ERROR_SUCCESS;
 	}
 
-	static bool query_value(const HKEY Key, const string_view Name, DWORD& Type, std::vector<char>& Value)
+	static bool query_value(const HKEY Key, const string_view Name, DWORD& Type, bytes& Value)
 	{
 		size_t Size = 0;
 		if (!query_value(Key, Name, nullptr, nullptr, &Size))
@@ -101,36 +104,46 @@ namespace os::reg
 
 	bool key::enum_keys(size_t Index, string& Name) const
 	{
-		return detail::ApiDynamicErrorBasedStringReceiver(ERROR_MORE_DATA, Name, [&](span<wchar_t> Buffer)
+		return detail::ApiDynamicStringReceiver(Name, [&](span<wchar_t> const Buffer)
 		{
 			auto RetSize = static_cast<DWORD>(Buffer.size());
-			const auto ExitCode = RegEnumKeyEx(native_handle(), static_cast<DWORD>(Index), Buffer.data(), &RetSize, nullptr, nullptr, nullptr, nullptr);
-			if (ExitCode != ERROR_SUCCESS)
+			switch (RegEnumKeyEx(native_handle(), static_cast<DWORD>(Index), Buffer.data(), &RetSize, {}, {}, {}, {}))
 			{
-				SetLastError(ExitCode);
-				return DWORD(0);
+			case ERROR_SUCCESS:
+				return RetSize;
+
+			case ERROR_MORE_DATA:
+				// We don't know how much
+				return RetSize * 2;
+
+			default:
+				return DWORD{};
 			}
-			return RetSize;
 		});
 	}
 
 	bool key::enum_values(size_t Index, value& Value) const
 	{
-		LONG ExitCode = ERROR_MORE_DATA;
-
-		for (DWORD Size = MAX_PATH; ExitCode == ERROR_MORE_DATA; Size *= 2)
+		if (!detail::ApiDynamicStringReceiver(Value.m_Name, [&](span<wchar_t> const Buffer)
 		{
-			wchar_t_ptr_n<default_buffer_size> Buffer(Size);
-			auto RetSize = Size;
-			ExitCode = RegEnumValue(native_handle(), static_cast<DWORD>(Index), Buffer.data(), &RetSize, nullptr, &Value.m_Type, nullptr, nullptr);
-			if (ExitCode == ERROR_SUCCESS)
+			auto RetSize = static_cast<DWORD>(Buffer.size());
+			switch (RegEnumValue(native_handle(), static_cast<DWORD>(Index), Buffer.data(), &RetSize, {}, &Value.m_Type, {}, {}))
 			{
-				Value.m_Name.assign(Buffer.data(), RetSize);
-				Value.m_Key = this;
-			}
-		}
+			case ERROR_SUCCESS:
+				return RetSize;
 
-		return ExitCode == ERROR_SUCCESS;
+			case ERROR_MORE_DATA:
+				// We don't know how much
+				return RetSize * 2;
+
+			default:
+				return DWORD{};
+			}
+		}))
+			return false;
+
+		Value.m_Key = this;
+		return true;
 	}
 
 	bool key::get(const string_view Name) const
@@ -140,13 +153,13 @@ namespace os::reg
 
 	bool key::get(const string_view Name, string& Value) const
 	{
-		std::vector<char> Buffer;
+		bytes Buffer;
 		DWORD Type;
 		if (!query_value(native_handle(), Name, Type, Buffer) || !is_string_type(Type))
 			return false;
 
 		Value.assign(reinterpret_cast<const wchar_t*>(Buffer.data()), Buffer.size() / sizeof(wchar_t));
-		if (!Value.empty() && Value.back() == L'\0')
+		if (ends_with(Value, L'\0'))
 		{
 			Value.pop_back();
 		}
@@ -155,26 +168,26 @@ namespace os::reg
 
 	bool key::get(const string_view Name, unsigned int& Value) const
 	{
-		std::vector<char> Buffer;
+		bytes Buffer;
 		DWORD Type;
 		if (!query_value(native_handle(), Name, Type, Buffer) || Type != REG_DWORD)
 			return false;
 
 		Value = 0;
-		const auto ValueBytes = bytes::reference(Value);
+		const auto ValueBytes = edit_bytes(Value);
 		std::copy_n(Buffer.cbegin(), std::min(Buffer.size(), ValueBytes.size()), ValueBytes.begin());
 		return true;
 	}
 
 	bool key::get(const string_view Name, unsigned long long& Value) const
 	{
-		std::vector<char> Buffer;
+		bytes Buffer;
 		DWORD Type;
 		if (!query_value(native_handle(), Name, Type, Buffer) || Type != REG_QWORD)
 			return false;
 
 		Value = 0;
-		const auto ValueBytes = bytes::reference(Value);
+		const auto ValueBytes = edit_bytes(Value);
 		std::copy_n(Buffer.cbegin(), std::min(Buffer.size(), ValueBytes.size()), ValueBytes.begin());
 		return true;
 	}
@@ -189,7 +202,7 @@ namespace os::reg
 	{
 	}
 
-	void key::hkey_deleter::operator()(HKEY Key) const
+	void key::hkey_deleter::operator()(HKEY Key) const noexcept
 	{
 		// TODO: do not try to close predefined keys?
 		RegCloseKey(Key);
@@ -237,15 +250,14 @@ namespace os::reg
 	//-------------------------------------------------------------------------
 
 	enum_key::enum_key(const key& Key):
-		m_KeyRef(Key)
+		m_KeyRef(&Key)
 	{
 	}
 
 	enum_key::enum_key(const key& Key, const string_view SubKey, const REGSAM Sam):
-		m_KeyRef(m_Key)
-	{
 		// BUGBUG check result
-		(void)m_Key.open(Key, SubKey, KEY_ENUMERATE_SUB_KEYS | Sam);
+		m_Key(key::open(Key, SubKey, KEY_ENUMERATE_SUB_KEYS | Sam))
+	{
 	}
 
 	bool enum_key::get(bool Reset, value_type& Value) const
@@ -253,21 +265,22 @@ namespace os::reg
 		if (Reset)
 			m_Index = 0;
 
-		return m_KeyRef && m_KeyRef.enum_keys(m_Index++, Value);
+		const auto& Key = m_KeyRef? *m_KeyRef : m_Key;
+
+		return Key && Key.enum_keys(m_Index++, Value);
 	}
 
 	//-------------------------------------------------------------------------
 
 	enum_value::enum_value(const key& Key):
-		m_KeyRef(Key)
+		m_KeyRef(&Key)
 	{
 	}
 
 	enum_value::enum_value(const key& Key, const string_view SubKey, const REGSAM Sam):
-		m_KeyRef(m_Key)
-	{
 		// BUGBUG check result
-		(void)m_Key.open(Key, SubKey, KEY_QUERY_VALUE | Sam);
+		m_Key(key::open(Key, SubKey, KEY_QUERY_VALUE | Sam))
+	{
 	}
 
 	bool enum_value::get(bool Reset, value_type& Value) const
@@ -275,6 +288,47 @@ namespace os::reg
 		if (Reset)
 			m_Index = 0;
 
-		return m_KeyRef && m_KeyRef.enum_values(m_Index++, Value);
+		const auto& Key = m_KeyRef? *m_KeyRef : m_Key;
+
+		return Key && Key.enum_values(m_Index++, Value);
 	}
 }
+
+#ifdef ENABLE_TESTS
+
+#include "testing.hpp"
+
+TEST_CASE("platform.reg")
+{
+	{
+		os::reg::enum_key const Keys(os::reg::key::current_user);
+		REQUIRE(!Keys.empty());
+	}
+
+	{
+		os::reg::enum_key const Keys(os::reg::key::current_user, L"SOFTWARE"sv);
+		REQUIRE(!Keys.empty());
+	}
+
+	{
+		const auto Key = os::reg::key::open(os::reg::key::current_user, L"SOFTWARE"sv, KEY_ENUMERATE_SUB_KEYS);
+		os::reg::enum_key const Keys(Key);
+		REQUIRE(!Keys.empty());
+	}
+
+	{
+		os::reg::enum_value const Values(os::reg::key::current_user, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"sv);
+		REQUIRE(!Values.empty());
+	}
+
+	{
+		const auto Key = os::reg::key::open(os::reg::key::local_machine, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"sv, KEY_QUERY_VALUE);
+		os::reg::enum_value const Values(Key);
+		REQUIRE(!Values.empty());
+
+		string Value;
+		REQUIRE(Key.get(L"Shell"sv, Value));
+		REQUIRE(!Value.empty());
+	}
+}
+#endif

@@ -30,6 +30,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "elevation.hpp"
 
@@ -39,7 +42,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "dialog.hpp"
 #include "farcolor.hpp"
 #include "colormix.hpp"
-#include "lasterror.hpp"
 #include "fileowner.hpp"
 #include "imports.hpp"
 #include "taskbar.hpp"
@@ -47,9 +49,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scrbuf.hpp"
 #include "manager.hpp"
 #include "pipe.hpp"
-#include "console.hpp"
+#include "interf.hpp"
 #include "string_utils.hpp"
 #include "global.hpp"
+#include "exception.hpp"
+#include "exception_handler.hpp"
 
 // Platform:
 #include "platform.concurrency.hpp"
@@ -60,6 +64,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Common:
 #include "common.hpp"
 #include "common/string_utils.hpp"
+#include "common/uuid.hpp"
 
 // External:
 #include "format.hpp"
@@ -316,7 +321,7 @@ auto elevation::execute(lng Why, string_view const Object, T Fallback, const F1&
 	}
 }
 
-static os::handle create_named_pipe(const string& Name)
+static os::handle create_named_pipe(string_view const Name)
 {
 	SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
 
@@ -394,10 +399,7 @@ static bool connect_pipe_to_process(const os::handle& Process, const os::handle&
 			return false;
 	}
 
-	os::multi_waiter Waiter;
-	Waiter.add(AEvent);
-	Waiter.add(Process.native_handle());
-	if (Waiter.wait(os::multi_waiter::mode::any, 15s) != WAIT_OBJECT_0)
+	if (const auto Result = os::handle::wait_any({ AEvent.native_handle(), Process.native_handle() }, 15s); !Result || *Result == 1)
 		return false;
 
 	DWORD NumberOfBytesTransferred;
@@ -420,7 +422,7 @@ bool elevation::Initialize()
 
 	if (!m_Pipe)
 	{
-		m_PipeName = GuidToStr(CreateUuid());
+		m_PipeName = uuid::str(os::uuid::generate());
 		m_Pipe = create_named_pipe(m_PipeName);
 		if (!m_Pipe)
 			return false;
@@ -538,7 +540,7 @@ static void ElevationApproveDlgSync(const EAData& Data)
 	const auto Lock = Global->ScrBuf->GetLockCount();
 	Global->ScrBuf->SetLockCount(0);
 
-	console.FlushInputBuffer();
+	FlushInputBuffer();
 
 	Dlg->Process();
 
@@ -556,7 +558,8 @@ bool elevation::ElevationApproveDlg(lng const Why, string_view const Object)
 
 	// request for backup&restore privilege is useless if the user already has them
 	{
-		SCOPED_ACTION(GuardLastError);
+		SCOPED_ACTION(os::last_error_guard);
+
 		if (m_AskApprove && is_admin() && privilege::check(SE_BACKUP_NAME, SE_RESTORE_NAME))
 		{
 			m_AskApprove = false;
@@ -569,8 +572,10 @@ bool elevation::ElevationApproveDlg(lng const Why, string_view const Object)
  		Global->WindowManager && !Global->WindowManager->ManagerIsDown())
 	{
 		++m_Recurse;
-		SCOPED_ACTION(GuardLastError);
+
+		SCOPED_ACTION(os::last_error_guard);
 		SCOPED_ACTION(taskbar::state)(TBPF_PAUSED);
+
 		EAData Data(Object, Why, m_AskApprove, m_IsApproved, m_DontAskAgain);
 
 		if(!Global->IsMainThread())
@@ -710,7 +715,7 @@ bool elevation::replace_file(const string& To, const string& From, const string&
 }
 
 
-DWORD elevation::get_file_attributes(const string& Object)
+os::fs::attributes elevation::get_file_attributes(const string& Object)
 {
 	return execute(lng::MElevationRequiredGetAttributes, Object,
 		INVALID_FILE_ATTRIBUTES,
@@ -721,11 +726,11 @@ DWORD elevation::get_file_attributes(const string& Object)
 		[&]
 		{
 			Write(C_FUNCTION_GETFILEATTRIBUTES, Object);
-			return RetrieveLastErrorAndResult<DWORD>();
+			return RetrieveLastErrorAndResult<os::fs::attributes>();
 		});
 }
 
-bool elevation::set_file_attributes(const string& Object, DWORD FileAttributes)
+bool elevation::set_file_attributes(const string& Object, os::fs::attributes FileAttributes)
 {
 	return execute(lng::MElevationRequiredSetAttributes, Object,
 		false,
@@ -755,7 +760,7 @@ bool elevation::create_hard_link(const string& Object, const string& Target, SEC
 		});
 }
 
-bool elevation::fCreateSymbolicLink(const string& Object, const string& Target, DWORD Flags)
+bool elevation::fCreateSymbolicLink(string_view const Object, string_view const Target, DWORD Flags)
 {
 	return execute(lng::MElevationRequiredSymLink, Object,
 		false,
@@ -882,7 +887,7 @@ os::security::descriptor elevation::get_file_security(string const& Object, SECU
 		os::security::descriptor{},
 		[&]
 		{
-			return os::fs::low::get_file_security(Object, RequestedInformation);
+			return os::fs::low::get_file_security(Object.c_str(), RequestedInformation);
 		},
 		[&]
 		{
@@ -1264,7 +1269,9 @@ private:
 	static DWORD CALLBACK CopyProgressRoutineWrapper(LARGE_INTEGER TotalFileSize, LARGE_INTEGER TotalBytesTransferred, LARGE_INTEGER StreamSize, LARGE_INTEGER StreamBytesTransferred, DWORD StreamNumber, DWORD CallbackReason, HANDLE SourceFile,HANDLE DestinationFile, LPVOID Data)
 	{
 		const auto Param = static_cast<callback_param*>(Data);
-		try
+
+		return cpp_try(
+		[&]
 		{
 			const auto Context = Param->Owner;
 
@@ -1289,10 +1296,12 @@ private:
 				// nested call from ProgressRoutine()
 				Context->Process(Result);
 			}
-		}
-		CATCH_AND_SAVE_EXCEPTION_TO(Param->ExceptionPtr)
-
-		return PROGRESS_CANCEL;
+		},
+		[&]
+		{
+			SAVE_EXCEPTION_TO(Param->ExceptionPtr);
+			return PROGRESS_CANCEL;
+		});
 	}
 
 	bool Process(int Command) const

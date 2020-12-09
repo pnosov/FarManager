@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "datetime.hpp"
 
@@ -94,7 +97,33 @@ static string st_time(const tm* tmPtr, const locale_names& Names, bool const is_
 	}
 }
 
-string StrFTime(string_view const Format, const tm* Time)
+struct time_zone_information
+{
+	string Name;
+	std::chrono::minutes Offset;
+};
+
+static std::optional<time_zone_information> time_zone()
+{
+	using namespace std::chrono;
+
+	TIME_ZONE_INFORMATION Tz;
+	switch (GetTimeZoneInformation(&Tz))
+	{
+	case TIME_ZONE_ID_UNKNOWN:
+	case TIME_ZONE_ID_STANDARD:
+		return { { Tz.StandardName, -minutes(Tz.Bias + Tz.StandardBias) } };
+
+	case TIME_ZONE_ID_DAYLIGHT:
+		return { { Tz.DaylightName, -minutes(Tz.Bias + Tz.DaylightBias) } };
+
+	case TIME_ZONE_ID_INVALID:
+	default:
+		return {};
+	}
+}
+
+static string StrFTime(string_view const Format, const tm* Time)
 {
 	bool IsLocal = false;
 
@@ -151,7 +180,7 @@ string StrFTime(string_view const Format, const tm* Time)
 		//appropriate date and time representation
 		case L'c':
 			// Thu Oct 07 12:37:32 1999
-			Result += format(FSTR(L"{0} {1} {2:02} {3:02}:{4:02}:{5:02} {6:4}"),
+			format_to(Result, FSTR(L"{0} {1} {2:02} {3:02}:{4:02}:{5:02} {6:4}"),
 				locale.Names(IsLocal).Weekdays[Time->tm_wday].Short,
 				locale.Names(IsLocal).Months[Time->tm_mon].Short,
 				Time->tm_mday, Time->tm_hour, Time->tm_min, Time->tm_sec, Time->tm_year + 1900);
@@ -159,7 +188,7 @@ string StrFTime(string_view const Format, const tm* Time)
 
 		// Столетие как десятичное число (00 - 99). Например, 1992 => 19
 		case L'C':
-			Result += format(FSTR(L"{0:02}"), (Time->tm_year + 1900) / 100);
+			format_to(Result, FSTR(L"{0:02}"), (Time->tm_year + 1900) / 100);
 			break;
 
 		// day of month, blank padded
@@ -202,7 +231,7 @@ string StrFTime(string_view const Format, const tm* Time)
 		// Три цифры дня в году (001 - 366)
 		// day of the year, 001 - 366
 		case L'j':
-			Result += format(FSTR(L"{0:03}"), Time->tm_yday+1);
+			format_to(Result, FSTR(L"{0:03}"), Time->tm_yday+1);
 			break;
 
 		// Две цифры месяца, как десятичное число (1 - 12)
@@ -216,17 +245,17 @@ string StrFTime(string_view const Format, const tm* Time)
 			{
 			// %mh - Hex month digit
 			case L'h':
-				Result += format(FSTR(L"{0:X}"), Time->tm_mon + 1);
+				format_to(Result, FSTR(L"{0:X}"), Time->tm_mon + 1);
 				break;
 
 			// %m0 - ведущий 0
 			case L'0':
-				Result += format(FSTR(L"{0:02}"), Time->tm_mon + 1);
+				format_to(Result, FSTR(L"{0:02}"), Time->tm_mon + 1);
 				break;
 
 			default:
 				--Iterator;
-				Result += format(FSTR(L"{0}"), Time->tm_mon + 1);
+				format_to(Result, FSTR(L"{0}"), Time->tm_mon + 1);
 				break;
 			}
 			break;
@@ -234,7 +263,7 @@ string StrFTime(string_view const Format, const tm* Time)
 		// Две цифры минут (00 - 59)
 		// minute, 00 - 59
 		case L'M':
-			Result += format(FSTR(L"{0:02}"), Time->tm_min);
+			format_to(Result, FSTR(L"{0:02}"), Time->tm_min);
 			break;
 
 		// AM или PM
@@ -246,7 +275,7 @@ string StrFTime(string_view const Format, const tm* Time)
 		// Две цифры секунд (00 - 59)
 		// second, 00 - 59
 		case L'S':
-			Result += format(FSTR(L"{0:02}"), Time->tm_sec);
+			format_to(Result, FSTR(L"{0:02}"), Time->tm_sec);
 			break;
 
 		// День недели где 0 - Воскресенье (Sunday) (0 - 6)
@@ -268,7 +297,7 @@ string StrFTime(string_view const Format, const tm* Time)
 			if (I<0)
 				I+=7;
 
-			Result += format(FSTR(L"{0:02}"), (Time->tm_yday + I - (*Iterator == L'W')) / 7);
+			format_to(Result, FSTR(L"{0:02}"), (Time->tm_yday + I - (*Iterator == L'W')) / 7);
 			break;
 		}
 
@@ -285,13 +314,13 @@ string StrFTime(string_view const Format, const tm* Time)
 		// appropriate time representation
 		case L'T':
 		case L'X':
-			Result += format(FSTR(L"{1:02}{0}{2:02}{0}{3:02}"), locale.time_separator(), Time->tm_hour, Time->tm_min, Time->tm_sec);
+			format_to(Result, FSTR(L"{1:02}{0}{2:02}{0}{3:02}"), locale.time_separator(), Time->tm_hour, Time->tm_min, Time->tm_sec);
 			break;
 
 		// Две цифры года без столетия (00 to 99)
 		// year without a century, 00 - 99
 		case L'y':
-			Result += format(FSTR(L"{0:02}"), Time->tm_year % 100);
+			format_to(Result, FSTR(L"{0:02}"), Time->tm_year % 100);
 			break;
 
 		// Год со столетием (19yy-20yy)
@@ -303,15 +332,27 @@ string StrFTime(string_view const Format, const tm* Time)
 		// ISO 8601 offset from UTC in timezone
 		case L'z':
 			{
-				using namespace std::chrono;
-				const auto Offset = split_duration<hours, minutes>(-seconds(_timezone + (Time->tm_isdst? _dstbias : 0)));
-				Result += format(FSTR(L"{0:+05}"), Offset.get<hours>() / 1h * 100 + Offset.get<minutes>() / 1min);
+				const auto HHMM = []
+				{
+					const auto Tz = time_zone();
+					if (!Tz)
+						return 0h / 1h;
+
+					using namespace std::chrono;
+					const auto Offset = split_duration<hours, minutes>(Tz->Offset);
+					return Offset.get<hours>() / 1h * 100 + Offset.get<minutes>() / 1min;
+				}();
+
+				format_to(Result, FSTR(L"{0:+05}"), HHMM);
 			}
 			break;
 
 		// Timezone name or abbreviation
 		case L'Z':
-			Result += encoding::ansi::get_chars(_tzname[Time->tm_isdst]);
+			if (const auto Tz = time_zone())
+			{
+				Result += Tz->Name;
+			}
 			break;
 
 		// same as \n
@@ -379,6 +420,10 @@ namespace
 	using time_ranges = dt_ranges<4>;
 }
 
+// HH:MM:SS.XXXXXXX
+// 0123456789012345
+// ^  ^  ^  ^
+// 12 12 12 1234567
 static constexpr time_ranges TimeRanges{ { {0, 2}, { 3, 2 }, { 6, 2 }, { 9, 7 } } };
 
 static date_ranges get_date_ranges(date_type const DateFormat)
@@ -387,10 +432,19 @@ static date_ranges get_date_ranges(date_type const DateFormat)
 	{
 	default:
 	case date_type::ymd:
+		// YYYYY/MM/DD
+		// 01234567890
+		// ^     ^  ^
+		// 12345 12 12
 		return { { { 0, 5 }, { 6, 2 }, { 9, 2 } } };
 
 	case date_type::dmy:
 	case date_type::mdy:
+		// DD/MM/YYYYY
+		// MM/DD/YYYYY
+		// 01234567890
+		// ^  ^  ^
+		// 12 12 12345
 		return {{ { 0, 2 }, { 3, 2 }, { 6, 5 } }};
 	}
 }
@@ -453,21 +507,21 @@ os::chrono::time_point ParseTimePoint(string_view const Date, string_view const 
 
 	SYSTEMTIME st{};
 
-	const auto Milliseconds = Point.Tick == time_none? time_none : os::chrono::duration(Point.Tick) / 1ms;
+	const auto Milliseconds = Point.Hectonanosecond == time_none? time_none : os::chrono::hectonanoseconds(Point.Hectonanosecond) / 1ms;
 
-	st.wYear   = Point.Year;
-	st.wMonth  = Point.Month;
-	st.wDay    = Point.Day;
-	st.wHour   = Default(Point.Hour);
-	st.wMinute = Default(Point.Minute);
-	st.wSecond = Default(Point.Second);
+	st.wYear         = Point.Year;
+	st.wMonth        = Point.Month;
+	st.wDay          = Point.Day;
+	st.wHour         = Default(Point.Hour);
+	st.wMinute       = Default(Point.Minute);
+	st.wSecond       = Default(Point.Second);
 	st.wMilliseconds = Default(Milliseconds);
 
 	os::chrono::time_point TimePoint;
 	if (!local_to_utc(st, TimePoint))
 		return {};
 
-	return TimePoint + os::chrono::duration(Default(Point.Tick)) % 1ms;
+	return TimePoint + os::chrono::hectonanoseconds(Default(Point.Hectonanosecond)) % 1ms;
 }
 
 os::chrono::duration ParseDuration(string_view const Date, string_view const Time)
@@ -480,7 +534,9 @@ os::chrono::duration ParseDuration(string_view const Date, string_view const Tim
 	ParseTimeComponents(Time, TimeRanges, TimeN, 0);
 
 	using namespace std::chrono;
-	return chrono::days(DateN[0]) + hours(TimeN[0]) + minutes(TimeN[1]) + seconds(TimeN[2]) + os::chrono::duration(TimeN[3]);
+	using namespace chrono;
+
+	return days(DateN[0]) + hours(TimeN[0]) + minutes(TimeN[1]) + seconds(TimeN[2]) + os::chrono::hectonanoseconds(TimeN[3]);
 }
 
 void ConvertDate(os::chrono::time_point const Point, string& strDateText, string& strTimeText, int const TimeLength, int const FullYear, bool const Brief, bool const TextMonth)
@@ -522,8 +578,6 @@ void ConvertDate(os::chrono::time_point const Point, string& strDateText, string
 	}
 	else
 	{
-		using namespace os::chrono::literals;
-
 		strTimeText = cut_right(
 			format(
 				FSTR(L"{0:02}{1}{2:02}{1}{3:02}{4}{5:07}"),
@@ -606,19 +660,18 @@ void ConvertDate(os::chrono::time_point const Point, string& strDateText, string
 std::tuple<string, string> ConvertDuration(os::chrono::duration Duration)
 {
 	using namespace std::chrono;
-	using namespace chrono::literals;
-	using namespace os::chrono::literals;
+	using namespace chrono;
 
-	const auto Result = split_duration<chrono::days, hours, minutes, seconds>(Duration);
+	const auto Result = split_duration<days, hours, minutes, seconds, os::chrono::hectonanoseconds>(Duration);
 
 	return
 	{
-		str(Result.get<chrono::days>() / 1_d),
+		str(Result.get<days>() / 1_d),
 		format(FSTR(L"{0:02}{4}{1:02}{4}{2:02}{5}{3:07}"),
 			Result.get<hours>() / 1h,
 			Result.get<minutes>() / 1min,
 			Result.get<seconds>() / 1s,
-			(Duration % 1s) / 1_hns,
+			Result.get<os::chrono::hectonanoseconds>() / 1_hns,
 			locale.time_separator(),
 			locale.decimal_separator()
 		)
@@ -708,9 +761,36 @@ bool local_to_utc(const SYSTEMTIME& LocalTime, os::chrono::time_point& UtcTime)
 	return true;
 }
 
-time_check::time_check(mode Mode):
+time_check::time_check(mode Mode) noexcept:
 	time_check(Mode, GetRedrawTimeout())
 {
+}
+
+time_check::time_check(mode Mode, clock_type::duration Interval) noexcept:
+	m_Begin(Mode == mode::delayed? clock_type::now() : clock_type::now() - Interval),
+	m_Interval(Interval)
+{
+}
+
+void time_check::reset(clock_type::time_point Value) const noexcept
+{
+	m_Begin = Value;
+}
+
+bool time_check::is_time() const noexcept
+{
+	return clock_type::now() - m_Begin > m_Interval;
+}
+
+time_check::operator bool() const noexcept
+{
+	const auto Current = clock_type::now();
+	if (m_Interval != 0s && Current - m_Begin > m_Interval)
+	{
+		reset(Current);
+		return true;
+	}
+	return false;
 }
 
 #ifdef ENABLE_TESTS
@@ -719,9 +799,6 @@ time_check::time_check(mode Mode):
 
 TEST_CASE("datetime.parse.duration")
 {
-	using namespace chrono::literals;
-	using namespace os::chrono::literals;
-
 	static const struct
 	{
 		string_view Date, Time;
@@ -732,9 +809,11 @@ TEST_CASE("datetime.parse.duration")
 		{ {},          L"  :  :  .       "sv,              0_hns, },
 		{ {},          L"  :  :  .      1"sv,              1_hns, },
 		{ {},          L"  :  :  . 12    "sv,              12_hns, },
-		{ L"3"sv,      L"  :42:  .       "sv,              3_d + 42min, },
+		{ {},          L"  :42:  .       "sv,              42min, },
 		{ {},          L"33:  :  .       "sv,              33h, },
 		{ L"1"sv,      L"  :  :  .       "sv,              1_d, },
+		{ L"2"sv,      L"26:  :  .       "sv,              3_d + 2h, },
+		{ L"3"sv,      L"  :42:  .       "sv,              3_d + 42min, },
 		{ L"512"sv,    L"12:34:56.7890123"sv,              512_d + 12h + 34min + 56s + 789ms + 123_hns, },
 	};
 
@@ -779,15 +858,12 @@ TEST_CASE("datetime.parse.timepoint")
 		REQUIRE(Result.Hour == i.TimePoint.Hour);
 		REQUIRE(Result.Minute == i.TimePoint.Minute);
 		REQUIRE(Result.Second == i.TimePoint.Second);
-		REQUIRE(Result.Tick == i.TimePoint.Tick);
+		REQUIRE(Result.Hectonanosecond == i.TimePoint.Hectonanosecond);
 	}
 }
 
 TEST_CASE("datetime.ConvertDuration")
 {
-	using namespace chrono::literals;
-	using namespace os::chrono::literals;
-
 	static const struct
 	{
 		os::chrono::duration Duration;

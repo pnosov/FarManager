@@ -13,7 +13,7 @@
       <UniqueIdentifier>{0d74ff07-ebff-40b7-839c-6953ed4c6e2e}</UniqueIdentifier>
       <Extensions>h;hpp;hxx;hm;inl</Extensions>
     </Filter>
-    <Filter Include="Header Files\sdk">
+    <Filter Include="Header Files\platform.sdk">
       <UniqueIdentifier>{581cdf3b-8152-4a6b-8f7c-56cdd69d68a1}</UniqueIdentifier>
     </Filter>
     <Filter Include="Resource Files">
@@ -257,9 +257,6 @@
     <ClCompile Include="language.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="lasterror.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="locale.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -339,6 +336,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="platform.memory.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="platform.process.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="platform.reg.cpp">
@@ -538,6 +538,9 @@
     <ClInclude Include="common\algorithm.hpp">
       <Filter>Header Files\common</Filter>
     </ClInclude>
+    <ClInclude Include="common\base64.hpp">
+      <Filter>Header Files\common</Filter>
+    </ClInclude>
     <ClInclude Include="common\bytes_view.hpp">
       <Filter>Header Files\common</Filter>
     </ClInclude>
@@ -619,6 +622,9 @@
     <ClInclude Include="common\utility.hpp">
       <Filter>Header Files\common</Filter>
     </ClInclude>
+    <ClInclude Include="common\uuid.hpp">
+      <Filter>Header Files\common</Filter>
+    </ClInclude>
     <ClInclude Include="components.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -691,9 +697,6 @@
     <ClInclude Include="dlgedit.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="DlgGuid.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="drivemix.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -734,9 +737,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="FarDlgBuilder.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FarGuid.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="farversion.hpp">
@@ -805,9 +805,6 @@
     <ClInclude Include="grabber.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="guid_parse.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="headers.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -844,16 +841,19 @@
     <ClInclude Include="keys.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="KnownGuids.hpp">
+    <ClInclude Include="uuids.far.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="uuids.far.dialogs.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="uuids.plugins.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="lang.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="language.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="lasterror.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="locale.hpp">
@@ -943,7 +943,13 @@
     <ClInclude Include="platform.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="platform.headers.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="platform.memory.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform.process.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="platform.reg.hpp">
@@ -951,6 +957,15 @@
     </ClInclude>
     <ClInclude Include="platform.security.hpp">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform.sdk.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="platform.sdk\sdk_common.h">
+      <Filter>Header Files\platform.sdk</Filter>
+    </ClInclude>
+    <ClInclude Include="platform.sdk\sdk_vc.h">
+      <Filter>Header Files\platform.sdk</Filter>
     </ClInclude>
     <ClInclude Include="platform.version.hpp">
       <Filter>Header Files</Filter>
@@ -1020,15 +1035,6 @@
     </ClInclude>
     <ClInclude Include="scrsaver.hpp">
       <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="sdk.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="sdk\sdk_common.h">
-      <Filter>Header Files\sdk</Filter>
-    </ClInclude>
-    <ClInclude Include="sdk\sdk_vc.h">
-      <Filter>Header Files\sdk</Filter>
     </ClInclude>
     <ClInclude Include="setattr.hpp">
       <Filter>Header Files</Filter>
@@ -1169,6 +1175,9 @@
     <CustomBuild Include="FarEng.hlf.m4">
       <Filter>Dependencies</Filter>
     </CustomBuild>
+    <CustomBuild Include="FarGer.hlf.m4">
+      <Filter>Dependencies</Filter>
+    </CustomBuild>
     <CustomBuild Include="FarHun.hlf.m4">
       <Filter>Dependencies</Filter>
     </CustomBuild>
@@ -1179,6 +1188,9 @@
       <Filter>Dependencies</Filter>
     </CustomBuild>
     <CustomBuild Include="FarRus.hlf.m4">
+      <Filter>Dependencies</Filter>
+    </CustomBuild>
+    <CustomBuild Include="FarUkr.hlf.m4">
       <Filter>Dependencies</Filter>
     </CustomBuild>
     <CustomBuild Include="farversion.inc.m4">
@@ -1192,9 +1204,6 @@
     </CustomBuild>
     <CustomBuild Include="api_test.c">
       <Filter>Source Files</Filter>
-    </CustomBuild>
-    <CustomBuild Include="DlgBuilder.hpp">
-      <Filter>Header Files</Filter>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>

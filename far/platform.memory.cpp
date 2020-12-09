@@ -29,6 +29,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "platform.memory.hpp"
 
@@ -39,6 +42,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/algorithm.hpp"
+#include "common/string_utils.hpp"
 
 // External:
 
@@ -50,20 +54,34 @@ namespace os::memory
 	{
 		namespace detail
 		{
-			void deleter::operator()(HGLOBAL MemoryBlock) const
+			void deleter::operator()(HGLOBAL MemoryBlock) const noexcept
 			{
 				GlobalFree(MemoryBlock);
 			}
 
-			void unlocker::operator()(const void* MemoryBlock) const
+			void unlocker::operator()(const void* MemoryBlock) const noexcept
 			{
 				GlobalUnlock(const_cast<HGLOBAL>(MemoryBlock));
 			}
 		}
 
-		ptr alloc(UINT Flags, size_t size)
+		ptr alloc(unsigned const Flags, size_t const Size)
 		{
-			return ptr(GlobalAlloc(Flags, size));
+			return ptr(GlobalAlloc(Flags, Size));
+		}
+
+		ptr copy(HGLOBAL const Ptr)
+		{
+			const auto Size = GlobalSize(Ptr);
+			auto Memory = alloc(GMEM_MOVEABLE, Size);
+			if (!Memory)
+				return nullptr;
+
+			const auto From = lock<std::byte const*>(Ptr);
+			const auto To = lock<std::byte*>(Memory);
+			std::copy(From.get(), From.get() + Size, To.get());
+
+			return Memory;
 		}
 
 		ptr copy(string_view const Str)
@@ -76,7 +94,7 @@ namespace os::memory
 			if (!Copy)
 				return nullptr;
 
-			*std::copy(ALL_CONST_RANGE(Str), Copy.get()) = L'\0';
+			*copy_string(Str, Copy.get()) = {};
 			return Memory;
 		}
 
@@ -86,7 +104,7 @@ namespace os::memory
 	{
 		namespace detail
 		{
-			void deleter::operator()(const void* MemoryBlock) const
+			void deleter::operator()(const void* MemoryBlock) const noexcept
 			{
 				LocalFree(const_cast<HLOCAL>(MemoryBlock));
 			}
@@ -102,7 +120,7 @@ namespace os::memory
 			return Info;
 		}();
 
-		return in_range(
+		return in_closed_range(
 			reinterpret_cast<uintptr_t>(info.lpMinimumApplicationAddress),
 			reinterpret_cast<uintptr_t>(Address),
 			reinterpret_cast<uintptr_t>(info.lpMaximumApplicationAddress)
@@ -136,3 +154,15 @@ namespace os::memory
 		}
 	}
 }
+
+#ifdef ENABLE_TESTS
+
+#include "testing.hpp"
+
+TEST_CASE("os.memory.is_pointer")
+{
+	REQUIRE(!os::memory::is_pointer(nullptr));
+	REQUIRE(!os::memory::is_pointer(reinterpret_cast<void*>(42)));
+	REQUIRE(os::memory::is_pointer("42"));
+}
+#endif

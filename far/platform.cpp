@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "platform.hpp"
 
@@ -38,7 +41,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "imports.hpp"
 #include "pathmix.hpp"
 #include "string_utils.hpp"
-#include "lasterror.hpp"
 #include "exception.hpp"
 
 // Platform:
@@ -46,8 +48,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "platform.memory.hpp"
 
 // Common:
+#include "common/algorithm.hpp"
 #include "common/range.hpp"
-#include "common/scope_exit.hpp"
 #include "common/string_utils.hpp"
 
 // External:
@@ -64,15 +66,9 @@ namespace os
 			return Handle == INVALID_HANDLE_VALUE? nullptr : Handle;
 		}
 
-		void handle_implementation::wait(HANDLE const Handle)
+		bool handle_implementation::wait(HANDLE const Handle, std::optional<std::chrono::milliseconds> const Timeout)
 		{
-			WaitForSingleObject(Handle, INFINITE);
-		}
-
-		bool handle_implementation::is_signaled(HANDLE const Handle, std::chrono::milliseconds const Timeout)
-		{
-			const auto Result = WaitForSingleObject(Handle, Timeout / 1ms);
-			switch (Result)
+			switch (const auto Result = WaitForSingleObject(Handle, Timeout? *Timeout / 1ms : INFINITE))
 			{
 			case WAIT_OBJECT_0:
 				return true;
@@ -81,16 +77,39 @@ namespace os
 				return false;
 
 			default:
+				// Abandoned or error
 				throw MAKE_FAR_FATAL_EXCEPTION(format(FSTR(L"WaitForSingleobject returned {0}"), Result));
 			}
 		}
 
-		void handle_closer::operator()(HANDLE Handle) const
+		std::optional<size_t> handle_implementation::wait(span<HANDLE const> const Handles, bool const WaitAll, std::optional<std::chrono::milliseconds> Timeout)
+		{
+			assert(!Handles.empty());
+			assert(Handles.size() <= MAXIMUM_WAIT_OBJECTS);
+
+			const auto Result = WaitForMultipleObjects(static_cast<DWORD>(Handles.size()), Handles.data(), WaitAll, Timeout? *Timeout / 1ms : INFINITE);
+
+			if (in_closed_range<size_t>(WAIT_OBJECT_0, Result, WAIT_OBJECT_0 + Handles.size() - 1))
+			{
+				return Result - WAIT_OBJECT_0;
+			}
+			else if (Result == WAIT_TIMEOUT)
+			{
+				return {};
+			}
+			else
+			{
+				// Abandoned or error
+				throw MAKE_FAR_FATAL_EXCEPTION(format(FSTR(L"WaitForMultipleObjects returned {0}"), Result));
+			}
+		}
+
+		void handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			CloseHandle(Handle);
 		}
 
-		void printer_handle_closer::operator()(HANDLE Handle) const
+		void printer_handle_closer::operator()(HANDLE Handle) const noexcept
 		{
 			ClosePrinter(Handle);
 		}
@@ -124,14 +143,42 @@ string GetErrorString(bool Nt, DWORD Code)
 	return Result;
 }
 
+string format_system_error(unsigned int const ErrorCode, string_view const ErrorMessage)
+{
+	return format(FSTR(L"0x{0:0>8X} - {1}"), ErrorCode, ErrorMessage);
+}
+
+
+last_error_guard::last_error_guard():
+	m_LastError(GetLastError()),
+	m_LastStatus(imports.RtlGetLastNtStatus()),
+	m_Active(true)
+{
+}
+
+last_error_guard::~last_error_guard()
+{
+	if (!m_Active)
+		return;
+
+	SetLastError(m_LastError);
+	imports.RtlNtStatusToDosError(m_LastStatus);
+}
+
+void last_error_guard::dismiss()
+{
+	m_Active = false;
+}
+
+
 bool WNetGetConnection(const string_view LocalName, string &RemoteName)
 {
 	auto Buffer = os::buffer<wchar_t>();
 	// MSDN says that call can fail with ERROR_NOT_CONNECTED or ERROR_CONNECTION_UNAVAIL if calling application
 	// is running in a different logon session than the application that made the connection.
 	// However, it may fail with ERROR_NOT_CONNECTED for non-network too, in this case Buffer will not be initialised.
-	// Deliberately initialised with empty string to fix that.
-	Buffer[0] = L'\0';
+	// Deliberately initialised with an empty string to fix that.
+	Buffer.front() = {};
 	auto Size = static_cast<DWORD>(Buffer.size());
 	const null_terminated C_LocalName(LocalName);
 	auto Result = ::WNetGetConnection(C_LocalName.c_str(), Buffer.data(), &Size);
@@ -186,7 +233,7 @@ bool GetWindowText(HWND Hwnd, string& Text)
 	// GetWindowText[Length] might return 0 not only in case of failure, but also when the window title is empty.
 	// To recognise this, we set LastError to ERROR_SUCCESS manually and check it after the call,
 	// which doesn't change it upon success.
-	GuardLastError ErrorGuard;
+	last_error_guard ErrorGuard;
 	SetLastError(ERROR_SUCCESS);
 
 	if (detail::ApiDynamicStringReceiver(Text, [&](span<wchar_t> Buffer)
@@ -216,15 +263,13 @@ bool GetWindowText(HWND Hwnd, string& Text)
 	return false;
 }
 
+#ifndef _WIN64
 bool IsWow64Process()
 {
-#ifdef _WIN64
-	return false;
-#else
 	static const auto Wow64Process = []{ BOOL Value = FALSE; return imports.IsWow64Process(GetCurrentProcess(), &Value) && Value; }();
 	return Wow64Process;
-#endif
 }
+#endif
 
 DWORD GetAppPathsRedirectionFlag()
 {
@@ -345,7 +390,7 @@ handle OpenConsoleActiveScreenBuffer()
 			FreeLibrary(Module);
 		}
 
-		HMODULE module::get_module() const
+		HMODULE module::get_module() const noexcept
 		{
 			if (!m_tried && !m_module && !m_name.empty())
 			{
@@ -361,29 +406,40 @@ handle OpenConsoleActiveScreenBuffer()
 			return m_module.get();
 		}
 	}
-}
 
-UUID CreateUuid()
-{
-	UUID Uuid;
-	UuidCreate(&Uuid);
-	return Uuid;
-}
+	namespace uuid
+	{
+		UUID generate()
+		{
+			UUID Uuid;
+			UuidCreate(&Uuid);
+			return Uuid;
+		}
+	}
 
-string GuidToStr(const GUID& Guid)
-{
-	RPC_WSTR Str;
-	// declared as non-const in GCC headers :(
-	if (UuidToString(const_cast<GUID*>(&Guid), &Str) != RPC_S_OK)
-		throw std::bad_alloc{};
+	namespace debug
+	{
+		bool debugger_present()
+		{
+			return IsDebuggerPresent() != FALSE;
+		}
 
-	SCOPE_EXIT{ RpcStringFree(&Str); };
-	return upper(string_view{ reinterpret_cast<const wchar_t*>(Str) });
-}
+		void breakpoint(bool const Always)
+		{
+			if (Always || debugger_present())
+				DebugBreak();
+		}
 
-bool StrToGuid(string_view const Value, GUID& Guid)
-{
-	return UuidFromString(reinterpret_cast<RPC_WSTR>(const_cast<wchar_t*>(null_terminated(Value).c_str())), &Guid) == RPC_S_OK;
+		void print(const wchar_t* const Str)
+		{
+			OutputDebugString(Str);
+		}
+
+		void print(string const& Str)
+		{
+			print(Str.c_str());
+		}
+	}
 }
 
 #ifdef ENABLE_TESTS
@@ -401,7 +457,7 @@ TEST_CASE("platform.string.receiver")
 		if (BufferSize < Data.size() + 1)
 			return Data.size() + 1;
 
-		*std::copy(ALL_CONST_RANGE(Data), Buffer) = L'\0';
+		*copy_string(Data, Buffer) = {};
 
 		return Data.size();
 	};

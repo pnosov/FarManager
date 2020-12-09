@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "help.hpp"
 
@@ -51,7 +54,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "colormix.hpp"
 #include "stddlg.hpp"
 #include "plugins.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "RegExp.hpp"
 #include "lang.hpp"
 #include "language.hpp"
@@ -116,7 +119,7 @@ public:
 	}
 };
 
-static bool OpenURL(const string& URLPath);
+static bool OpenURL(string_view URLPath);
 
 static const auto HelpFormatLink = FSTR(L"<{0}\\>{1}");
 static const auto HelpFormatLinkModule = FSTR(L"<{0}>{1}");
@@ -149,7 +152,7 @@ private:
 	string GetTitle() const override { return {}; }
 
 	void init(string_view Topic, string_view Mask, unsigned long long Flags);
-	bool ReadHelp(const string& Mask);
+	bool ReadHelp(string_view Mask);
 	void AddLine(string_view Line);
 	void AddTitle(string_view Title);
 	static void HighlightsCorrection(string &strStr);
@@ -210,7 +213,7 @@ struct Help::StackHelpData
 	int CurX{}, CurY{};           // координаты (???)
 };
 
-static bool GetOptionsParam(const os::fs::file& LangFile, string_view const KeyName, string& Value, UINT CodePage)
+static bool GetOptionsParam(const os::fs::file& LangFile, string_view const KeyName, string& Value, unsigned CodePage)
 {
 	return GetLangParam(LangFile, L"Options "sv + KeyName, Value, nullptr, CodePage);
 }
@@ -297,7 +300,7 @@ void Help::init(string_view const Topic, string_view const Mask, unsigned long l
 	}
 }
 
-bool Help::ReadHelp(const string& Mask)
+bool Help::ReadHelp(string_view const Mask)
 {
 	string strPath;
 
@@ -342,7 +345,7 @@ bool Help::ReadHelp(const string& Mask)
 					msg(lng::MHelpTitle),
 					{
 						msg(lng::MCannotOpenHelp),
-						Mask
+						string(Mask)
 					},
 					{ lng::MOk });
 			}
@@ -360,7 +363,7 @@ bool Help::ReadHelp(const string& Mask)
 		unsigned UserTabSize;
 		if (from_string(strReadStr, UserTabSize))
 		{
-			if (in_range(0u, UserTabSize, 16u))
+			if (in_closed_range(0u, UserTabSize, 16u))
 			{
 				CtrlTabSize = UserTabSize;
 			}
@@ -540,7 +543,7 @@ bool Help::ReadHelp(const string& Mask)
 			HighlightsCorrection(strReadStr);
 		}
 
-		if (!strReadStr.empty() && strReadStr[0]==L'@' && !BreakProcess)
+		if (starts_with(strReadStr, L'@') && !BreakProcess)
 		{
 			if (m_TopicFound)
 			{
@@ -626,7 +629,7 @@ m1:
 					continue;
 				}
 
-				if (!((!strReadStr.empty() && strReadStr[0]==L'$') && NearTopicFound && (PrevSymbol == L'$' || PrevSymbol == L'@')))
+				if (!(starts_with(strReadStr, L'$') && NearTopicFound && any_of(PrevSymbol, L'$', L'@')))
 					NearTopicFound=0;
 
 				/* $<text> в начале строки, определение темы
@@ -639,7 +642,7 @@ m1:
 					LastStartPos = 0;
 				}
 
-				if ((!strReadStr.empty() && strReadStr[0]==L'$') && NearTopicFound && (PrevSymbol == L'$' || PrevSymbol == L'@'))
+				if (starts_with(strReadStr, L'&') && NearTopicFound && any_of(PrevSymbol, L'$', L'@'))
 				{
 					AddLine(string_view(strReadStr).substr(1));
 					FixCount++;
@@ -814,7 +817,7 @@ m1:
 
 void Help::AddLine(const string_view Line)
 {
-	const auto Width = StartPos && !Line.empty() && Line[0] == L' '? StartPos - 1 : StartPos;
+	const auto Width = StartPos && starts_with(Line, L' ')? StartPos - 1 : StartPos;
 	HelpList.emplace_back(string(Width, L' ') + Line);
 }
 
@@ -933,7 +936,7 @@ void Help::FastShow()
 	}
 
 	SetColor(COL_HELPSCROLLBAR);
-	ScrollBarEx(m_Where.right, m_Where.top + HeaderHeight() + 1, BodyHeight(), StackData->TopStr, HelpList.size() - FixCount);
+	ScrollBar(m_Where.right, m_Where.top + HeaderHeight() + 1, BodyHeight(), StackData->TopStr, HelpList.size() - FixCount);
 }
 
 void Help::DrawWindowFrame() const
@@ -987,9 +990,8 @@ static bool GetHelpColor(string_view& Str, wchar_t cColor, FarColor& color)
 	// '\hh' custom color index
 	if (Str.size() > 2 && std::iswxdigit(Str[1]) && std::iswxdigit(Str[2]))
 	{
-		const auto b = HexToInt(Str[1]);
-		const auto f = HexToInt(Str[2]);
-		color = colors::ConsoleColorToFarColor((b & 0x0f) << 4 | (f & 0x0f));
+		const auto Value = std::to_integer<unsigned>(HexStringToBlob(Str.substr(1, 2))[0]);
+		color = colors::ConsoleColorToFarColor(Value);
 		Str.remove_prefix(3);
 		return true;
 	}
@@ -1014,7 +1016,7 @@ static bool FastParseLine(string_view Str, int* const pLen, const int x0, const 
 	{
 		const auto wc = Str[0];
 		Str.remove_prefix(1);
-		if (!Str.empty() && wc == Str[0] && (wc == L'~' || wc == L'@' || wc == L'#' || wc == cColor))
+		if (starts_with(Str, wc) && any_of(wc, L'~', L'@', L'#', cColor))
 			Str.remove_prefix(1);
 		else if (wc == L'#') // start/stop highlighting
 			continue;
@@ -1056,7 +1058,7 @@ static bool FastParseLine(string_view Str, int* const pLen, const int x0, const 
 			else
 			{
 				found = (realX >= start_topic && realX < x);
-				if (!Str.empty() && Str[0] == L'@')
+				if (starts_with(Str, L'@'))
 					Str = SkipLink(Str.substr(1), found ? pTopic : nullptr);
 				if (found)
 					break;
@@ -1751,8 +1753,11 @@ bool Help::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 
 		if (IntKeyState.MousePos.y == ScrollY)
 		{
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
+
 				ProcessKey(Manager::Key(KEY_UP));
 				return true;
 			});
@@ -1762,8 +1767,10 @@ bool Help::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 
 		if (IntKeyState.MousePos.y == ScrollY + BodyHeight() - 1)
 		{
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
 				ProcessKey(Manager::Key(KEY_DOWN));
 				return true;
 			});
@@ -1782,7 +1789,7 @@ bool Help::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 
 		if (static_cast<int>(HelpList.size()) > BodyHeight())
 		{
-			while (IsMouseButtonPressed())
+			while (IsMouseButtonPressed() == FROM_LEFT_1ST_BUTTON_PRESSED)
 			{
 				if (IntKeyState.MousePos.y > ScrollY && IntKeyState.MousePos.y < ScrollY + BodyHeight() + 1)
 				{
@@ -1853,7 +1860,7 @@ bool Help::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		}
 	}
 
-	if (while_mouse_button_pressed([&]
+	if (while_mouse_button_pressed([&](DWORD)
 	{
 		if (MouseEvent->dwMousePosition.Y < m_Where.top + 1 + HeaderHeight())
 		{
@@ -2007,8 +2014,8 @@ void Help::Search(const os::fs::file& HelpFile,uintptr_t nCodePage)
 	{
 		auto Str = trim_right(i.Str);
 
-		if ((!Str.empty() && Str[0] == L'@') &&
-		    !(Str.size() > 1 && (Str[1] == L'+' || Str[1] == L'-')) &&
+		if (starts_with(Str, L'@') &&
+		    !(Str.size() > 1 && any_of(Str[1], L'+', L'-')) &&
 		    !contains(Str, L'='))// && !TopicFound)
 		{
 			strEntryName.clear();
@@ -2148,7 +2155,7 @@ void Help::InitKeyBar()
 	m_windowKeyBar->SetCustomLabels(KBA_HELP);
 }
 
-static bool OpenURL(const string& URLPath)
+static bool OpenURL(string_view const URLPath)
 {
 	if (!Global->Opt->HelpURLRules)
 		return false;

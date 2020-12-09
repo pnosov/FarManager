@@ -47,6 +47,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 WARNING_PUSH(3)
 
+WARNING_DISABLE_GCC("-Wctor-dtor-privacy")
+
 WARNING_DISABLE_CLANG("-Weverything")
 
 #include "thirdparty/fmt/fmt/format.h"
@@ -60,16 +62,29 @@ auto format(F&& Format, args&&... Args)
 	return fmt::format(FWD(Format), FWD(Args)...);
 }
 
+template<typename I, typename F, typename... args>
+auto format_to(I&& Iterator, F&& Format, args&&... Args)
+{
+	return fmt::format_to(FWD(Iterator), FWD(Format), FWD(Args)...);
+}
+
+template<typename F, typename... args>
+auto format_to(string& Str, F&& Format, args&&... Args)
+{
+	return fmt::format_to(std::back_inserter(Str), FWD(Format), FWD(Args)...);
+}
+
 // use FSTR or string_view instead of string literals
 template<typename char_type, size_t N, typename... args>
 auto format(const char_type(&Format)[N], args&&...) = delete;
 
-#if 1
-#define FSTR(str) FMT_STRING(str)
-#else
-#define FSTR(str) str ## sv
-#endif
+template<typename I, typename char_type, size_t N, typename... args>
+auto format_to(I&&, const char_type(&Format)[N], args&&...) = delete;
 
+template<typename char_type, size_t N, typename... args>
+auto format_to(string&, const char_type(&Format)[N], args&&...) = delete;
+
+#define FSTR(str) FMT_STRING(str ## sv)
 
 template<typename T>
 auto str(const T& Value)
@@ -80,6 +95,11 @@ auto str(const T& Value)
 inline auto str(const void* Value)
 {
 	return format(FSTR(L"0x{0:0{1}X}"), reinterpret_cast<uintptr_t>(Value), sizeof(Value) * 2);
+}
+
+inline auto str(void* Value)
+{
+	return str(static_cast<void const*>(Value));
 }
 
 string str(const char*) = delete;

@@ -1,15 +1,13 @@
-﻿#ifndef LASTERROR_HPP_1C20B3B0_E43C_4DCC_9729_DFD883E99DD3
-#define LASTERROR_HPP_1C20B3B0_E43C_4DCC_9729_DFD883E99DD3
+﻿#ifndef PLATFORM_PROCESS_HPP_234140CB_C857_40CF_901D_A10C5EBEA85B
+#define PLATFORM_PROCESS_HPP_234140CB_C857_40CF_901D_A10C5EBEA85B
 #pragma once
 
 /*
-lasterror.hpp
+platform.process.hpp
 
-Сохрание/восстановление LastError
 */
 /*
-Copyright © 1996 Eugene Roshal
-Copyright © 2000 Far Group
+Copyright © 2020 Far Group
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -40,25 +38,21 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/noncopyable.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-class GuardLastError: noncopyable
+namespace os::process
 {
-public:
-	GuardLastError();
+	enum class image_type
+	{
+		unknown,
+		console,
+		graphical,
+	};
 
-	~GuardLastError();
+	image_type get_process_subsystem(HANDLE Process);
+}
 
-	void dismiss();
-
-private:
-	DWORD m_LastError;
-	NTSTATUS m_LastStatus;
-	bool m_Active;
-};
-
-#endif // LASTERROR_HPP_1C20B3B0_E43C_4DCC_9729_DFD883E99DD3
+#endif // PLATFORM_PROCESS_HPP_234140CB_C857_40CF_901D_A10C5EBEA85B

@@ -678,8 +678,12 @@ local function LoadMacros (unload, paths)
   LoadingInProgress = true
 
   if LoadMacrosDone then
-    local ok, msg = pcall(export_ExitFAR, true)
-    if not ok then ErrMsg(msg) end
+    local ok, msg = xpcall(function() return export_ExitFAR(true) end,
+                           function(msg) return debug.traceback(msg,2) end)
+    if not ok then
+      msg = string.gsub(msg, "\t", "   ")
+      ErrMsg(msg)
+    end
     LoadMacrosDone = false
   end
 
@@ -779,7 +783,7 @@ local function LoadMacros (unload, paths)
         for _,name in ipairs(FuncList2) do env[name]=nil; end
       else
         numerrors=numerrors+1
-        msg = msg:gsub("\n\t","\n   ")
+        msg = string.gsub(msg,"\n\t","\n   ")
         ErrMsgLoad(msg,FullPath,isMoonScript,"run")
       end
     end

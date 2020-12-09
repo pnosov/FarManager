@@ -41,13 +41,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
+#include "common/bytes_view.hpp"
 #include "common/range.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
-
-class bytes_view;
 
 namespace sqlite
 {
@@ -63,8 +62,8 @@ class far_sqlite_exception : public far_exception
 class SQLiteDb: noncopyable, virtual protected transactional
 {
 public:
-	using busy_handler = int(*)(void*, int);
-	static bool library_load();
+	using busy_handler = int(*)(void*, int) noexcept;
+	static void library_load();
 	static void library_free();
 
 	const string& GetPath() const { return m_Path; }
@@ -78,10 +77,7 @@ public:
 		blob,
 	};
 
-	static auto memory_db_name()
-	{
-		return L":memory:"sv;
-	}
+	static constexpr auto memory_db_name = L":memory:"sv;
 
 protected:
 	class db_initialiser;
@@ -116,27 +112,20 @@ protected:
 		std::string GetColTextUTF8(int Col) const;
 		int GetColInt(int Col) const;
 		unsigned long long GetColInt64(int Col) const;
-		bytes_view GetColBlob(int Col) const;
+		bytes GetColBlob(int Col) const;
 		column_type GetColType(int Col) const;
 
 	private:
-		template<typename type>
-		SQLiteStmt& BindImpl(const type* Value)
-		{
-			return Value? BindImpl(*Value) : BindImpl(nullptr);
-		}
-
-		SQLiteStmt& BindImpl(std::nullptr_t);
 		SQLiteStmt& BindImpl(int Value);
 		SQLiteStmt& BindImpl(long long Value);
 		SQLiteStmt& BindImpl(string_view Value);
-		SQLiteStmt& BindImpl(const bytes_view& Value);
+		SQLiteStmt& BindImpl(bytes_view Value);
 		SQLiteStmt& BindImpl(unsigned int Value) { return BindImpl(static_cast<int>(Value)); }
 		SQLiteStmt& BindImpl(unsigned long long Value) { return BindImpl(static_cast<long long>(Value)); }
 
 		sqlite::sqlite3* db() const;
 
-		struct stmt_deleter { void operator()(sqlite::sqlite3_stmt*) const; };
+		struct stmt_deleter { void operator()(sqlite::sqlite3_stmt*) const noexcept; };
 		std::unique_ptr<sqlite::sqlite3_stmt, stmt_deleter> m_Stmt;
 		int m_Param{};
 	};
@@ -216,7 +205,7 @@ private:
 	class implementation;
 	friend class implementation;
 
-	struct db_closer { void operator()(sqlite::sqlite3*) const; };
+	struct db_closer { void operator()(sqlite::sqlite3*) const noexcept; };
 	using database_ptr = std::unique_ptr<sqlite::sqlite3, db_closer>;
 
 	database_ptr Open(string_view Path, busy_handler BusyHandler, bool WAL);

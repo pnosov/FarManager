@@ -31,6 +31,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "editor.hpp"
 
@@ -58,8 +61,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "vmenu.hpp"
 #include "vmenu2.hpp"
 #include "encoding.hpp"
-#include "FarGuid.hpp"
-#include "DlgGuid.hpp"
+#include "uuids.far.hpp"
+#include "uuids.far.dialogs.hpp"
 #include "RegExp.hpp"
 #include "plugins.hpp"
 #include "lang.hpp"
@@ -119,8 +122,10 @@ eol Editor::GetDefaultEOL()
 	return Global->Opt->EdOpt.NewFileUnixEOL? eol::unix : eol::win;
 }
 
-Editor::Editor(window_ptr Owner, bool DialogUsed):
+Editor::Editor(window_ptr Owner, uintptr_t Codepage, bool DialogUsed):
 	SimpleScreenObject(std::move(Owner)),
+	GlobalEOL(GetDefaultEOL()),
+	m_codepage(Codepage),
 	EdOpt(Global->Opt->EdOpt),
 	LastSearchCase(Global->GlobalSearchCase),
 	LastSearchWholeWords(Global->GlobalSearchWholeWords),
@@ -139,15 +144,13 @@ Editor::Editor(window_ptr Owner, bool DialogUsed):
 	if (Global->GetSearchHex())
 	{
 		const auto Blob = HexStringToBlob(Global->GetSearchString(), 0);
-		strLastSearchStr.assign(ALL_CONST_RANGE(Blob));
+		strLastSearchStr.assign(view_as<char const*>(Blob.data()), view_as<char const*>(Blob.data() + Blob.size()));
 	}
 	else
 	{
 		strLastSearchStr = Global->GetSearchString();
 	}
 	UnmarkMacroBlock();
-
-	GlobalEOL = GetDefaultEOL();
 	PushString({});
 }
 
@@ -217,7 +220,7 @@ void Editor::KeepInitParameters() const
 	{
 		// BUGBUG, it's unclear how to represent unicode in hex
 		const auto AnsiStr = encoding::get_bytes(m_codepage, strLastSearchStr);
-		Global->StoreSearchString(BlobToHexWString({ AnsiStr.data(), AnsiStr.size() }, 0), true);
+		Global->StoreSearchString(BlobToHexString(view_bytes(AnsiStr), 0), true);
 	}
 	else
 	{
@@ -821,12 +824,12 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 
 	_KEYMACRO(CleverSysLog SL(L"Editor::ProcessKeyInternal()"));
 	_KEYMACRO(SysLog(L"Key=%s",_FARKEY_ToName(LocalKey())));
-	int CurPos=m_it_CurLine->GetCurPos();
-	int CurVisPos=GetLineCurPos();
-	int isk = IsShiftKey(LocalKey());
-	int ick = (LocalKey()==KEY_CTRLC || LocalKey()==KEY_RCTRLC || LocalKey()==KEY_CTRLINS || LocalKey()==KEY_CTRLNUMPAD0 || LocalKey()==KEY_RCTRLINS || LocalKey()==KEY_RCTRLNUMPAD0);
-	int imk = (LocalKey() >= KEY_MACRO_BASE && LocalKey() <= KEY_MACRO_ENDBASE);
-	int ipk = (LocalKey() >= KEY_OP_BASE && LocalKey() <= KEY_OP_ENDBASE);
+	auto CurPos = m_it_CurLine->GetCurPos();
+	const auto CurVisPos = GetLineCurPos();
+	const auto isk = IsShiftKey(LocalKey());
+	const auto ick = any_of(LocalKey(), KEY_CTRLC, KEY_RCTRLC, KEY_CTRLINS, KEY_CTRLNUMPAD0, KEY_RCTRLINS, KEY_RCTRLNUMPAD0);
+	const auto imk = in_closed_range(KEY_MACRO_BASE, LocalKey(), KEY_MACRO_ENDBASE);
+	const auto ipk = in_closed_range(KEY_OP_BASE, LocalKey(), KEY_OP_ENDBASE);
 
 	_SVS(SysLog(L"[%d] isk=%d",__LINE__,isk));
 
@@ -889,7 +892,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 		}
 	}
 
-	if (LocalKey()==KEY_ALTD || LocalKey()==KEY_RALTD)
+	if (any_of(LocalKey(), KEY_ALTD, KEY_RALTD))
 		LocalKey=KEY_CTRLK;
 
 	// работа с закладками
@@ -989,7 +992,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 				ProcessKeyInternal(Manager::Key(KEY_SHIFTPGUP), Refresh);
 			}
 
-			if (LocalKey() == KEY_CTRLSHIFTHOME || LocalKey() == KEY_CTRLSHIFTNUMPAD7 || LocalKey() == KEY_RCTRLSHIFTHOME || LocalKey() == KEY_RCTRLSHIFTNUMPAD7)
+			if (any_of(LocalKey(), KEY_CTRLSHIFTHOME, KEY_CTRLSHIFTNUMPAD7, KEY_RCTRLSHIFTHOME, KEY_RCTRLSHIFTNUMPAD7))
 				ProcessKeyInternal(Manager::Key(KEY_SHIFTHOME), Refresh);
 
 			Pasting--;
@@ -1008,7 +1011,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 				ProcessKeyInternal(Manager::Key(KEY_SHIFTPGDN), Refresh);
 			}
 
-			if (LocalKey() == KEY_CTRLSHIFTEND || LocalKey() == KEY_CTRLSHIFTNUMPAD1 || LocalKey() == KEY_RCTRLSHIFTEND || LocalKey() == KEY_RCTRLSHIFTNUMPAD1)
+			if (any_of(LocalKey(), KEY_CTRLSHIFTEND, KEY_CTRLSHIFTNUMPAD1, KEY_RCTRLSHIFTEND, KEY_RCTRLSHIFTNUMPAD1))
 				ProcessKeyInternal(Manager::Key(KEY_SHIFTEND), Refresh);
 
 			Pasting--;
@@ -1484,13 +1487,13 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 
 				const auto OverriddenClipboard = OverrideClipboard();
 
-				ProcessKeyInternal(Manager::Key((LocalKey()==KEY_CTRLP || LocalKey()==KEY_RCTRLP) ? KEY_CTRLINS:KEY_SHIFTDEL), Refresh);
+				ProcessKeyInternal(Manager::Key(any_of(LocalKey(), KEY_CTRLP, KEY_RCTRLP)? KEY_CTRLINS : KEY_SHIFTDEL), Refresh);
 
 				/* $ 10.04.2001 SVS
 				  ^P/^M - некорректно работали: условие для CurPos должно быть ">=",
 				   а не "меньше".
 				*/
-				if ((LocalKey() == KEY_CTRLM || LocalKey() == KEY_RCTRLM) && CurSelStart != -1 && CurSelEnd != -1)
+				if (any_of(LocalKey(), KEY_CTRLM, KEY_RCTRLM) && CurSelStart != -1 && CurSelEnd != -1)
 				{
 					if (CurPos >= CurSelEnd)
 						m_it_CurLine->SetCurPos(CurPos - (CurSelEnd - CurSelStart));
@@ -1734,10 +1737,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 				m_Flags.Set(FEDITOR_NEWUNDO);
 				const auto PrevMaxPos = MaxRightPosState.Position;
 				const auto LastTopScreen = m_it_TopScreen;
-				if (LocalKey() == KEY_UP || LocalKey() == KEY_NUMPAD8)
-					Up();
-				else
-					Down();
+				any_of(LocalKey(), KEY_UP, KEY_NUMPAD8)? Up() : Down();
 
 				if (m_it_TopScreen!=LastTopScreen)
 				{
@@ -1840,7 +1840,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 				int StartPos=m_it_CurLine->GetTabCurPos();
 				m_it_TopScreen = m_it_CurLine = FirstLine();
 
-				if (LocalKey() == KEY_CTRLHOME || LocalKey() == KEY_RCTRLHOME || LocalKey() == KEY_CTRLNUMPAD7 || LocalKey() == KEY_RCTRLNUMPAD7)
+				if (any_of(LocalKey(), KEY_CTRLHOME, KEY_RCTRLHOME, KEY_CTRLNUMPAD7, KEY_RCTRLNUMPAD7))
 				{
 					m_it_CurLine->SetCurPos(0);
 					m_it_CurLine->SetLeftPos(0);
@@ -1871,7 +1871,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 
 				m_it_CurLine->SetLeftPos(0);
 
-				if (LocalKey() == KEY_CTRLEND || LocalKey() == KEY_RCTRLEND || LocalKey() == KEY_CTRLNUMPAD1 || LocalKey() == KEY_RCTRLNUMPAD1)
+				if (any_of(LocalKey(), KEY_CTRLEND, KEY_RCTRLEND, KEY_CTRLNUMPAD1, KEY_RCTRLNUMPAD1))
 				{
 					m_it_CurLine->SetCurPos(m_it_CurLine->GetLength());
 				}
@@ -2034,7 +2034,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 		{
 			if (!m_Flags.Check(FEDITOR_LOCKMODE))
 			{
-				Undo(LocalKey()==KEY_CTRLSHIFTZ || LocalKey()==KEY_RCTRLSHIFTZ);
+				Undo(any_of(LocalKey(), KEY_CTRLSHIFTZ, KEY_RCTRLSHIFTZ));
 				Refresh = true;
 			}
 
@@ -2520,9 +2520,8 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 		default:
 		{
 			{
-				if ((LocalKey()==KEY_CTRLDEL || LocalKey()==KEY_RCTRLDEL || LocalKey()==KEY_CTRLNUMDEL || LocalKey()==KEY_RCTRLNUMDEL
-					|| LocalKey()==KEY_CTRLDECIMAL || LocalKey()==KEY_RCTRLDECIMAL || LocalKey()==KEY_CTRLT || LocalKey()==KEY_RCTRLT)
-					&& CurPos>=m_it_CurLine->GetLength())
+				if (any_of(LocalKey(), KEY_CTRLDEL, KEY_RCTRLDEL, KEY_CTRLNUMDEL, KEY_RCTRLNUMDEL, KEY_CTRLDECIMAL, KEY_RCTRLDECIMAL, KEY_CTRLT, KEY_RCTRLT) &&
+					CurPos >= m_it_CurLine->GetLength())
 				{
 					/*$ 08.12.2000 skv
 					  - CTRL-DEL в начале строки при выделенном блоке и
@@ -2549,22 +2548,23 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 						Refresh = true;
 					}
 
-				int SkipCheckUndo=(LocalKey()==KEY_RIGHT      || LocalKey()==KEY_NUMPAD6      ||
-				                   LocalKey()==KEY_CTRLLEFT   || LocalKey()==KEY_CTRLNUMPAD4  ||
-				                   LocalKey()==KEY_RCTRLLEFT  || LocalKey()==KEY_RCTRLNUMPAD4 ||
-				                   LocalKey()==KEY_CTRLRIGHT  || LocalKey()==KEY_CTRLNUMPAD6  ||
-				                   LocalKey()==KEY_RCTRLRIGHT || LocalKey()==KEY_RCTRLNUMPAD6 ||
-				                   LocalKey()==KEY_HOME       || LocalKey()==KEY_NUMPAD7      ||
-				                   LocalKey()==KEY_END        || LocalKey()==KEY_NUMPAD1      ||
-				                   LocalKey()==KEY_CTRLS      || LocalKey()==KEY_RCTRLS);
+				const auto SkipCheckUndo = any_of(LocalKey(),
+					KEY_RIGHT, KEY_NUMPAD6,
+					KEY_CTRLLEFT, KEY_CTRLNUMPAD4,
+					KEY_RCTRLLEFT, KEY_RCTRLNUMPAD4,
+					KEY_CTRLRIGHT, KEY_CTRLNUMPAD6,
+					KEY_RCTRLRIGHT, KEY_RCTRLNUMPAD6,
+					KEY_HOME, KEY_NUMPAD7,
+					KEY_END, KEY_NUMPAD1,
+					KEY_CTRLS, KEY_RCTRLS);
 
 				if (m_Flags.Check(FEDITOR_LOCKMODE) && !SkipCheckUndo)
 					return true;
 
-				if (LocalKey() == KEY_HOME || LocalKey() == KEY_NUMPAD7)
+				if (any_of(LocalKey(), KEY_HOME, KEY_NUMPAD7))
 					m_Flags.Set(FEDITOR_NEWUNDO);
 
-				if ((LocalKey()==KEY_CTRLLEFT || LocalKey()==KEY_RCTRLLEFT || LocalKey()==KEY_CTRLNUMPAD4 || LocalKey()==KEY_RCTRLNUMPAD4) && !m_it_CurLine->GetCurPos())
+				if (any_of(LocalKey(), KEY_CTRLLEFT, KEY_RCTRLLEFT, KEY_CTRLNUMPAD4, KEY_RCTRLNUMPAD4) && !m_it_CurLine->GetCurPos())
 				{
 					Pasting++;
 					ProcessKeyInternal(Manager::Key(KEY_LEFT), Refresh);
@@ -2577,10 +2577,13 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 					return true;
 				}
 
-				if (((!EdOpt.CursorBeyondEOL && (LocalKey()==KEY_RIGHT || LocalKey()==KEY_NUMPAD6))
-					|| LocalKey()==KEY_CTRLRIGHT || LocalKey()==KEY_RCTRLRIGHT || LocalKey()==KEY_CTRLNUMPAD6 || LocalKey()==KEY_RCTRLNUMPAD6) &&
-				        m_it_CurLine->GetCurPos()>=m_it_CurLine->GetLength() &&
-				        !IsLastLine(m_it_CurLine))
+				if (
+					(
+						(!EdOpt.CursorBeyondEOL && any_of(LocalKey(), KEY_RIGHT, KEY_NUMPAD6)) ||
+						any_of(LocalKey(), KEY_CTRLRIGHT, KEY_RCTRLRIGHT, KEY_CTRLNUMPAD6, KEY_RCTRLNUMPAD6)
+					) &&
+					m_it_CurLine->GetCurPos()>=m_it_CurLine->GetLength() &&
+					!IsLastLine(m_it_CurLine))
 				{
 					Pasting++;
 					ProcessKeyInternal(Manager::Key(KEY_HOME), Refresh);
@@ -2690,7 +2693,7 @@ bool Editor::ProcessKeyInternal(const Manager::Key& Key, bool& Refresh)
 
 					// <Bug 794>
 					// обработаем только первую и последнюю строку с блоком
-					if ((LocalKey() == KEY_CTRLK || LocalKey() == KEY_RCTRLK) && EdOpt.PersistentBlocks)
+					if (any_of(LocalKey(), KEY_CTRLK, KEY_RCTRLK) && EdOpt.PersistentBlocks)
 					{
 						if (m_it_CurLine == m_it_AnyBlockStart)
 						{
@@ -2789,8 +2792,11 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		if (MouseEvent->dwMousePosition.Y == m_Where.top)
 		{
 			// Press and hold the [▲] button
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
+
 				ProcessKey(Manager::Key(KEY_CTRLUP));
 				return true;
 			});
@@ -2798,8 +2804,11 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		else if (MouseEvent->dwMousePosition.Y == m_Where.bottom)
 		{
 			// Press and hold the [▼] button
-			while_mouse_button_pressed([&]
+			while_mouse_button_pressed([&](DWORD const Button)
 			{
+				if (Button != FROM_LEFT_1ST_BUTTON_PRESSED)
+					return false;
+
 				ProcessKey(Manager::Key(KEY_CTRLDOWN));
 				return true;
 			});
@@ -2807,7 +2816,7 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		else
 		{
 			// Drag the thumb
-			while (IsMouseButtonPressed())
+			while (IsMouseButtonPressed() == FROM_LEFT_1ST_BUTTON_PRESSED)
 				GoToLineAndShow((Lines.size() - 1) * (IntKeyState.MousePos.y - m_Where.top) / (m_Where.height() - 1));
 		}
 
@@ -2817,12 +2826,15 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 	if (MouseEvent->dwButtonState&FROM_LEFT_1ST_BUTTON_PRESSED)
 	{
 		static std::chrono::steady_clock::time_point EditorPrevDoubleClick;
-		static COORD EditorPrevPosition={};
+		static point EditorPrevPosition;
 
 		const auto CurrentTime = std::chrono::steady_clock::now();
 
-		if (CurrentTime - EditorPrevDoubleClick <= std::chrono::milliseconds(GetDoubleClickTime()) && MouseEvent->dwEventFlags != MOUSE_MOVED &&
-		        EditorPrevPosition.X == MouseEvent->dwMousePosition.X && EditorPrevPosition.Y == MouseEvent->dwMousePosition.Y)
+		if (
+			CurrentTime - EditorPrevDoubleClick <= std::chrono::milliseconds(GetDoubleClickTime()) &&
+			MouseEvent->dwEventFlags != MOUSE_MOVED &&
+			EditorPrevPosition == MouseEvent->dwMousePosition
+		)
 		{
 			m_it_CurLine->Select(0, m_it_CurLine->m_Str.size());
 
@@ -2832,8 +2844,7 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 			}
 
 			EditorPrevDoubleClick = {};
-			EditorPrevPosition.X=0;
-			EditorPrevPosition.Y=0;
+			EditorPrevPosition = {};
 			Show();
 			return true;
 		}
@@ -2854,8 +2865,7 @@ bool Editor::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		else
 		{
 			EditorPrevDoubleClick = {};
-			EditorPrevPosition.X=0;
-			EditorPrevPosition.Y=0;
+			EditorPrevPosition = {};
 		}
 
 		Show();
@@ -3475,7 +3485,7 @@ bool Editor::Search(bool Next)
 	string QuotedStr;
 
 	const auto FindAllList = VMenu2::create({}, {});
-	UINT AllRefLines = 0;
+	size_t AllRefLines{};
 	{
 		SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<EditorPreRedrawItem>());
 		SetCursorType(false, -1);
@@ -3644,7 +3654,7 @@ bool Editor::Search(bool Next)
 							newcol.StartPos=m_FoundPos;
 							newcol.EndPos=m_FoundPos + m_FoundSize - 1;
 							newcol.SetColor(colors::PaletteColorToFarColor(COL_EDITORSELECTEDTEXT));
-							newcol.SetOwner(FarGuid);
+							newcol.SetOwner(FarUuid);
 							newcol.Priority=EDITOR_COLOR_SELECTION_PRIORITY;
 							CurPtr->AddColor(newcol);
 
@@ -3830,7 +3840,7 @@ bool Editor::Search(bool Next)
 		FindAllList->SetMenuFlags(VMENU_WRAPMODE | VMENU_SHOWAMPERSAND);
 		FindAllList->SetPosition({ -1, MenuY1, 0, MenuY2 });
 		FindAllList->SetTitle(format(msg(lng::MEditSearchStatistics), FindAllList->size(), AllRefLines));
-		FindAllList->SetBottomTitle(msg(lng::MEditFindAllMenuFooter));
+		FindAllList->SetBottomTitle(KeysToLocalizedText(KEY_CTRLENTER, KEY_F5, KEY_ADD, KEY_CTRLUP, KEY_CTRLDOWN));
 		FindAllList->SetHelp(L"FindAllMenu"sv);
 		FindAllList->SetId(EditorFindAllListId);
 
@@ -4096,7 +4106,7 @@ void Editor::ProcessChar(wchar_t Char)
 		ProcessKeyInternal(Manager::Key(L' '), RefreshMe);
 		auto& line = m_it_CurLine->m_Str;
 		if (line.size() > cur_pos && line[cur_pos] == L' ')
-			line[cur_pos] = L'\0';
+			line[cur_pos] = {};
 	}
 }
 
@@ -4520,7 +4530,7 @@ private:
 public:
 	static size_t GetUndoDataSize() { return UndoDataSize; }
 
-	EditorUndoData(int Type, const string& Str, eol Eol, int StrNum, int StrPos):
+	EditorUndoData(int Type, string_view const Str, eol Eol, int StrNum, int StrPos):
 		m_Type(),
 		m_StrPos(),
 		m_StrNum(),
@@ -4534,7 +4544,7 @@ public:
 		UndoDataSize -= m_Str.size();
 	}
 
-	void SetData(int Type, const string& Str, eol Eol, int StrNum, int StrPos)
+	void SetData(int Type, string_view const Str, eol Eol, int StrNum, int StrPos)
 	{
 		m_Type = Type;
 		m_StrPos = StrPos;
@@ -4557,7 +4567,7 @@ public:
 
 size_t Editor::EditorUndoData::UndoDataSize = 0;
 
-void Editor::AddUndoData(int Type, const string& Str, eol Eol, int StrNum, int StrPos)
+void Editor::AddUndoData(int Type, string_view const Str, eol Eol, int StrNum, int StrPos)
 {
 	if (m_Flags.Check(FEDITOR_DISABLEUNDO))
 		return;
@@ -4833,7 +4843,7 @@ long long Editor::GetCurPos(bool file_pos, bool add_bom) const
 			if (add_bom)
 				bom = 3;
 		}
-		else if (GetCodePageInfo(m_codepage).first > 1)
+		else if (const auto Info = GetCodePageInfo(m_codepage); Info && Info->MaxCharSize > 1)
 		{
 			Multiplier = UnknownMultiplier;
 		}
@@ -5117,7 +5127,7 @@ string Editor::VBlock2Text()
 	return CopyData;
 }
 
-void Editor::VPaste(const string& Data)
+void Editor::VPaste(string_view const Data)
 {
 	if (m_Flags.Check(FEDITOR_LOCKMODE))
 		return;
@@ -5419,8 +5429,6 @@ int Editor::EditorControl(int Command, intptr_t Param1, void *Param2)
 					return FALSE;
 				}
 
-				const auto Eol = SetString->StringEOL? eol::parse(SetString->StringEOL) : GlobalEOL;
-
 				m_Flags.Set(FEDITOR_CURPOSCHANGEDBYPLUGIN);
 				int DestLine=SetString->StringNumber;
 
@@ -5432,7 +5440,7 @@ int Editor::EditorControl(int Command, intptr_t Param1, void *Param2)
 				CurPtr->SetString({ SetString->StringText, static_cast<size_t>(SetString->StringLength) }, true);
 				if (CurPtr->GetEOL() == eol::none)
 				{
-					CurPtr->SetEOL(Eol);
+					CurPtr->SetEOL(SetString->StringEOL? eol::parse(SetString->StringEOL) : GlobalEOL);
 				}
 				CurPtr->SetCurPos(CurPos);
 				Change(ECTYPE_CHANGED,DestLine);
@@ -6739,7 +6747,7 @@ void Editor::SetSavePosMode(int SavePos, int SaveShortPos)
 		EdOpt.SaveShortPos = (0 != SaveShortPos);
 }
 
-static void EditorShowMsgImpl(const string& Title, const string& Msg, const string& Name, size_t Percent)
+static void EditorShowMsgImpl(string_view const Title, const string& Msg, const string& Name, size_t Percent)
 {
 	const auto strMsg = concat(Msg, L' ', Name);
 	const size_t Length = std::max(std::min(ScrX - 1 - 10, static_cast<int>(strMsg.size())), 40);
@@ -6755,7 +6763,7 @@ static void EditorShowMsgImpl(const string& Title, const string& Msg, const stri
 		{});
 }
 
-void Editor::EditorShowMsg(const string& Title, const string& Msg, const string& Name, size_t Percent)
+void Editor::EditorShowMsg(string_view const Title, const string& Msg, const string& Name, size_t Percent)
 {
 	EditorShowMsgImpl(Title, Msg, Name, Percent);
 
@@ -6916,144 +6924,78 @@ void Editor::GetCacheParams(EditorPosCache &pc) const
 	pc.bm=m_SavePos;
 }
 
-DWORD Editor::SetLineCodePage(const iterator& edit, uintptr_t codepage, bool check_only)
+static std::string_view GetLineBytes(string_view const Str, std::vector<char>& Buffer, uintptr_t const Codepage, encoding::error_position* const ErrorPosition)
 {
-	DWORD Ret = SETCP_NOERROR;
-	if (codepage == m_codepage)
-		return Ret;
-
-	bool UsedDefaultChar = false;
-	assert(m_codepage != CP_UTF7); // BUGBUG: CP_SYMBOL, 50xxx, 57xxx
-	bool* lpUsedDefaultChar = m_codepage == CP_UTF8 ? nullptr : &UsedDefaultChar;
-
-	if (!edit->m_Str.empty())
+	for (;;)
 	{
-		if (3 * static_cast<size_t>(edit->m_Str.size()) + 1 > decoded.size())
-			decoded.resize(256 + 4 * edit->m_Str.size());
+		auto const Length = encoding::get_bytes(Codepage, Str, Buffer, ErrorPosition);
 
-		const size_t length = encoding::get_bytes(m_codepage, edit->m_Str, decoded, lpUsedDefaultChar);
-		if (!length || UsedDefaultChar)
-		{
-			Ret |= SETCP_WC2MBERROR;
-			if (check_only)
-				return Ret;
-		}
+		if (Length <= Buffer.size())
+			return { Buffer.data(), Length };
 
-		if (codepage == CP_UTF8 || codepage == CP_UTF7)
-		{
-			Utf::errors errs;
-			Utf::get_chars(codepage, { decoded.data(), length }, {}, &errs);
-			if (errs.Conversion.Error)
-				Ret |= SETCP_MB2WCERROR;
-		}
-		else
-		{
-			// BUGBUG: CP_SYMBOL, 50xxx, 57xxx
-			if (!MultiByteToWideChar(codepage, MB_ERR_INVALID_CHARS, decoded.data(), static_cast<int>(length), nullptr, 0) && GetLastError() == ERROR_NO_UNICODE_TRANSLATION)
-			{
-				Ret |= SETCP_MB2WCERROR;
-			}
-		}
-		if (check_only)
-			return Ret;
-
-		edit->m_Str.assign(encoding::get_chars(codepage, { decoded.data(), length }));
+		resize_exp_noshrink(Buffer, Length);
 	}
-
-	if (!check_only)
-		edit->Changed();
-
-	return Ret;
 }
 
-
-bool Editor::TryCodePage(uintptr_t codepage, int &X, int &Y)
+bool Editor::SetLineCodePage(iterator const& Iterator, uintptr_t const Codepage, bool const Validate)
 {
-	if ( m_codepage == codepage )
+	if (Codepage == m_codepage || Iterator->m_Str.empty())
 		return true;
 
-	assert(m_codepage != CP_UTF7);
-	int line = 0;
+	encoding::error_position ErrorPosition;
+	const auto Bytes = GetLineBytes(Iterator->m_Str, decoded, m_codepage, Validate? &ErrorPosition : nullptr);
+	auto Result = !Bytes.empty() && !ErrorPosition;
+	Iterator->m_Str.assign(encoding::get_chars(Codepage, Bytes, &ErrorPosition));
+	Result = Result && !Iterator->m_Str.empty() && !ErrorPosition;
+	Iterator->Changed();
 
-	FOR_RANGE(Lines, i)
+	return Result;
+}
+
+bool Editor::TryCodePage(uintptr_t const Codepage, uintptr_t& ErrorCodepage, size_t& ErrorLine, size_t& ErrorPos)
+{
+	if (m_codepage == Codepage)
+		return true;
+
+	int LineNumber = 0;
+
+	for (auto i = Lines.begin(), end = Lines.end(); i != end; ++i, ++LineNumber)
 	{
-		if (SetLineCodePage(i, codepage, true))
+		if (i->m_Str.empty())
+			continue;
+
+		encoding::error_position ErrorPosition;
+		const auto Bytes = GetLineBytes(i->m_Str, decoded, m_codepage, &ErrorPosition);
+
+		if (Bytes.empty() || ErrorPosition)
 		{
-			Y = line;
-			X = 0;
+			ErrorCodepage = m_codepage;
+			ErrorLine = LineNumber;
+			ErrorPos = *ErrorPosition;
+			return false;
+		}
 
-			if (3 * static_cast<size_t>(i->m_Str.size()) + 1 > decoded.size())
-				decoded.resize(256 + 4 * i->m_Str.size());
+		if (!encoding::get_chars_count(Codepage, Bytes, &ErrorPosition) || ErrorPosition)
+		{
+			ErrorCodepage = Codepage;
+			ErrorLine = LineNumber;
 
-			std::vector<size_t> wchar_offsets;
-			wchar_offsets.reserve(i->m_Str.size() + 1);
-			size_t total_len = 0;
-
-			bool def = false, *p_def = m_codepage == CP_UTF8? nullptr : &def;
-			for (int j = 0; j < i->m_Str.size(); ++j)
+			// Position is in bytes, we might need to convert it back to chars
+			const auto Info = GetCodePageInfo(m_codepage);
+			if (Info && Info->MaxCharSize == 1)
 			{
-				wchar_offsets.emplace_back(total_len);
-				char *s = decoded.data() + total_len;
-
-				const size_t len = encoding::get_bytes(m_codepage, { &i->m_Str[j], 1 }, { s, 3 }, p_def);
-				if (!len || def)
-				{
-					X = j;
-					return false;
-				}
-				total_len += len;
-			}
-
-			std::optional<size_t> Error;
-			if (codepage == CP_UTF8 || codepage == CP_UTF7)
-			{
-				Utf::errors errs;
-				Utf::get_chars(codepage, { decoded.data(), total_len }, {}, &errs);
-				if (errs.Conversion.Error)
-				{
-					Error = errs.Conversion.Position;
-				}
+				ErrorPos = *ErrorPosition;
 			}
 			else
 			{
-				const int max_len = 2;
-				for (size_t j = 0; j != total_len; )
-				{
-					int len;
-					for (len=1; len <= max_len; ++len)
-					{
-						if (j + len <= total_len)
-						{
-							const auto len2 = MultiByteToWideChar(codepage, MB_ERR_INVALID_CHARS, decoded.data() + j, len, nullptr, 0);
-							if (!len2 && GetLastError() == ERROR_NO_UNICODE_TRANSLATION)
-								continue;
-							else
-								break;
-						}
-					}
-					if (len <= max_len)
-					{
-						j += len;
-						continue;
-					}
-					else
-					{
-						Error = j;
-						break;
-					}
-				}
+				const auto BytesCount = encoding::get_bytes(m_codepage, i->m_Str, decoded, &ErrorPosition);
+				ErrorPos = encoding::get_chars_count(m_codepage, { decoded.data(), std::min(*ErrorPosition, BytesCount) });
 			}
 
-			if (Error)
-			{
-				const auto low_pos = std::lower_bound(wchar_offsets.begin(), wchar_offsets.end(), *Error);
-				if (low_pos != wchar_offsets.end())
-					X = static_cast<int>(low_pos - wchar_offsets.begin());
-			}
 			return false;
 		}
-		++line;
 	}
+
 	return true;
 }
 
@@ -7062,11 +7004,12 @@ bool Editor::SetCodePage(uintptr_t codepage, bool *BOM, bool ShowMe)
 	if ( m_codepage == codepage )
 		return true;
 
-	DWORD Result = 0;
+	auto Result = true;
 
 	FOR_RANGE(Lines, i)
 	{
-		Result |= SetLineCodePage(i, codepage, false);
+		if (!SetLineCodePage(i, codepage, Result))
+			Result = false;
 	}
 
 	if (BOM)
@@ -7075,7 +7018,7 @@ bool Editor::SetCodePage(uintptr_t codepage, bool *BOM, bool ShowMe)
 		if (codepage == CP_UTF8 && !Lines.empty())
 		{
 			auto& first = *Lines.begin();
-			if (starts_with(first.m_Str, Utf::BOM_CHAR))
+			if (starts_with(first.m_Str, encoding::bom_char))
 			{
 				first.m_Str.erase(0, 1);
 				*BOM = true;
@@ -7086,7 +7029,8 @@ bool Editor::SetCodePage(uintptr_t codepage, bool *BOM, bool ShowMe)
 	m_codepage = codepage;
 
 	if (ShowMe) Show(); //BUGBUG: костыль для того, чтобы не было перерисовки в FileEditor::Init.
-	return Result == 0; // BUGBUG, more details
+
+	return Result; // BUGBUG, more details?
 }
 
 uintptr_t Editor::GetCodePage() const
@@ -7137,7 +7081,7 @@ void Editor::DrawScrollbar()
 	if (EdOpt.ShowScrollBar)
 	{
 		SetColor(COL_EDITORSCROLLBAR);
-		XX2 = m_Where.right - (ScrollBarEx(m_Where.right, m_Where.top, ObjHeight(), m_it_CurLine.Number() - CalcDistance(m_it_TopScreen, m_it_CurLine), Lines.size())? 1 : 0);
+		XX2 = m_Where.right - (ScrollBar(m_Where.right, m_Where.top, ObjHeight(), m_it_CurLine.Number() - CalcDistance(m_it_TopScreen, m_it_CurLine), Lines.size())? 1 : 0);
 	}
 }
 

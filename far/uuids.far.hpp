@@ -1,10 +1,14 @@
-﻿/*
-lasterror.cpp
+﻿#ifndef UUIDS_FAR_HPP_49C263EE_12A1_48FD_BA02_52CCE8950C28
+#define UUIDS_FAR_HPP_49C263EE_12A1_48FD_BA02_52CCE8950C28
+#pragma once
 
-Сохрание/восстановление LastError
+/*
+uuids.far.hpp
+
+Far UUIDs
 */
 /*
-Copyright © 2017 Far Group
+Copyright © 2010 Far Group
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,37 +34,27 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-// Self:
-#include "lasterror.hpp"
-
 // Internal:
-#include "imports.hpp"
 
 // Platform:
 
 // Common:
+#include "common/uuid.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-GuardLastError::GuardLastError():
-	m_LastError(GetLastError()),
-	m_LastStatus(imports.RtlGetLastNtStatus()),
-	m_Active(true)
+namespace uuids::far
 {
+	constexpr inline auto
+		FarUuid = "00000000-0000-0000-0000-000000000000"_uuid;
 }
 
-GuardLastError::~GuardLastError()
+// TODO: Use fully qualified names everywhere
+inline namespace uuids_inline
 {
-	if (!m_Active)
-		return;
-
-	SetLastError(m_LastError);
-	imports.RtlNtStatusToDosError(m_LastStatus);
+	using namespace uuids::far;
 }
 
-void GuardLastError::dismiss()
-{
-	m_Active = false;
-}
+#endif // UUIDS_FAR_HPP_49C263EE_12A1_48FD_BA02_52CCE8950C28

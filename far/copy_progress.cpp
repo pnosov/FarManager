@@ -28,6 +28,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+// BUGBUG
+#include "platform.headers.hpp"
+
 // Self:
 #include "copy_progress.hpp"
 
@@ -76,28 +79,40 @@ size_t copy_progress::CanvasWidth()
 	return 52;
 }
 
-static string GetTimeText(std::chrono::seconds Seconds)
+void copy_progress::skip()
 {
-	// BUGBUG copy time > 4.166 days (100 hrs) will not be displayed correctly
-	return ConvertDurationToHMS(Seconds < 100h? Seconds : 99h + Seconds % 1h);
-}
+	m_BytesTotal.Copied -= m_BytesCurrent.Copied;
+	m_BytesTotal.Total -= m_BytesCurrent.Total;
 
-void copy_progress::UpdateAllBytesInfo(unsigned long long FileSize)
-{
-	m_Bytes.Copied += m_Bytes.CurrCopied;
-	if (m_Bytes.CurrCopied < FileSize)
-	{
-		m_Bytes.Skipped += FileSize - m_Bytes.CurrCopied;
-	}
+	m_BytesCurrent = {};
+
+	--m_Files.Total;
+
 	Flush();
 }
 
-void copy_progress::UpdateCurrentBytesInfo(unsigned long long NewValue)
+void copy_progress::next()
 {
-	m_Bytes.Copied -= m_Bytes.CurrCopied;
-	m_Bytes.CurrCopied = NewValue;
-	m_Bytes.Copied += m_Bytes.CurrCopied;
+	++m_Files.Copied;
+
+	m_BytesCurrent = {};
+
 	Flush();
+}
+
+void copy_progress::undo()
+{
+	m_BytesTotal.Copied -= m_BytesCurrent.Copied;
+	m_BytesTotal.Total -= m_BytesCurrent.Total;
+
+	m_BytesCurrent.Copied = 0;
+
+	Flush();
+}
+
+unsigned long long copy_progress::get_total_bytes() const
+{
+	return m_BytesTotal.Total;
 }
 
 bool copy_progress::CheckEsc()
@@ -144,7 +159,7 @@ void copy_progress::Flush()
 	Text({ m_Rect.left + 5, m_Rect.top + 5 }, m_Color, m_Dst);
 	Text({ m_Rect.left + 5, m_Rect.top + 8 }, m_Color, m_FilesCopied);
 
-	const auto Result = FormatCounter(lng::MCopyBytesTotalInfo, lng::MCopyFilesTotalInfo, GetBytesDone(), m_Bytes.Total, m_Total, CanvasWidth() - 5);
+	const auto Result = FormatCounter(lng::MCopyBytesTotalInfo, lng::MCopyFilesTotalInfo, m_BytesTotal.Copied, m_BytesTotal.Total, m_Total, CanvasWidth() - 5);
 	Text({ m_Rect.left + 5, m_Rect.top + 9 }, m_Color, Result);
 
 	Text({ m_Rect.left + 5, m_Rect.top + 6 }, m_Color, m_CurrentBar);
@@ -154,12 +169,24 @@ void copy_progress::Flush()
 		Text({ m_Rect.left + 5, m_Rect.top + 10 }, m_Color, m_TotalBar);
 	}
 
-	Text({ m_Rect.left + 5, m_Rect.top + (m_Total ? 12 : 11) }, m_Color, m_Time);
+	if (!m_Time.empty())
+	{
+		const size_t Width = m_Rect.width() - 10;
+		const auto XPos = m_Rect.left + 5;
+		const auto YPos = m_Rect.top + (m_Total? 12 : 11);
+
+		const auto ConsumedSpace = m_Time.size() + 1 + m_TimeLeft.size() + 1 + m_Speed.size();
+		const auto FillerWidth = ConsumedSpace >= Width? 0 : (Width - ConsumedSpace) / 2;
+
+		Text({ XPos, YPos }, m_Color, m_Time);
+		Text({ static_cast<int>(XPos + m_Time.size() + 1 + FillerWidth), YPos }, m_Color, m_TimeLeft);
+		Text({ static_cast<int>(m_Rect.right + 1 - 5 - m_Speed.size()), YPos }, m_Color, m_Speed);
+	}
 
 	if (m_Total || (m_Files.Total == 1))
 	{
 		ConsoleTitle::SetFarTitle(concat(
-			L'{', str(m_Total ? ToPercent(GetBytesDone(), m_Bytes.Total) : m_CurrentPercent), L"%} "sv,
+			L'{', str(m_Total? ToPercent(m_BytesTotal.Copied, m_BytesTotal.Total) : m_CurrentPercent), L"%} "sv,
 			msg(m_Move? lng::MCopyMovingTitle : lng::MCopyCopyingTitle))
 		);
 	}
@@ -167,24 +194,55 @@ void copy_progress::Flush()
 	Global->ScrBuf->Flush();
 }
 
-void copy_progress::SetProgressValue(unsigned long long CompletedSize, unsigned long long TotalSize)
+void copy_progress::reset_current()
 {
-	SetCurrentProgress(CompletedSize, TotalSize);
+	m_BytesCurrent = {};
+}
 
-	const auto BytesDone = GetBytesDone();
+void copy_progress::set_current_total(unsigned long long const Value)
+{
+	m_BytesCurrent.Copied = 0;
+	m_BytesCurrent.Total = Value;
+
+	Flush();
+}
+
+void copy_progress::set_current_copied(unsigned long long const Value)
+{
+	const auto Increment = Value - m_BytesCurrent.Copied;
+	m_BytesCurrent.Copied = Value;
+	m_BytesTotal.Copied += Increment;
+
+	SetCurrentProgress(m_BytesCurrent.Copied, m_BytesCurrent.Total);
 
 	if (m_Total)
 	{
-		SetTotalProgress(BytesDone, m_Bytes.Total);
+		SetTotalProgress(m_BytesTotal.Copied, m_BytesTotal.Total);
 	}
 
 	if (m_ShowTime)
 	{
-		const auto SizeToGo = (m_Bytes.Total > BytesDone) ? (m_Bytes.Total - BytesDone) : 0;
-		UpdateTime(BytesDone, SizeToGo);
+		const auto SizeToGo = m_BytesTotal.Total > m_BytesTotal.Copied? m_BytesTotal.Total - m_BytesTotal.Copied : 0;
+		UpdateTime(m_BytesTotal.Copied, SizeToGo);
 	}
 
 	Flush();
+}
+
+void copy_progress::set_total_files(unsigned long long const Value)
+{
+	m_Files.Total = Value;
+}
+
+void copy_progress::set_total_bytes(unsigned long long const Value)
+{
+	m_BytesTotal.Copied = 0;
+	m_BytesTotal.Total = Value;
+}
+
+void copy_progress::add_total_bytes(unsigned long long const Value)
+{
+	m_BytesTotal.Total += Value;
 }
 
 void copy_progress::CreateBackground()
@@ -224,20 +282,20 @@ void copy_progress::CreateBackground()
 
 void copy_progress::SetNames(const string& Src, const string& Dst)
 {
-	if (m_ShowTime)
+	if (m_ShowTime && !m_Files.Copied)
 	{
-		if (!m_Files.Copied)
-		{
-			m_CopyStartTime = std::chrono::steady_clock::now();
-			WaitUserTime = 0s;
-			m_CalcTime = 0s;
-		}
+		m_CopyStartTime = std::chrono::steady_clock::now();
+		WaitUserTime = 0s;
+		m_CalcTime = 0s;
 	}
 
 	const auto NameWidth = static_cast<int>(CanvasWidth());
 	m_Src = truncate_path(Src, NameWidth);
 	m_Dst = truncate_path(Dst, NameWidth);
 	m_FilesCopied = FormatCounter(lng::MCopyFilesTotalInfo, lng::MCopyBytesTotalInfo, m_Files.Copied, m_Files.Total, m_Total, CanvasWidth() - 5);
+
+	set_current_total(0);
+	set_current_copied(0);
 
 	Flush();
 }
@@ -258,38 +316,25 @@ void copy_progress::UpdateTime(unsigned long long SizeDone, unsigned long long S
 {
 	m_CalcTime = std::chrono::steady_clock::now() - m_CopyStartTime - WaitUserTime;
 
-	string tmp[3];
-	const auto CalcTime = m_CalcTime / 1s * 1s;
-	if (CalcTime != 0s)
+	if (const auto CalcTime = m_CalcTime / 1s * 1s; CalcTime != 0s)
 	{
-		SizeDone -= m_Bytes.Skipped;
-
-		const auto strCalcTimeStr = GetTimeText(CalcTime);
+		m_Time = concat(msg(lng::MCopyTimeInfoElapsed), L' ', ConvertDurationToHMS(CalcTime));
 
 		if (m_SpeedUpdateCheck)
 		{
 			if (SizeToGo)
 			{
 				// double to avoid potential overflows with large files
-				m_TimeLeft = GetTimeText((std::chrono::duration_cast<std::chrono::seconds>(CalcTime * 1.0 / SizeDone * SizeToGo)));
+				m_TimeLeft = concat(msg(lng::MCopyTimeInfoRemaining), L' ', ConvertDurationToHMS(std::chrono::duration_cast<std::chrono::seconds>(CalcTime * 1.0 / SizeDone * SizeToGo)));
 			}
 
-			m_Speed = FileSizeToStr(SizeDone / (CalcTime / 1s), 8, COLFLAGS_FLOATSIZE | COLFLAGS_GROUPDIGITS);
-			if (starts_with(m_Speed, L' ') && std::iswdigit(m_Speed.back()))
-			{
-				m_Speed.erase(0, 1);
-				m_Speed += L' ';
-			}
+			m_Speed = concat(trim(FileSizeToStr(SizeDone / (CalcTime / 1s), 8, COLFLAGS_FLOATSIZE | COLFLAGS_GROUPDIGITS)), msg(lng::MCopyTimeInfoSpeed));
 		}
-
-		tmp[0] = strCalcTimeStr;
-		tmp[1] = m_TimeLeft;
-		tmp[2] = m_Speed;
 	}
 	else
 	{
-		tmp[0] = tmp[1] = tmp[2] = string(8, L' ');
+		m_Time.clear();
+		m_TimeLeft.clear();
+		m_Speed.clear();
 	}
-
-	m_Time = format(msg(lng::MCopyTimeInfo), tmp[0], tmp[1], tmp[2]);
 }

@@ -34,19 +34,36 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "rectangle.hpp"
+#include "../function_traits.hpp"
 
 //----------------------------------------------------------------------------
 
-template<class T, class P>
-void for_submatrix(T& Matrix, rectangle Rect, P Predicate)
+template<class P>
+void for_submatrix(auto& Matrix, rectangle Rect, P Predicate)
 {
 	for (auto i = Rect.top; i <= Rect.bottom; ++i)
 	{
 		for (auto j = Rect.left; j <= Rect.right; ++j)
 		{
-			Predicate(Matrix[i][j]);
+			if constexpr (function_traits<P>::arity == 2)
+				Predicate(Matrix[i][j], point{ j - Rect.left, i - Rect.top });
+			else
+				Predicate(Matrix[i][j]);
 		}
 	}
+}
+
+template<typename T, size_t Width, size_t Height>
+static consteval auto column_major_iota()
+{
+	std::array<T, Width* Height> Result;
+	static_assert(Result.size() - 1 <= std::numeric_limits<T>::max());
+
+	for (size_t Row = 0; Row != Height; ++Row)
+		for (size_t Col = 0; Col != Width; ++Col)
+			Result[Col + Row * Width] = static_cast<T>(Row + Col * Height);
+
+	return Result;
 }
 
 #endif // ALGORITHM_HPP_6F8540EC_CCA6_4932_8DE1_D3BEDFF24453

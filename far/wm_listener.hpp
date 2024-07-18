@@ -50,15 +50,22 @@ class wm_listener: noncopyable
 public:
 	wm_listener();
 	~wm_listener();
+
 	void Check();
+	void enable_power_notifications();
+	void disable_power_notifications();
 
 private:
-	void WindowThreadRoutine(const os::event* ReadyEvent);
+	void WindowThreadRoutine(const os::event& ReadyEvent);
 
-	os::thread m_Thread;
-	HWND m_Hwnd;
-	os::event m_exitEvent;
+	HWND m_Hwnd{};
 	std::exception_ptr m_ExceptionPtr;
+	os::thread m_Thread;
+	struct powernotify_deleter
+	{
+		void operator()(HPOWERNOTIFY Ptr) const;
+	};
+	std::unique_ptr<std::remove_pointer_t<HPOWERNOTIFY>, powernotify_deleter> m_PowerNotify;
 };
 
 #endif // WM_LISTENER_HPP_6C668719_5279_4CB7_81B0_448AC5165C00

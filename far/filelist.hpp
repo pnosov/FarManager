@@ -42,15 +42,17 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "plugin.hpp"
 
 // Platform:
+#include "platform.fs.hpp"
 
 // Common:
 #include "common/function_ref.hpp"
+#include "common/string_utils.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-class FileFilter;
+class multifilter;
 class Plugin;
 class plugin_item_list;
 
@@ -59,7 +61,7 @@ namespace highlight
 	class element;
 }
 
-using content_data = std::unordered_map<string, string>;
+using content_data = unordered_string_map<string>;
 
 class FileListItem: public os::fs::find_data
 {
@@ -124,11 +126,9 @@ private:
 
 enum OPENFILEPLUGINTYPE: int;
 
-class FileList:public Panel
+class FileList final: public Panel
 {
-	struct private_tag
-	{
-	};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static file_panel_ptr create(window_ptr Owner);
@@ -140,25 +140,25 @@ public:
 	long long VMProcess(int OpCode, void* vParam = nullptr, long long iParam = 0) override;
 	void MoveToMouse(const MOUSE_EVENT_RECORD *MouseEvent) override;
 	void Update(int Mode) override;
-	void UpdateIfChanged(bool Idle) override;
+	void UpdateIfChanged(bool Changed = false) override;
 	void UpdateIfRequired() override;
 	bool SendKeyToPlugin(DWORD Key, bool Pred = false) override;
-	void StartFSWatcher(bool got_focus = false, bool check_time = true) override;
 	void StopFSWatcher() override;
 	void SortFileList(bool KeepPosition) override;
-	void SetViewMode(int ViewMode) override;
+	void SetViewMode(int Mode) override;
 	void SetSortMode(panel_sort Mode, bool KeepOrder = false) override;
 	void SetCustomSortMode(panel_sort Mode, sort_order Order, bool InvertByDefault) override;
 	void ChangeSortOrder(bool Reverse) override;
 	void ChangeDirectoriesFirst(bool Mode) override;
 	void OnSortingChange() override;
+	void InitCurDir(string_view CurDir) override;
 	bool SetCurDir(string_view NewDir, bool ClosePanel, bool IsUpdated = true, bool Silent = false) override;
 	panel_sort GetPrevSortMode() const override;
 	bool GetPrevSortOrder() const override;
 	int GetPrevViewMode() const override;
 	bool GetPrevDirectoriesFirst() const override;
 	bool GetFileName(string &strName, int Pos, os::fs::attributes& FileAttr) const override;
-	const std::unordered_set<string>* GetFilteredExtensions() const override;
+	const unordered_string_set* GetFilteredExtensions() const override;
 	int GetCurrentPos() const override;
 	bool FindPartName(string_view Name, int Next, int Direct = 1) override;
 	bool GetPlainString(string& Dest, int ListPos) const override;
@@ -177,12 +177,12 @@ public:
 	void EditFilter() override;
 	bool FileInFilter(size_t idxItem) override;
 	bool FilterIsEnabled() override;
-	void ReadDiz(span<PluginPanelItem> Items = {}) override;
-	void DeleteDiz(const string& Name, const string& ShortName) override;
+	void ReadDiz(std::span<PluginPanelItem> Items = {}) override;
+	void DeleteDiz(string_view Name, string_view ShortName) override;
 	void FlushDiz() override;
 	string GetDizName() const override;
-	string_view GetDescription(const string& Name, const string& ShortName, long long FileSize) const;
-	void CopyDiz(const string& Name, const string& ShortName, const string& DestName, const string& DestShortName, DizList *DestDiz) override;
+	string_view GetDescription(string_view Name, string_view ShortName, long long FileSize) const;
+	void CopyDiz(string_view Name, string_view ShortName, string_view DestName, string_view DestShortName, DizList *DestDiz) override;
 	bool IsDizDisplayed() const override;
 	bool IsColumnDisplayed(column_type Type) const override;
 	int GetColumnsCount() const override;
@@ -201,11 +201,16 @@ public:
 	void UpdateKeyBar() override;
 	void GoHome(string_view Drive) override;
 	bool GetSelectedFirstMode() const override;
+	void on_swap() override;
+	void dispose() override;
 
 	const FileListItem* GetItem(size_t Index) const;
 	const FileListItem* GetLastSelectedItem() const;
 
 	plugin_panel* OpenFilePlugin(const string& FileName, int PushPrev, OPENFILEPLUGINTYPE Type, bool* StopProcessing = nullptr);
+	void PushFilePlugin(const string& FileName, std::unique_ptr<plugin_panel>&& hNewPlugin);
+	void SetAndUpdateFilePlugin(const string& FileName, std::unique_ptr<plugin_panel>&& hNewPlugin);
+
 	void ProcessHostFile();
 	bool GetPluginInfo(PluginInfo *PInfo) const;
 	void PluginGetPanelInfo(PanelInfo &Info);
@@ -217,13 +222,13 @@ public:
 	void PluginClearSelection(int SelectedItemNumber);
 	void PluginEndSelection();
 	bool PluginPanelHelp(const plugin_panel* hPlugin) const;
-	void ResetLastUpdateTime();
 	string GetPluginPrefix() const;
 
-	size_t FileListToPluginItem2(const FileListItem& fi, FarGetPluginPanelItem* pi) const;
+	size_t FileListToPluginItem2(const FileListItem& fi, FarGetPluginPanelItem* gpi) const;
 	static bool FileNameToPluginItem(string_view Name, class PluginPanelItemHolder& pi);
 	void FileListToPluginItem(const FileListItem& fi, PluginPanelItemHolder& Holder) const;
 	static bool IsModeFullScreen(int Mode);
+	void background_update();
 
 	struct PrevDataItem;
 
@@ -243,7 +248,7 @@ private:
 	bool HardlinksSupported() const;
 	bool StreamsSupported() const;
 	const string& GetComputerName() const;
-	std::unique_ptr<content_data> GetContentData(const string& Item) const;
+	std::unique_ptr<content_data> GetContentData(string_view Item) const;
 	void ApplySortMode(panel_sort Mode);
 	void ToBegin();
 	void ToEnd();
@@ -257,7 +262,7 @@ private:
 	FarColor GetShowColor(int Position, bool FileColor = true) const;
 	void ShowSelectedSize();
 	void ShowTotalSize(const OpenPanelInfo &Info);
-	bool ConvertName(string_view SrcName, string &strDest, int MaxLength, unsigned long long RightAlign, int ShowStatus, os::fs::attributes FileAttr) const;
+	bool ConvertName(string_view SrcName, string &strDest, size_t MaxLength, unsigned long long RightAlign, int ShowStatus, os::fs::attributes FileAttr) const;
 	void Select(FileListItem& SelItem, bool Selection);
 	long SelectFiles(int Mode, string_view Mask = {});
 	void ProcessEnter(bool EnableExec, bool SeparateWindow, bool EnableAssoc, bool RunAs, OPENFILEPLUGINTYPE Type);
@@ -265,13 +270,13 @@ private:
 	bool ChangeDir(string_view NewDir, bool IsParent, bool ResolvePath, bool IsUpdated, const UserDataItem* DataItem, OPENFILEPLUGINTYPE OfpType, bool Silent);
 	bool ChangeDir(string_view NewDir, bool IsParent);
 	void CountDirSize(bool IsRealNames);
-	void ReadFileNames(int KeepSelection, int UpdateEvenIfPanelInvisible, int DrawMessage);
-	void UpdatePlugin(int KeepSelection, int UpdateEvenIfPanelInvisible);
+	void ReadFileNames(bool KeepSelection, bool UpdateEvenIfPanelInvisible);
+	void UpdatePlugin(bool KeepSelection, bool UpdateEvenIfPanelInvisible);
 	void MoveSelection(list_data& From, list_data& To);
 	void PushPlugin(std::unique_ptr<plugin_panel>&& hPlugin, string_view HostFile);
 	bool PopPlugin(int EnableRestoreViewMode);
 	void PopPrevData(string_view DefaultName, bool Closed, bool UsePrev, bool Position, bool SetDirectorySuccess);
-	void CopyFiles(bool bMoved);
+	void CopyFiles(bool Move);
 	void CopyNames(bool FillPathName, bool UNC);
 	void SelectSortMode();
 	bool ApplyCommand();
@@ -284,13 +289,13 @@ private:
 	void PrepareStripes(const std::vector<column>& Columns);
 	void PrepareViewSettings(int ViewMode);
 	void PluginDelete();
-	void PutDizToPlugin(FileList *DestPanel, const std::vector<PluginPanelItem>& ItemList, bool Delete, bool Move, DizList *SrcDiz) const;
+	void PutDizToPlugin(FileList *DestPanel, std::span<PluginPanelItem> ItemList, bool Delete, bool Move, DizList *SrcDiz) const;
 	void PluginGetFiles(const string& DestPath, bool Move);
 	void PluginToPluginFiles(bool Move);
 	void PluginHostGetFiles();
 	void PluginPutFilesToNew();
 	int PluginPutFilesToAnother(bool Move, panel_ptr AnotherPanel);
-	void PluginClearSelection(const std::vector<PluginPanelItem>& ItemList);
+	void PluginClearSelection(std::span<PluginPanelItem> ItemList);
 	void ProcessCopyKeys(unsigned Key);
 	void ReadSortGroups(bool UpdateFilterCurrentTime = true);
 	int ProcessOneHostFile(const FileListItem* Item);
@@ -306,7 +311,7 @@ private:
 
 	static void FillParentPoint(FileListItem& Item);
 
-	std::unique_ptr<FileFilter> m_Filter;
+	std::unique_ptr<multifilter> m_Filter;
 	DizList Diz;
 	bool DizRead{};
 	/* $ 09.11.2001 IS
@@ -322,12 +327,14 @@ private:
 	{
 	public:
 		NONCOPYABLE(list_data);
-		MOVABLE(list_data);
+		MOVE_CONSTRUCTIBLE(list_data);
 
 		using value_type = FileListItem;
 
 		list_data() = default;
 		~list_data() { clear(); }
+
+		list_data& operator=(list_data&& rhs) noexcept;
 
 		void initialise(plugin_panel* ph) { clear(); m_Plugin = ph; }
 
@@ -349,20 +356,86 @@ private:
 		decltype(auto) data() const { return Items.data(); }
 		decltype(auto) resize(size_t Size) { return Items.resize(Size); }
 		decltype(auto) reserve(size_t Size) { return Items.reserve(Size); }
-		template<typename... args>
-		decltype(auto) emplace_back(args&&... Args) { return Items.emplace_back(FWD(Args)...); }
-		template<typename T>
-		decltype(auto) push_back(T&& Value) { return Items.push_back(FWD(Value)); }
+		decltype(auto) emplace_back(auto&&... Args) { return Items.emplace_back(FWD(Args)...); }
+		decltype(auto) push_back(auto&& Value) { return Items.push_back(FWD(Value)); }
 	private:
 		std::vector<FileListItem> Items;
 		plugin_panel* m_Plugin{};
+	};
+
+	// All these shenanigans are only to prevent the background re-read and invalidation of list_data while we're still using it.
+
+	// Consider the following scenario:
+	// - The user starts a lengthy operation, e.g. a directory scan
+	// - We iterate through list_data and do things with each item
+	// - Suddenly a wild Elevation Dialog appears, because one of those things needed it
+	// - While the user reads the dialog and considers what to do next, some other process changes something in the same directory
+	// - Suddenly a wild filesystem notification appears and tells the FileList to re-read the directory as soon as possible
+	// - The user closes the dialog, the window manager tells all the windows to redraw, the FileList re-reads the directory
+	// - The control finally returns to the list_data iteration
+	// - Suddenly a wild read access violation appears, because the referenced data is gone
+
+	// So now we 'lock' the data before referencing it, and FileList postpones updates if it's locked.
+	// TODO: Remove and re-expose m_ListData if we ever come up with a better background update logic or make elevation safer.
+	class list_data_lock
+	{
+	public:
+		auto& get() { return m_ListData; }
+		auto& get() const { return m_ListData; }
+
+		void lock() const { ++m_Lock; }
+		void unlock() const { --m_Lock; }
+
+		bool locked() const { return m_Lock != 0; }
+
+	//private:
+		list_data m_ListData;
+		mutable size_t m_Lock{};
 	}
-	m_ListData;
+	m_ListData_DoNotTouchDirectly;
+
+	template<typename T>
+	class data_lock_ptr
+	{
+	public:
+		NONCOPYABLE(data_lock_ptr);
+
+		explicit data_lock_ptr(T& DataLock):
+			m_DataLock(&DataLock)
+		{
+			m_DataLock->lock();
+		}
+
+		~data_lock_ptr()
+		{
+			m_DataLock->unlock();
+		}
+
+		auto& operator*() const &
+		{
+			return m_DataLock->get();
+		}
+
+		auto const& operator*() const && = delete;
+
+	private:
+		T* m_DataLock;
+	};
+
+	data_lock_ptr<list_data_lock> lock_data() { return data_lock_ptr(m_ListData_DoNotTouchDirectly); }
+	data_lock_ptr<list_data_lock const> lock_data() const { return data_lock_ptr(m_ListData_DoNotTouchDirectly); }
+	bool is_data_locked() const { return m_ListData_DoNotTouchDirectly.locked(); }
+
+	// These should be safe(ish) to call any time
+	bool is_data_empty() const { return m_ListData_DoNotTouchDirectly.get().empty(); }
+	size_t data_size() const { return m_ListData_DoNotTouchDirectly.get().size(); }
+
 	std::list<PrevDataItem> PrevDataList;
 	struct PluginsListItem;
 	std::list<std::shared_ptr<PluginsListItem>> PluginsList;
 	std::shared_ptr<PluginsListItem> m_ExpiringPluginPanel{};
-	FileSystemWatcher FSWatcher;
+	std::optional<FileSystemWatcher> FSWatcher;
+	bool m_UpdatePending{};
 	long UpperFolderTopFile{}, LastCurFile{ -1 };
 	bool ReturnCurrentFile{};
 	size_t m_SelFileCount{}; // both files and directories
@@ -373,7 +446,6 @@ private:
 	unsigned long long SelFileSize{};
 	unsigned long long TotalFileSize{};
 	unsigned long long FreeDiskSize = -1;
-	std::chrono::steady_clock::time_point LastUpdateTime;
 	int m_Height{};
 	int m_Stripes{}; // Stripe is a logical column representing one list item == group of columns repeated across the list
 	int m_ColumnsInStripe{}; // number of columns (item attributes) in a stripe
@@ -384,7 +456,7 @@ private:
 	bool empty{}; // указывает на полностью пустую колонку
 	bool AccessTimeUpdateRequired{};
 	bool UpdateRequired{};
-	int UpdateRequiredMode{};
+	bool m_KeepSelection{};
 	int UpdateDisabled{};
 	bool SortGroupsRead{};
 	int InternalProcessKey{};
@@ -400,8 +472,11 @@ private:
 	mutable std::vector<const wchar_t*> m_ContentValues;
 	std::vector<Plugin*> m_ContentPlugins;
 	int m_InsideGetFindData{};
-	std::unordered_set<string> m_FilteredExtensions;
+	unordered_string_set m_FilteredExtensions;
 	std::weak_ptr<PluginsListItem> GetPluginItem() const;
+
+	class background_updater;
+	std::unique_ptr<background_updater> m_BackgroundUpdater;
 };
 
 #endif // FILELIST_HPP_825FE8AE_1E34_4DFD_B167_2D6A121B1777

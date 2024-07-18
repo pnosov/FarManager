@@ -41,10 +41,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scrbuf.hpp"
 #include "config.hpp"
 #include "configdb.hpp"
-#include "ctrlobj.hpp"
 #include "manager.hpp"
 
 // Platform:
+#include "platform.fs.hpp"
 
 // Common:
 
@@ -52,8 +52,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-global::global():
-	ErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX),
+global::global() :
+	g_strFarModuleName(os::fs::get_current_process_file_name()),
 	m_MainThreadId(GetCurrentThreadId()),
 	m_MainThreadHandle(os::OpenCurrentThread()),
 	m_FarStartTime(std::chrono::steady_clock::now()),
@@ -74,15 +74,9 @@ std::chrono::steady_clock::duration global::FarUpTime() const
 	return std::chrono::steady_clock::now() - m_FarStartTime;
 }
 
-void global::StoreSearchString(string_view const Str, bool Hex)
+void global::FolderChanged()
 {
-	m_SearchHex = Hex;
-	m_SearchString = Str;
-}
-
-bool global::IsPanelsActive() const
-{
-	return WindowManager && WindowManager->IsPanelsActive(true, true);
+	WindowManager->FolderChanged();
 }
 
 global::far_clock::far_clock()
@@ -100,7 +94,14 @@ size_t global::far_clock::size() const
 	return m_CurrentTime.size();
 }
 
-void global::far_clock::update()
+void global::far_clock::update(bool const Force)
 {
-	m_CurrentTime = os::chrono::format_time();
+	const auto Now = os::chrono::nt_clock::now();
+	const auto Value = Now.time_since_epoch() / 1min;
+
+	if (!Force && Value == m_LastValue)
+		return;
+
+	m_CurrentTime = os::chrono::wall_time(Now);
+	m_LastValue = Value;
 }

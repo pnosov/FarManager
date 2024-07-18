@@ -21,8 +21,9 @@ ADDBUILDDIRS="{lib,obj/DirList,obj/LibObj,obj/Notify,obj/Progress}"
 ADDOUTDIR="lib"
 
 ( \
-	bplugin2 "$PLDIR" 32 0 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
-	bplugin2 "$PLDIR" 64 0 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR \
+	bplugin2 "$PLDIR" 32 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
+	bplugin2 "$PLDIR" 64 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
+	bplugin2 "$PLDIR" ARM64 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR \
 ) || return 1
 
 popd
@@ -37,13 +38,14 @@ pushd $PLUGIN || return 1
 unix2dos changelog
 
 FILES="MultiArc.dll arceng.hlf arcrus.hlf arcger.hlf arceng.lng arcrus.lng arcspa.lng arcita.lng arcbel.lng arcger.lng MultiArc.map"
-ADDFILES="Ace.fmt Arc.fmt Arj.fmt Cab.fmt Custom.fmt Ha.fmt Lzh.fmt Rar.fmt TarGz.fmt Zip.fmt custom.ini Ace.map Arc.map Arj.map Cab.map Custom.map Ha.map Lzh.map Rar.map TarGz.map Zip.map"
+ADDFILES="ace.fmt arc.fmt arj.fmt cab.fmt custom.fmt ha.fmt lzh.fmt rar.fmt targz.fmt zip.fmt custom.ini ace.map arc.map arj.map cab.map custom.map ha.map lzh.map rar.map targz.map zip.map"
 ADDBUILDDIRS="Formats"
 ADDOUTDIR="Formats"
 
 ( \
-	bplugin2 "$PLDIR" 32 0 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
-	bplugin2 "$PLDIR" 64 0 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR \
+	bplugin2 "$PLDIR" 32 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
+	bplugin2 "$PLDIR" 64 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR && \
+	bplugin2 "$PLDIR" ARM64 0 "$FILES" "$ADDFILES" $ADDBUILDDIRS $ADDOUTDIR \
 ) || return 1
 
 popd
@@ -51,19 +53,23 @@ popd
 
 rm -fR outfinalnew32
 rm -fR outfinalnew64
+rm -fR outfinalnewARM64
 rm -fR plugins
 
 cp -R far.git/plugins ./ || exit 1
 
 mkdir -p outfinalnew32/Plugins
 mkdir -p outfinalnew64/Plugins
+mkdir -p outfinalnewARM64/Plugins
 
 cd plugins/common/CRT || exit 1
 
 mkdir -p obj.32.vc/wide
 mkdir -p obj.64.vc/wide
+mkdir -p obj.ARM64.vc/wide
 wine cmd /c ../../../common.32.bat &> ../../../logs/CRT32
 wine cmd /c ../../../common.64.bat &> ../../../logs/CRT64
+wine cmd /c ../../../common.ARM64.bat &> ../../../logs/CRTARM64
 
 cd ../..
 
@@ -77,12 +83,19 @@ cd ..
 
 cd outfinalnew32/Plugins || exit 1
 cd FTP || exit 1
-7z a ../../../FarFtp.x86.7z
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../FarFtp.x86.7z
 cd ../MultiArc || exit 1
-7z a ../../../MultiArc.x86.7z
-cd ../../../outfinalnew64/Plugins || exit 1
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../MultiArc.x86.7z
+cd ../../../
+cd outfinalnew64/Plugins || exit 1
 cd FTP || exit 1
-7z a ../../../FarFtp.x64.7z
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../FarFtp.x64.7z
 cd ../MultiArc || exit 1
-7z a ../../../MultiArc.x64.7z
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../MultiArc.x64.7z
+cd ../../../
+cd outfinalnewARM64/Plugins || exit 1
+cd FTP || exit 1
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../FarFtp.ARM64.7z
+cd ../MultiArc || exit 1
+7z a -m0=LZMA -mf=BCJ2 -mx9 ../../../MultiArc.ARM64.7z
 cd ../../../

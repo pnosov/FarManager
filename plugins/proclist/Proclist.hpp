@@ -10,7 +10,10 @@
 #define WIN32_NO_STATUS //exclude ntstatus.h macros from winnt.h
 #include <windows.h>
 #undef WIN32_NO_STATUS
+
+#include <winternl.h>
 #include <ntstatus.h>
+#include <unknwn.h>
 
 #include <plugin.hpp>
 
@@ -78,7 +81,7 @@ inline constexpr auto
 	MAX_DATETIME    = 50,
 	MAXCOLS = MAX_CUSTOM_COLS + 4;
 
-extern PluginStartupInfo Info;
+extern PluginStartupInfo PsInfo;
 extern FarStandardFunctions FSF;
 
 class PerfThread;
@@ -128,12 +131,13 @@ public:
 	bool Connect(const wchar_t* pMachine, const wchar_t* pUser = {}, const wchar_t* pPasw = {});
 	int GetFindData(PluginPanelItem*& pPanelItem, size_t& pItemsNumber, OPERATION_MODES OpMode);
 	static void FreeFindData(PluginPanelItem* PanelItem, size_t ItemsNumber);
-	void GetOpenPanelInfo(struct OpenPanelInfo* Info);
-	int GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, const wchar_t** DestPath, OPERATION_MODES OpMode, options& opt = ::Opt);
+	void GetOpenPanelInfo(OpenPanelInfo* Info);
+	int GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, const wchar_t** DestPath, OPERATION_MODES OpMode, options& LocalOpt = Opt);
 	int DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION_MODES OpMode);
 	int ProcessEvent(intptr_t Event, void* Param);
 	int Compare(const PluginPanelItem* Item1, const PluginPanelItem* Item2, unsigned int Mode) const;
 	int ProcessKey(const INPUT_RECORD* Rec);
+	void ProcessSynchroEvent();
 	PanelMode* PanelModes(size_t& nModes);
 
 	static bool GetVersionInfo(const wchar_t* pFullPath, std::unique_ptr<char[]>& Buffer, const wchar_t*& pVersion, const wchar_t*& pDesc);
@@ -146,7 +150,7 @@ private:
 	static void PrintVersionInfo(HANDLE InfoFile, const wchar_t* FullPath);
 	void Reread();
 	void PutToCmdLine(const wchar_t* tmp);
-	static int Menu(unsigned int Flags, const wchar_t* Title, const wchar_t* Bottom, const wchar_t* HelpTopic, const struct FarKey* BreakKeys, const FarMenuItem* Items, size_t ItemsNumber);
+	static int Menu(unsigned int Flags, const wchar_t* Title, const wchar_t* Bottom, const wchar_t* HelpTopic, const FarKey* BreakKeys, const FarMenuItem* Items, size_t ItemsNumber);
 	void PrintOwnerInfo(HANDLE InfoFile, DWORD dwPid);
 	bool ConnectWMI();
 	void DisconnectWMI();
@@ -156,11 +160,29 @@ private:
 	std::wstring HostName;
 	std::unique_ptr<PerfThread> pPerfThread;
 	unsigned StartPanelMode{};
-	unsigned SortMode, LastFarSortMode{}, LastInternalSortMode{};
+	unsigned SortMode{};
 	std::unique_ptr<WMIConnection> pWMI;
 	DWORD dwPluginThread;
 
 	static inline std::vector<mode> m_PanelModesDataLocal, m_PanelModesDataRemote;
+
+	mutable class refresh_lock
+	{
+	public:
+		refresh_lock(const refresh_lock&) = delete;
+		refresh_lock& operator=(const refresh_lock&) = delete;
+
+		refresh_lock() = default;
+
+		void lock() { ++m_Busy; }
+		void unlock() { --m_Busy;}
+
+		bool is_busy() const { return m_Busy != 0; }
+
+	private:
+		size_t m_Busy{};
+	}
+	m_RefreshLock;
 };
 
 struct InitDialogItem
@@ -251,20 +273,12 @@ enum
 extern wchar_t CustomColumns[10][10];
 
 void PrintNTCurDirAndEnv(HANDLE InfoFile, HANDLE hProcess, BOOL bExportEnvironment);
-void PrintModules(HANDLE InfoFile, DWORD dwPID, options& opt);
+void PrintModules(HANDLE InfoFile, DWORD dwPID, options& LocalOpt);
 bool PrintHandleInfo(DWORD dwPID, HANDLE file, bool bIncludeUnnamed, PerfThread* pThread);
 struct ProcessPerfData;
 bool GetPData(ProcessData& pdata, const ProcessPerfData& pd);
 
 //------
-// dynamic binding
-typedef enum _PROCESSINFOCLASS
-{
-	ProcessBasicInformation = 0,
-	ProcessWow64Information = 26
-} PROCESSINFOCLASS;
-//
-
 #define DECLARE_IMPORT(Name, ...) \
 using  P ## Name = __VA_ARGS__; \
 extern P ## Name p ## Name
@@ -303,22 +317,9 @@ inline bool norm_m_prefix(const wchar_t* Str)
 	return Str[0] == L'\\' && Str[1] == L'\\';
 }
 
-template<typename T>
-class ptr_setter
+inline namespace literals
 {
-public:
-	explicit ptr_setter(T& Ptr) : m_Ptr(&Ptr) {}
-	~ptr_setter() { m_Ptr->reset(m_RawPtr); }
-
-	[[nodiscard]]
-	auto operator&() { return &m_RawPtr; }
-
-	ptr_setter(const ptr_setter&) = delete;
-	ptr_setter& operator=(const ptr_setter&) = delete;
-
-private:
-	T* m_Ptr;
-	typename T::pointer m_RawPtr{};
-};
+	using namespace std::literals;
+}
 
 #endif // PROCLIST_HPP_71FFA62B_457B_416D_B4F5_DAB215BE015F

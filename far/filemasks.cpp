@@ -70,19 +70,19 @@ static auto extract_impl(string_view& Str, size_t const Size)
 
 static auto extract_separators(string_view& Str)
 {
-	const auto SeparatorsSize = std::find_if_not(ALL_CONST_RANGE(Str), [](wchar_t c) { return c == L' ' || c == L',' || c == L';'; }) - Str.cbegin();
+	const auto SeparatorsSize = std::ranges::find_if_not(Str, [](wchar_t c) { return c == L' ' || c == L',' || c == L';'; }) - Str.cbegin();
 	return extract_impl(Str, SeparatorsSize);
 }
 
 static auto extract_masks(string_view& Str)
 {
-	const auto MasksSize = std::find_if(ALL_CONST_RANGE(Str), [](wchar_t c) { return c == RE_start || c == ExcludeMaskSeparator; }) - Str.cbegin();
+	const auto MasksSize = std::ranges::find_if(Str, [](wchar_t c) { return c == RE_start || c == ExcludeMaskSeparator; }) - Str.cbegin();
 	return extract_impl(Str, MasksSize);
 }
 
 static auto extract_re(string_view& Str)
 {
-	if (!starts_with(Str, RE_start))
+	if (!Str.starts_with(RE_start))
 		return extract_impl(Str, 0);
 
 	auto Iterator = Str.cbegin() + 1;
@@ -105,11 +105,15 @@ public:
 	bool operator==(string_view FileName) const;
 	bool empty() const;
 
+	using last_regex_matches = std::pair<std::vector<RegExpMatch> const*, unordered_string_map<size_t> const*>;
+	last_regex_matches last_matches() const;
+
 private:
 	struct regex_data
 	{
 		RegExp Regex;
 		mutable std::vector<RegExpMatch> Match;
+		mutable unordered_string_map<size_t> NamedMatch;
 	};
 
 	std::variant<std::vector<string>, regex_data> m_Masks;
@@ -119,6 +123,13 @@ filemasks::filemasks() = default;
 filemasks::~filemasks() = default;
 filemasks::filemasks(filemasks&&) noexcept = default;
 filemasks& filemasks::operator=(filemasks&&) noexcept = default;
+
+static string get_mask_group(string_view const Group)
+{
+	return ConfigProvider().GeneralCfg()->GetValue<string>(L"Masks"sv, Group);
+}
+
+static auto mask_group_accessor = &get_mask_group;
 
 bool filemasks::assign(string_view Str, DWORD const Flags)
 {
@@ -130,23 +141,23 @@ bool filemasks::assign(string_view Str, DWORD const Flags)
 	clear();
 
 	string ExpandedGroups(Str);
-	std::unordered_set<string> UsedGroups;
+	unordered_string_set UsedGroups;
 	size_t LBPos, RBPos;
 	string MaskGroupValue;
 
 	while ((LBPos = ExpandedGroups.find(L'<')) != string::npos && (RBPos = ExpandedGroups.find(L'>', LBPos)) != string::npos)
 	{
 		const auto MaskGroupNameWithBrackets = string_view(ExpandedGroups).substr(LBPos, RBPos - LBPos + 1);
-		string MaskGroupName(MaskGroupNameWithBrackets.substr(1, MaskGroupNameWithBrackets.size() - 2));
+		const auto MaskGroupName = MaskGroupNameWithBrackets.substr(1, MaskGroupNameWithBrackets.size() - 2);
 
-		if (contains(UsedGroups, MaskGroupName))
+		if (UsedGroups.contains(MaskGroupName))
 		{
 			MaskGroupValue.clear();
 		}
 		else
 		{
-			MaskGroupValue = ConfigProvider().GeneralCfg()->GetValue<string>(L"Masks"sv, MaskGroupName);
-			UsedGroups.emplace(std::move(MaskGroupName));
+			MaskGroupValue = mask_group_accessor(MaskGroupName);
+			UsedGroups.emplace(MaskGroupName);
 		}
 		replace(ExpandedGroups, MaskGroupNameWithBrackets, MaskGroupValue);
 	}
@@ -187,7 +198,7 @@ bool filemasks::assign(string_view Str, DWORD const Flags)
 				DestString->append(Masks);
 			}
 
-			if (starts_with(Str, ExcludeMaskSeparator))
+			if (Str.starts_with(ExcludeMaskSeparator))
 			{
 				if (DestContainer != &Exclude)
 				{
@@ -208,7 +219,7 @@ bool filemasks::assign(string_view Str, DWORD const Flags)
 			masks m;
 			Result = m.assign(std::move(SimpleMasksInclude), Flags);
 			if (Result)
-				Include.push_back(std::move(m));
+				Include.emplace_back(std::move(m));
 		}
 
 		if (Result && !SimpleMasksExclude.empty())
@@ -216,7 +227,7 @@ bool filemasks::assign(string_view Str, DWORD const Flags)
 			masks m;
 			Result = m.assign(std::move(SimpleMasksExclude), Flags);
 			if (Result)
-				Exclude.push_back(std::move(m));
+				Exclude.emplace_back(std::move(m));
 		}
 
 		if (Result && Include.empty() && !Exclude.empty())
@@ -224,7 +235,7 @@ bool filemasks::assign(string_view Str, DWORD const Flags)
 			masks m;
 			Result = m.assign(L"*"s, Flags);
 			if (Result)
-				Include.push_back(std::move(m));
+				Include.emplace_back(std::move(m));
 		}
 
 		Result = !empty();
@@ -250,15 +261,32 @@ void filemasks::clear()
 
 // Путь к файлу в FileName НЕ игнорируется
 
-bool filemasks::check(const string_view Name) const
+bool filemasks::check(const string_view Name, regex_matches const* const Matches) const
 {
-	return contains(Include, Name) && !contains(Exclude, Name);
+	if (contains(Exclude, Name))
+		return false;
+
+	// Ugh, ranges are awesome.
+	const auto MaskIterator = std::ranges::find_if(Include, [&](masks const& Masks){ return Masks == Name; });
+	if (MaskIterator == Include.cend())
+		return false;
+
+	if (Matches)
+	{
+		if (const auto [MatchPtr, NamedMatchPtr] = MaskIterator->last_matches(); MatchPtr)
+		{
+			Matches->first = std::move(*MatchPtr);
+			Matches->second = std::move(*NamedMatchPtr);
+		}
+	}
+
+	return true;
 }
 
 bool filemasks::empty() const
 {
-	return std::all_of(ALL_CONST_RANGE(Include), LIFT_MF(empty)) &&
-	       std::all_of(ALL_CONST_RANGE(Exclude), LIFT_MF(empty));
+	return std::ranges::all_of(Include, LIFT_MF(empty)) &&
+	       std::ranges::all_of(Exclude, LIFT_MF(empty));
 }
 
 void filemasks::ErrorMessage()
@@ -337,7 +365,7 @@ bool filemasks::masks::assign(string&& Masks, DWORD Flags)
 
 			if (Mask == L"*.*"sv)
 			{
-				MasksData.emplace_back(1, L'*');
+				MasksData.emplace_back(L"*"sv);
 			}
 			else if (contains(Mask, L"**"sv))
 			{
@@ -356,16 +384,21 @@ bool filemasks::masks::assign(string&& Masks, DWORD Flags)
 
 	auto& RegexData = m_Masks.emplace<1>();
 
-	if (!RegexData.Regex.Compile(Masks, OP_PERLSTYLE | OP_OPTIMIZE))
+	try
 	{
+		RegexData.Regex.Compile(Masks, OP_PERLSTYLE | OP_OPTIMIZE);
+	}
+	catch (regex_exception const& e)
+	{
+		m_Masks.emplace<0>(); // Make it empty
+
 		if (!(Flags & FMF_SILENT))
 		{
-			ReCompileErrorMessage(RegexData.Regex, Masks);
+			ReCompileErrorMessage(e, Masks);
 		}
 		return false;
 	}
 
-	RegexData.Match.resize(RegexData.Regex.GetBracketsCount());
 	return true;
 }
 
@@ -377,12 +410,19 @@ bool filemasks::masks::operator==(const string_view FileName) const
 	{
 		[&](const std::vector<string>& Data)
 		{
-			return std::any_of(CONST_RANGE(Data, i) { return CmpName(i, FileName, false); });
+			return std::ranges::any_of(Data, [&](string_view const i){ return CmpName(i, FileName, false); });
 		},
 		[&](const regex_data& Data)
 		{
-			intptr_t i = Data.Match.size();
-			return Data.Regex.Search(FileName, Data.Match.data(), i) != 0; // BUGBUG
+			regex_match Match;
+			named_regex_match NamedMatch;
+			if (!Data.Regex.Search(FileName, Match, &NamedMatch))
+				return false;
+
+			Data.Match.assign(ALL_CONST_RANGE(Match.Matches));
+			for (const auto& [k, v]: NamedMatch.Matches)
+				Data.NamedMatch.emplace(k, v);
+			return true;
 		}
 	}, m_Masks);
 }
@@ -395,9 +435,25 @@ bool filemasks::masks::empty() const
 		{
 			return Data.empty();
 		},
-		[](const regex_data& Data)
+		[](const regex_data&)
 		{
-			return Data.Match.empty();
+			// It holds regex_data only when compilation is successful
+			return false;
+		}
+	}, m_Masks);
+}
+
+filemasks::masks::last_regex_matches filemasks::masks::last_matches() const
+{
+	return std::visit(overload
+	{
+		[&](const std::vector<string>&) -> last_regex_matches
+		{
+			return {};
+		},
+		[&](const regex_data& Data) -> last_regex_matches
+		{
+			return { &Data.Match, &Data.NamedMatch };
 		}
 	}, m_Masks);
 }
@@ -427,14 +483,57 @@ TEST_CASE("masks")
 		{ L"file.*"sv,      L"file.bin"sv,       true  },
 		{ L"file.*"sv,      L"file..bin"sv,      true  },
 		{ L"file.*|*b*"sv,  L"file.bin"sv,       false },
+		{ L"*.ext,<duh>"sv, L"meow.txt"sv,       true  },
+		{ L"<duh>,*.ext"sv, L"boo.boo"sv,        true  },
+		{ L"*.ext,<doh>"sv, L"meow.ext"sv,       true  },
+		{ L"<doh>,*.ext"sv, L"boo.ext"sv,        true  },
 	};
 
 	filemasks Masks;
+
+	const auto test_mask_group_accessor = [](string_view const Mask)
+	{
+		if (Mask == L"duh"sv)
+			return L"*.txt;*.boo"s;
+
+		return L""s;
+	};
+
+	mask_group_accessor = test_mask_group_accessor;
 
 	for (const auto& i: Tests)
 	{
 		REQUIRE(Masks.assign(i.Mask, FMF_SILENT));
 		REQUIRE(i.Match == Masks.check(i.Test));
 	}
+
+	mask_group_accessor = &get_mask_group;
+}
+
+TEST_CASE("masks_with_matches")
+{
+	filemasks Masks;
+	Masks.assign(L"/(.+)\\.(?:.+)\\.(?{scratch}.+)/"sv);
+
+	std::vector<RegExpMatch> Matches;
+	unordered_string_map<size_t> NamedMatches;
+	filemasks::regex_matches const RegexMatches{ Matches, NamedMatches };
+	const auto Test = L"none.shall.pass"sv;
+
+	REQUIRE(Masks.check(Test, &RegexMatches));
+
+	REQUIRE(Matches.size() == 3u);
+
+	REQUIRE(Matches[0].start == 0);
+	REQUIRE(Matches[0].end == 15);
+
+	REQUIRE(Matches[1].start == 0);
+	REQUIRE(Matches[1].end == 4);
+
+	REQUIRE(Matches[2].start == 11);
+	REQUIRE(Matches[2].end == 15);
+
+	REQUIRE(NamedMatches.size() == 1u);
+	REQUIRE(NamedMatches.at(L"scratch"s) == 2u);
 }
 #endif

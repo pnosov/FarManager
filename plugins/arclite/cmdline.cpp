@@ -6,9 +6,9 @@
 #include "options.hpp"
 #include "cmdline.hpp"
 
-#define CHECK_FMT(code) { if (!(code)) FAIL(E_BAD_FORMAT); }
+#define CHECK_FMT(code) do { if (!(code)) FAIL(E_BAD_FORMAT); } while(false)
 
-std::wstring lc(const std::wstring& str) {
+static std::wstring lc(const std::wstring& str) {
   std::wstring res;
   res.reserve(str.size());
   for (unsigned i = 0; i < str.size(); i++) {
@@ -91,11 +91,11 @@ struct Param {
   std::wstring value;
 };
 
-bool is_param(const std::wstring& param_str) {
+static bool is_param(const std::wstring& param_str) {
   return !param_str.empty() && (param_str[0] == L'-' || param_str[0] == L'/');
 }
 
-Param parse_param(const std::wstring& param_str) {
+static Param parse_param(const std::wstring& param_str) {
   Param param;
   size_t p = param_str.find(L':');
   if (p == std::wstring::npos) {
@@ -108,7 +108,7 @@ Param parse_param(const std::wstring& param_str) {
   return param;
 }
 
-bool parse_bool_value(const std::wstring& value) {
+static bool parse_bool_value(const std::wstring& value) {
   if (value.empty())
     return true;
   std::wstring lcvalue = lc(value);
@@ -117,10 +117,10 @@ bool parse_bool_value(const std::wstring& value) {
   else if (lcvalue == L"n")
     return false;
   else
-    CHECK_FMT(false);
+    FAIL(E_BAD_FORMAT);
 }
 
-TriState parse_tri_state_value(const std::wstring& value) {
+static TriState parse_tri_state_value(const std::wstring& value) {
   if (value.empty())
     return triTrue;
   std::wstring lcvalue = lc(value);
@@ -131,7 +131,7 @@ TriState parse_tri_state_value(const std::wstring& value) {
   else if (lcvalue == L"a")
     return triUndef;
   else
-    CHECK_FMT(false);
+    FAIL(E_BAD_FORMAT);
 }
 
 std::list<std::wstring> parse_listfile(const std::wstring& str) {
@@ -140,17 +140,17 @@ std::list<std::wstring> parse_listfile(const std::wstring& str) {
   for (unsigned i = 0; i < str.size(); i++) {
     if (str[i] == L'\r' || str[i] == L'\n') {
       if (pos != i)
-        files.push_back(str.substr(pos, i - pos));
+        files.emplace_back(str.substr(pos, i - pos));
       pos = i + 1;
     }
   }
   if (pos != str.size())
-    files.push_back(str.substr(pos, str.size() - pos));
+    files.emplace_back(str.substr(pos, str.size() - pos));
   return files;
 }
 
 
-// arc:[-d] [-t:<arc_type>] [-p:<password>] <archive>
+// arc:[-r] [-x[d]] [-d] [-t:<arc_type>] [-p:<password>] <archive>
 
 OpenCommand parse_open_command(const CommandArgs& ca) {
   OpenCommand command;
@@ -171,8 +171,17 @@ OpenCommand parse_open_command(const CommandArgs& ca) {
       CHECK_FMT(!param.value.empty());
       command.options.password = param.value;
     }
+    else if (param.name == L"r") {
+      command.options.recursive_panel = true;
+    }
+    else if (param.name == L"x" || param.name == L"xf") {
+      command.options.delete_on_close = 'f'; // (f)ile
+    }
+    else if (param.name == L"xd") {
+      command.options.delete_on_close = 'd'; // (d)ir
+    }
     else
-      CHECK_FMT(false);
+      FAIL(E_BAD_FORMAT);
   }
   if (!arc_type_spec) {
     command.options.arc_types = ArcAPI::formats().get_arc_types();
@@ -185,13 +194,14 @@ OpenCommand parse_open_command(const CommandArgs& ca) {
 
 // arc:c [-pr:name] [-t:<arc_type>] [-l:<level>] [-m:<method>] [-s[:(y|n)]] [-p:<password>] [-eh[:(y|n)]] [-sfx[:<module>]] [-v:<volume_size>]
 //   [-mf[:(y|n)]] [-ie[:(y|n)]] [-adv:<advanced>] <archive> (<file1> <file2> ... | @<filelist>)
+//
 // arc:u [-l:<level>] [-m:<method>] [-s[:(y|n)]] [-p:<password>] [-eh[:(y|n)]]
 //   [-mf[:(y|n)]] [-ie[:(y|n)]] [-o[:(o|s)]] [-adv:<advanced>] <archive> (<file1> <file2> ... | @<filelist>)
 //   <level> = 0|1|3|5|7|9
-//   <method> = lzma|lzma2|ppmd
+//   <method> = lzma|lzma2|ppmd|deflate|deflate64
 
-const unsigned c_levels[] = { 0, 1, 3, 5, 7, 9 };
-const wchar_t* c_methods[] = { L"lzma", L"lzma2", L"ppmd" };
+static const unsigned c_levels[] = { 0, 1, 3, 5, 7, 9 };
+static const wchar_t* c_methods[] = { L"lzma", L"lzma2", L"ppmd", L"deflate", L"deflate64" };
 
 UpdateCommand parse_update_command(const CommandArgs& ca) {
   bool create = ca.cmd == cmdCreate;
@@ -291,14 +301,14 @@ UpdateCommand parse_update_command(const CommandArgs& ca) {
       else if (lcvalue == L"s")
         command.options.overwrite = oaSkip;
       else
-        CHECK_FMT(false);
+        FAIL(E_BAD_FORMAT);
     }
     else if (param.name == L"adv") {
       CHECK_FMT(!param.value.empty());
       command.options.advanced = param.value;
     }
     else
-      CHECK_FMT(false);
+      FAIL(E_BAD_FORMAT);
   }
   CHECK_FMT(i + 1 < args.size());
   CHECK_FMT(!is_param(args[i]));
@@ -312,9 +322,9 @@ UpdateCommand parse_update_command(const CommandArgs& ca) {
   for (; i < args.size(); i++) {
     CHECK_FMT(!is_param(args[i]));
     if (args[i][0] == L'@')
-      command.listfiles.push_back(unquote(args[i].substr(1)));
+      command.listfiles.emplace_back(unquote(args[i].substr(1)));
     else
-      command.files.push_back(unquote(args[i]));
+      command.files.emplace_back(unquote(args[i]));
   }
 
   if (command.options.level == 0)
@@ -350,7 +360,7 @@ static void parse_extract_params(const CommandArgs& ca, ExtractOptions& o, std::
         else if (lcvalue == L"a")
           o.overwrite = oaAppend;
         else
-          CHECK_FMT(false);
+          FAIL(E_BAD_FORMAT);
       }
       else if (ca.cmd != cmdDeleteItems && param.name == L"mf")
         o.move_files = parse_tri_state_value(param.value);
@@ -365,10 +375,10 @@ static void parse_extract_params(const CommandArgs& ca, ExtractOptions& o, std::
       else if (ca.cmd == cmdExtractItems && param.name == L"out" && !param.value.empty())
         o.dst_dir = unquote(param.value);
       else
-        CHECK_FMT(false);
+        FAIL(E_BAD_FORMAT);
     }
     else {
-      items.push_back(unquote(a));
+      items.emplace_back(unquote(a));
     }
   }
 }
@@ -398,7 +408,7 @@ TestCommand parse_test_command(const CommandArgs& ca) {
   const std::vector<std::wstring>& args = ca.args;
   for (unsigned i = 0; i < args.size(); i++) {
     CHECK_FMT(!is_param(args.back()));
-    command.arc_list.push_back(unquote(args[i]));
+    command.arc_list.emplace_back(unquote(args[i]));
   }
   return command;
 }

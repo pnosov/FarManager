@@ -74,24 +74,20 @@ namespace highlight
 	private:
 		struct colors
 		{
-			FarColor FileColor{};
-			FarColor MarkColor{};
+			colors();
 
-			bool operator ==(const colors& rhs) const
-			{
-				return FileColor == rhs.FileColor && MarkColor == rhs.MarkColor;
-			}
+			FarColor FileColor;
+			FarColor MarkColor;
+
+			bool operator==(const colors&) const = default;
 		};
 
 		struct mark
 		{
-			wchar_t Char{};
-			bool Transparent{};
+			string Mark;
+			bool Inherit{true};
 
-			bool operator ==(const mark& rhs) const
-			{
-				return Char == rhs.Char && Transparent == rhs.Transparent;
-			}
+			bool operator==(const mark&) const = default;
 		};
 
 	public:
@@ -99,10 +95,7 @@ namespace highlight
 		colors_array Color;
 		mark Mark;
 
-		bool operator==(const element& rhs) const
-		{
-			return Color == rhs.Color && Mark == rhs.Mark;
-		}
+		bool operator==(const element&) const = default;
 	};
 
 	class configuration: noncopyable
@@ -115,12 +108,12 @@ namespace highlight
 		int GetGroup(const FileListItem& Object, const FileList* Owner);
 		void HiEdit(int MenuPos);
 		void UpdateHighlighting(bool RefreshMasks = false);
-		void Save(bool always);
+		void Save(bool Always);
 
 		static void ApplyFinalColor(element::colors_array::value_type& Colors, size_t PaletteIndex);
 
 	private:
-		void InitHighlightFiles(/*const*/ HierarchicalConfig& cfg);
+		void Load(/*const*/ HierarchicalConfig& cfg);
 		void ClearData();
 		int  MenuPosToRealPos(int MenuPos, int*& Count, bool Insert = false);
 		void FillMenu(VMenu2 *HiMenu, int MenuPos) const;
@@ -131,7 +124,7 @@ namespace highlight
 			size_t operator()(const element& item) const;
 		};
 
-		std::unordered_set<element, element_hash> Colors;
+		std::unordered_set<element, element_hash> m_Colors;
 		std::vector<FileFilterParams> HiData;
 
 		int FirstCount{}, UpperCount{}, LowerCount{}, LastCount{};

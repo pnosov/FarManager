@@ -40,7 +40,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 #include "keys.hpp"
 #include "scantree.hpp"
-#include "TPreRedrawFunc.hpp"
 #include "ctrlobj.hpp"
 #include "filefilter.hpp"
 #include "interf.hpp"
@@ -49,16 +48,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "keyboard.hpp"
 #include "flink.hpp"
 #include "pathmix.hpp"
-#include "strmix.hpp"
 #include "wakeful.hpp"
 #include "filepanels.hpp"
 #include "panel.hpp"
 #include "plugins.hpp"
 #include "mix.hpp"
-#include "lang.hpp"
 #include "string_utils.hpp"
 #include "cvtname.hpp"
-#include "copy_progress.hpp"
 #include "global.hpp"
 
 // Platform:
@@ -66,68 +62,19 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/scope_exit.hpp"
+#include "common/view/zip.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-static void PR_DrawGetDirInfoMsg();
-
-struct DirInfoPreRedrawItem : public PreRedrawItem
+int GetDirInfo(string_view const DirName, DirInfoData& Data, multifilter* Filter, dirinfo_callback const Callback, DWORD Flags)
 {
-	DirInfoPreRedrawItem():
-		PreRedrawItem(PR_DrawGetDirInfoMsg)
-	{}
-
-	string_view Title;
-	string_view Name;
-	unsigned long long Items{};
-	unsigned long long Size{};
-};
-
-static void DirInfoMsgImpl(string_view const Title, string_view const Name, unsigned long long const Items, unsigned long long const Size)
-{
-	Message(MSG_LEFTALIGN,
-		Title,
-		{
-			msg(lng::MScanningFolder),
-			pad_right(truncate_right(Name, copy_progress::CanvasWidth()), copy_progress::CanvasWidth()),
-			L"\1"s,
-			copy_progress::FormatCounter(lng::MCopyFilesTotalInfo, lng::MCopyBytesTotalInfo, Items, 0, false, copy_progress::CanvasWidth() - 5),
-			copy_progress::FormatCounter(lng::MCopyBytesTotalInfo, lng::MCopyFilesTotalInfo, Size, 0, false, copy_progress::CanvasWidth() - 5),
-		},
-		{});
-}
-
-void DirInfoMsg(string_view const Title, string_view const Name, unsigned long long const Items, unsigned long long const Size)
-{
-	DirInfoMsgImpl(Title, Name, Items, Size);
-
-	TPreRedrawFunc::instance()([&](DirInfoPreRedrawItem& Item)
-	{
-		Item.Title = Title;
-		Item.Name = Name;
-		Item.Items = Items;
-		Item.Size = Size;
-	});
-}
-
-static void PR_DrawGetDirInfoMsg()
-{
-	TPreRedrawFunc::instance()([](const DirInfoPreRedrawItem& Item)
-	{
-		DirInfoMsgImpl(Item.Title, Item.Name, Item.Items, Item.Size);
-	});
-}
-
-int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter, dirinfo_callback const Callback, DWORD Flags)
-{
-	SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<DirInfoPreRedrawItem>());
 	SCOPED_ACTION(taskbar::indeterminate)(false);
 	SCOPED_ACTION(wakeful);
 
 	ScanTree ScTree(false, true, (Flags & GETDIRINFO_SCANSYMLINKDEF? static_cast<DWORD>(-1) : (Flags & GETDIRINFO_SCANSYMLINK)));
-	SetCursorType(false, 0);
+	HideCursor();
 	/* $ 20.03.2002 DJ
 	   для . - покажем имя родительского каталога
 	*/
@@ -163,17 +110,19 @@ int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter,
 	// Временные хранилища имён каталогов
 	string strLastDirName;
 	os::fs::find_data FindData;
+
+	// Mantis#0002692
+	Global->CtrlObject->Macro.SuspendMacros(true);
+	SCOPE_EXIT{ Global->CtrlObject->Macro.SuspendMacros(false); };
+
 	while (ScTree.GetNextName(FindData,strFullName))
 	{
-		// Mantis#0002692
-		if (!Global->CtrlObject->Macro.IsExecuting())
 		{
 			INPUT_RECORD rec;
 
 			switch (PeekInputRecord(&rec))
 			{
-				case 0:
-				case KEY_IDLE:
+				case NO_KEY:
 					break;
 				case KEY_NONE:
 				case KEY_ALT:
@@ -213,7 +162,7 @@ int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter,
 				// Если каталог не попадает под фильтр то его надо полностью
 				// пропустить - иначе при включенном подсчёте total
 				// он учтётся (mantis 551)
-				if (!Filter->FileInFilter(FindData, {}, strFullName))
+				if (!Filter->FileInFilter(FindData, strFullName))
 					ScTree.SkipDir();
 			}
 		}
@@ -224,7 +173,7 @@ int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter,
 			*/
 			if ((Flags&GETDIRINFO_USEFILTER))
 			{
-				if (!Filter->FileInFilter(FindData, {}, strFullName))
+				if (!Filter->FileInFilter(FindData, strFullName))
 					continue;
 			}
 
@@ -254,7 +203,7 @@ int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter,
 				{
 					if(FindData.AllocationSize >= Data.ClusterSize)
 					{
-					Data.FilesSlack += FindData.AllocationSize - FindData.FileSize;
+						Data.FilesSlack += FindData.AllocationSize - FindData.FileSize;
 					}
 					else
 					{
@@ -267,8 +216,6 @@ int GetDirInfo(string_view const DirName, DirInfoData& Data, FileFilter *Filter,
 
 	return 1;
 }
-
-static int PluginSearchMsgOut;
 
 static void PushPluginDirItem(std::vector<PluginPanelItem>& PluginDirList, const PluginPanelItem *CurPanelItem, string_view const PluginSearchPath, BasicDirInfoData& Data)
 {
@@ -294,12 +241,16 @@ static void PushPluginDirItem(std::vector<PluginPanelItem>& PluginDirList, const
 	if (NewItem.CustomColumnNumber>0)
 	{
 		auto CustomColumnData = std::make_unique<wchar_t*[]>(NewItem.CustomColumnNumber);
-		for (size_t ii = 0; ii < NewItem.CustomColumnNumber; ii++)
+		for (const auto& [Column, ColData]: zip(std::span(CurPanelItem->CustomColumnData, NewItem.CustomColumnNumber), std::span(CustomColumnData.get(), NewItem.CustomColumnNumber)))
 		{
-			if (CurPanelItem->CustomColumnData[ii])
-				CustomColumnData[ii] = MakeCopy(CurPanelItem->CustomColumnData[ii]);
+			if (Column)
+				ColData = MakeCopy(Column);
 		}
 		NewItem.CustomColumnData = CustomColumnData.release();
+	}
+	else
+	{
+		NewItem.CustomColumnData = {};
 	}
 
 	// UserData is not used in PluginDirList
@@ -325,15 +276,14 @@ static void ScanPluginDir(plugin_panel* hDirListPlugin, OPERATION_MODES OpMode, 
 {
 	Callback(BaseDir, Data.DirCount + Data.FileCount, Data.FileSize);
 
-	span<PluginPanelItem> PanelData;
+	std::span<PluginPanelItem> PanelData;
 
-	if (CheckForEscSilent())
+	if (CheckForEscAndConfirmAbort())
 	{
-		if (ConfirmAbortOp())
-			StopSearch = true;
+		StopSearch = true;
 	}
 
-	if (StopSearch || !Global->CtrlObject->Plugins->GetFindData(hDirListPlugin, PanelData, OPM_FIND | OpMode))
+	if (StopSearch || !Global->CtrlObject->Plugins->GetFindData(hDirListPlugin, PanelData, OpMode))
 		return;
 
 	SCOPE_EXIT{ Global->CtrlObject->Plugins->FreeFindData(hDirListPlugin, PanelData, true); };
@@ -364,11 +314,11 @@ static void ScanPluginDir(plugin_panel* hDirListPlugin, OPERATION_MODES OpMode, 
 		PushPluginDirItem(PluginDirList, &i, PluginSearchPath, Data);
 		const auto FileNameCopy = i.FileName;
 
-		if (Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, FileNameCopy, OPM_FIND | OpMode, &i.UserData))
+		if (Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, FileNameCopy, OpMode, &i.UserData))
 		{
 			ScanPluginDir(hDirListPlugin, OpMode, BaseDir, path::join(PluginSearchPath, i.FileName), PluginDirList, StopSearch, Data, Callback);
 
-			if (!Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, L".."s, OPM_FIND | OpMode))
+			if (!Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, L".."s, OpMode))
 				return;
 		}
 	}
@@ -381,9 +331,12 @@ static bool GetPluginDirListImpl(Plugin* PluginNumber, HANDLE hPlugin, string_vi
 	std::unique_ptr<plugin_panel> DirListPlugin;
 	plugin_panel* hDirListPlugin;
 
-	OPERATION_MODES OpMode=0;
-	if (Global->CtrlObject->Cp()->PassivePanel()->GetType() == panel_type::QVIEW_PANEL || Global->CtrlObject->Cp()->ActivePanel()->GetType() == panel_type::QVIEW_PANEL)
-		OpMode|=OPM_QUICKVIEW;
+	const auto OpMode =
+		OPM_SILENT |
+		OPM_FIND |
+		(any_of(panel_type::QVIEW_PANEL, Global->CtrlObject->Cp()->PassivePanel()->GetType(), Global->CtrlObject->Cp()->ActivePanel()->GetType())?
+			OPM_QUICKVIEW : OPM_NONE
+		);
 
 	// А не хочет ли плагин посмотреть на текущую панель?
 	if (!hPlugin || hPlugin==PANEL_ACTIVE || hPlugin==PANEL_PASSIVE)
@@ -400,46 +353,48 @@ static bool GetPluginDirListImpl(Plugin* PluginNumber, HANDLE hPlugin, string_vi
 	}
 	else
 	{
-		DirListPlugin = std::make_unique<plugin_panel>(PluginNumber, hPlugin);
-		hDirListPlugin = DirListPlugin.get();
-	}
-
-	bool StopSearch = false;
-
-	{
-		SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<DirInfoPreRedrawItem>());
+		const auto aHandle = Global->CtrlObject->Cp()->ActivePanel()->GetPluginHandle();
+		if (aHandle && aHandle->panel() == hPlugin)
+			hDirListPlugin = aHandle;
+		else
 		{
-			const auto strDirName = fit_to_center(truncate_left(Dir, 30), 30);
-			SetCursorType(false, 0);
-			PluginSearchMsgOut=FALSE;
-
-			OpenPanelInfo Info;
-			Global->CtrlObject->Plugins->GetOpenPanelInfo(hDirListPlugin,&Info);
-			const string strPrevDir = NullToEmpty(Info.CurDir);
-
-			if (Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, string(Dir), OPM_SILENT | OpMode, UserData))
-			{
-				ScanPluginDir(hDirListPlugin, OpMode, Dir, Dir, Items, StopSearch, Data, Callback);
-
-				Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, L".."s, OPM_SILENT | OpMode);
-
-				OpenPanelInfo NewInfo;
-				Global->CtrlObject->Plugins->GetOpenPanelInfo(hDirListPlugin,&NewInfo);
-
-				if (!equal_icase(strPrevDir, NullToEmpty(NewInfo.CurDir)))
-				{
-					span<PluginPanelItem> PanelData;
-
-					if (Global->CtrlObject->Plugins->GetFindData(hDirListPlugin, PanelData, OPM_SILENT | OpMode))
-					{
-						Global->CtrlObject->Plugins->FreeFindData(hDirListPlugin, PanelData, true);
-					}
-
-					Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin,strPrevDir,OPM_SILENT|OpMode,&Info.UserData);
-				}
-			}
+			const auto pHandle = Global->CtrlObject->Cp()->PassivePanel()->GetPluginHandle();
+			if (pHandle && pHandle->panel() == hPlugin)
+				hDirListPlugin = pHandle;
+			else
+				return false;
 		}
 	}
+
+	HideCursor();
+
+	OpenPanelInfo Info;
+	Global->CtrlObject->Plugins->GetOpenPanelInfo(hDirListPlugin,&Info);
+	const string strPrevDir = NullToEmpty(Info.CurDir);
+
+	if (!Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, string(Dir), OpMode, UserData))
+		return true;
+
+	bool StopSearch = false;
+	ScanPluginDir(hDirListPlugin, OpMode, Dir, Dir, Items, StopSearch, Data, Callback);
+
+	Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, L".."s, OpMode);
+
+	OpenPanelInfo NewInfo;
+	Global->CtrlObject->Plugins->GetOpenPanelInfo(hDirListPlugin,&NewInfo);
+
+	if (!equal_icase(strPrevDir, NullToEmpty(NewInfo.CurDir)))
+	{
+		std::span<PluginPanelItem> PanelData;
+
+		if (Global->CtrlObject->Plugins->GetFindData(hDirListPlugin, PanelData, OpMode))
+		{
+			Global->CtrlObject->Plugins->FreeFindData(hDirListPlugin, PanelData, true);
+		}
+
+		Global->CtrlObject->Plugins->SetDirectory(hDirListPlugin, strPrevDir, OpMode, &Info.UserData);
+	}
+
 	return !StopSearch;
 }
 

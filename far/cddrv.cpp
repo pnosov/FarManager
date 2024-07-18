@@ -38,9 +38,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cddrv.hpp"
 
 // Internal:
+#include "log.hpp"
 #include "pathmix.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.fs.hpp"
 
 // Common:
@@ -67,7 +69,7 @@ enum cdrom_device_capabilities
 
 	CAPABILITIES_BDROM    = 7_bit,
 	CAPABILITIES_BDR      = 8_bit,
-	CAPABILITIES_BDRW     = 9_bit,
+	CAPABILITIES_BDRE     = 9_bit,
 
 	CAPABILITIES_HDDVDROM = 10_bit,
 	CAPABILITIES_HDDVDR   = 11_bit,
@@ -75,24 +77,25 @@ enum cdrom_device_capabilities
 	CAPABILITIES_HDDVDRAM = 13_bit,
 };
 
-static auto operator | (cdrom_device_capabilities const This, cdrom_device_capabilities const Rhs)
+static auto operator|(cdrom_device_capabilities const This, cdrom_device_capabilities const Rhs)
 {
-	return static_cast<cdrom_device_capabilities>(as_underlying_type(This) | Rhs);
+	return static_cast<cdrom_device_capabilities>(std::to_underlying(This) | Rhs);
 }
 
-static auto& operator |= (cdrom_device_capabilities& This, cdrom_device_capabilities const Rhs)
+static auto& operator|=(cdrom_device_capabilities& This, cdrom_device_capabilities const Rhs)
 {
 	return This = This | Rhs;
 }
 
-template<typename T, size_t N, size_t... I>
-static auto write_value_to_big_endian_impl(unsigned char (&Dest)[N], T const Value, std::index_sequence<I...>)
+template<size_t N, size_t... I>
+static auto write_value_to_big_endian_impl(unsigned char (&Dest)[N], auto const Value, std::index_sequence<I...>)
 {
+	static_assert(std::endian::native == std::endian::little, "No way");
 	(..., (Dest[N - I - 1] = (Value >> (8 * I) & 0xFF)));
 }
 
-template<typename T, size_t N>
-static auto write_value_to_big_endian(unsigned char (&Dest)[N], T const Value)
+template<size_t N>
+static auto write_value_to_big_endian(unsigned char (&Dest)[N], auto const Value)
 {
 	return write_value_to_big_endian_impl(Dest, Value, std::make_index_sequence<N>{});
 }
@@ -100,6 +103,7 @@ static auto write_value_to_big_endian(unsigned char (&Dest)[N], T const Value)
 template<typename T, size_t N, size_t... I>
 static auto read_value_from_big_endian_impl(unsigned char const (&Src)[N], std::index_sequence<I...>)
 {
+	static_assert(std::endian::native == std::endian::little, "No way");
 	static_assert(sizeof(T) >= N);
 	return T((... | (T(Src[I]) << (8 * (N - I - 1)))));
 }
@@ -110,31 +114,15 @@ static auto read_value_from_big_endian(unsigned char const (&Src)[N])
 	return read_value_from_big_endian_impl<T>(Src, std::make_index_sequence<N>{});
 }
 
-template<typename T>
-static auto& edit_as(void* const Buffer)
-{
-	static_assert(std::is_trivially_copyable_v<T>);
-
-	return *static_cast<T*>(Buffer);
-}
-
-template<typename T>
-static auto view_as_if(span<unsigned char const> const Buffer)
-{
-	static_assert(std::is_trivially_copyable_v<T>);
-
-	return Buffer.size() >= sizeof(T)? view_as<T const*>(Buffer.data()) : nullptr;
-}
-
 struct SCSI_PASS_THROUGH_WITH_BUFFERS: SCSI_PASS_THROUGH
 {
 	UCHAR SenseBuf[32];
 	UCHAR DataBuf[512];
 };
 
-static void InitSCSIPassThrough(SCSI_PASS_THROUGH_WITH_BUFFERS& Spt)
+static auto InitSCSIPassThrough()
 {
-	Spt = {};
+	SCSI_PASS_THROUGH_WITH_BUFFERS Spt = {};
 
 	Spt.Length = sizeof(SCSI_PASS_THROUGH);
 	Spt.PathId = 0;
@@ -152,6 +140,8 @@ WARNING_DISABLE_CLANG("-Winvalid-offsetof")
 	Spt.SenseInfoOffset = static_cast<ULONG>(offsetof(SCSI_PASS_THROUGH_WITH_BUFFERS, SenseBuf));
 
 WARNING_POP()
+
+	return Spt;
 }
 
 // http://www.13thmonkey.org/documentation/SCSI/
@@ -188,7 +178,7 @@ WARNING_DISABLE_CLANG("-Wswitch")
 	case ProfileBDRom:                     return CAPABILITIES_BDROM;     // 0040h | BD-ROM                                | Blu-ray Disc ROM
 	case ProfileBDRSequentialWritable:     return CAPABILITIES_BDR;       // 0041h | BD-R SRM                              | Blu-ray Disc Recordable – Sequential Recording Mode
 	case ProfileBDRRandomWritable:         return CAPABILITIES_BDR;       // 0042h | BD-R RRM                              | Blu-ray Disc Recordable – Random Recording Mode
-	case ProfileBDRewritable:              return CAPABILITIES_BDRW;      // 0043h | BD-RE                                 | Blu-ray Disc Rewritable
+	case ProfileBDRewritable:              return CAPABILITIES_BDRE;      // 0043h | BD-RE                                 | Blu-ray Disc Rewritable
 	case ProfileHDDVDRom:                  return CAPABILITIES_HDDVDROM;  // 0050h | HD DVD-ROM                            | Read-only HD DVD
 	case ProfileHDDVDRecordable:           return CAPABILITIES_HDDVDR;    // 0051h | HD DVD-R                              | Write-once HD DVD
 	case ProfileHDDVDRam:                  return CAPABILITIES_HDDVDRAM;  // 0052h | HD DVD-RAM                            | Rewritable HD DVD
@@ -203,34 +193,14 @@ WARNING_POP()
 
 static auto capatibilities_from_scsi_configuration(const os::fs::file& Device)
 {
-
-	SCSI_PASS_THROUGH_WITH_BUFFERS Spt;
-	InitSCSIPassThrough(Spt);
+	auto Spt = InitSCSIPassThrough();
 
 #if !IS_MICROSOFT_SDK()
-	// GCC headers incorrectly reserve only one bit for RequestType
-	struct CDB_FIXED
-	{
-		struct
-		{
-			UCHAR OperationCode;
-			UCHAR RequestType : 2;
-			UCHAR Reserved1 : 6;
-			UCHAR StartingFeature[2];
-			UCHAR Reserved2[3];
-			UCHAR AllocationLength[2];
-			UCHAR Control;
-		}
-		GET_CONFIGURATION;
-	};
-#define CDB CDB_FIXED
+	// Old GCC headers incorrectly reserve only one bit for RequestType
+	static_assert(decltype(CDB::GET_CONFIGURATION){.RequestType = 0b11 }.RequestType == 0b11);
 #endif
 
 	auto& GetConfiguration = edit_as<CDB>(Spt.Cdb).GET_CONFIGURATION;
-
-#if !IS_MICROSOFT_SDK()
-#undef CDB
-#endif
 
 	GetConfiguration.OperationCode = SCSIOP_GET_CONFIGURATION;
 	GetConfiguration.RequestType = SCSI_GET_CONFIGURATION_REQUEST_TYPE_ONE;
@@ -239,26 +209,27 @@ static auto capatibilities_from_scsi_configuration(const os::fs::file& Device)
 	Spt.CdbLength = CDB10GENERIC_LENGTH;
 
 	if (!Device.IoControl(IOCTL_SCSI_PASS_THROUGH, &Spt, sizeof(SCSI_PASS_THROUGH), &Spt, sizeof(Spt)) || Spt.ScsiStatus != SCSISTAT_GOOD)
+	{
+		LOGWARNING(L"SCSIOP_GET_CONFIGURATION: {}"sv, os::last_error());
 		return CAPABILITIES_NONE;
+	}
 
-	span Buffer(Spt.DataBuf, Spt.DataTransferLength);
+	std::span const Buffer(Spt.DataBuf, Spt.DataTransferLength);
 
-	const auto ConfigurationHeader = view_as_if<GET_CONFIGURATION_HEADER>(Buffer);
+	const auto ConfigurationHeader = view_as_opt<GET_CONFIGURATION_HEADER>(Buffer);
 	if (!ConfigurationHeader || Buffer.size() < sizeof(ConfigurationHeader->DataLength) + read_value_from_big_endian<size_t>(ConfigurationHeader->DataLength))
 		return CAPABILITIES_NONE;
 
-	Buffer.pop_front(sizeof(*ConfigurationHeader));
-
-	const auto FeatureList = view_as_if<FEATURE_DATA_PROFILE_LIST>(Buffer);
+	const auto FeatureList = view_as_opt<FEATURE_DATA_PROFILE_LIST>(Buffer, sizeof(*ConfigurationHeader));
 	if (!FeatureList)
 		return CAPABILITIES_NONE;
 
 	if (read_value_from_big_endian<FEATURE_NUMBER>(FeatureList->Header.FeatureCode) != FeatureProfileList)
 		return CAPABILITIES_NONE;
 
-	const span Profiles(FeatureList->Profiles, FeatureList->Header.AdditionalLength / sizeof(*FeatureList->Profiles));
+	const std::span Profiles(FeatureList->Profiles, FeatureList->Header.AdditionalLength / sizeof(*FeatureList->Profiles));
 
-	return std::accumulate(ALL_CONST_RANGE(Profiles), CAPABILITIES_NONE, [](auto const Value, auto const& i)
+	return std::ranges::fold_left(Profiles, CAPABILITIES_NONE, [](auto const Value, auto const& i)
 	{
 		return Value | profile_to_capabilities(read_value_from_big_endian<FEATURE_PROFILE_TYPE>(i.ProfileNumber));
 	});
@@ -266,9 +237,7 @@ static auto capatibilities_from_scsi_configuration(const os::fs::file& Device)
 
 static auto capatibilities_from_scsi_mode_sense(const os::fs::file& Device)
 {
-	SCSI_PASS_THROUGH_WITH_BUFFERS Spt;
-	InitSCSIPassThrough(Spt);
-
+	auto Spt = InitSCSIPassThrough();
 	auto& ModeSense = edit_as<CDB>(Spt.Cdb).MODE_SENSE;
 	ModeSense.OperationCode = SCSIOP_MODE_SENSE;
 	ModeSense.Dbd = true;
@@ -278,7 +247,10 @@ static auto capatibilities_from_scsi_mode_sense(const os::fs::file& Device)
 	Spt.CdbLength = CDB6GENERIC_LENGTH;
 
 	if (!Device.IoControl(IOCTL_SCSI_PASS_THROUGH, &Spt, sizeof(SCSI_PASS_THROUGH), &Spt, sizeof(Spt)) || Spt.ScsiStatus != SCSISTAT_GOOD)
+	{
+		LOGWARNING(L"SCSIOP_MODE_SENSE: {}"sv, os::last_error());
 		return CAPABILITIES_NONE;
+	}
 
 	const auto& CapsPage = view_as<CDVD_CAPABILITIES_PAGE>(Spt.DataBuf + sizeof(MODE_PARAMETER_HEADER));
 
@@ -336,15 +308,15 @@ static auto product_id_to_capatibilities(const char* const ProductId)
 		{ L"DVDRW"sv,     {L"HD"sv}, {},                            CAPABILITIES_DVDRW    },
 		{ L"DVDRAM"sv,    {L"HD"sv}, {},                            CAPABILITIES_DVDRAM   },
 		{ L"BDROM"sv,     {},        {},                            CAPABILITIES_BDROM    },
-		{ L"BDR"sv,       {},        { L"OM"sv, L"W"sv },           CAPABILITIES_BDR      },
-		{ L"BDRW"sv,      {},        {},                            CAPABILITIES_BDRW     },
+		{ L"BDR"sv,       {},        { L"OM"sv, L"E"sv },           CAPABILITIES_BDR      },
+		{ L"BDRE"sv,      {},        {},                            CAPABILITIES_BDRE     },
 		{ L"HDDVDROM"sv,  {},        {},                            CAPABILITIES_HDDVDROM },
 		{ L"HDDVDR"sv,    {},        { L"OM"sv, L"W"sv, L"AM"sv },  CAPABILITIES_HDDVDR   },
 		{ L"HDDVDRW"sv,   {},        {},                            CAPABILITIES_HDDVDRW  },
 		{ L"HDDVDRAM"sv,  {},        {},                            CAPABILITIES_HDDVDRAM },
 	};
 
-	return std::accumulate(ALL_CONST_RANGE(Capabilities), CAPABILITIES_NONE, [Id = string_view(ProductIdFiltered)](auto const Value, auto const& i)
+	return std::ranges::fold_left(Capabilities, CAPABILITIES_NONE, [Id = string_view(ProductIdFiltered)](auto const Value, auto const& i)
 	{
 		const auto Pos = Id.find(i.Pattern);
 		if (Pos == i.Pattern.npos)
@@ -352,15 +324,15 @@ static auto product_id_to_capatibilities(const char* const ProductId)
 
 		if (
 			const auto Prefix = Id.substr(0, Pos);
-			std::any_of(ALL_CONST_RANGE(i.AntipatternsBefore),
-				[&](string_view const Str){ return ends_with(Prefix, Str); })
+			std::ranges::any_of(i.AntipatternsBefore,
+				[&](string_view const Str){ return Prefix.ends_with(Str); })
 		)
 			return Value;
 
 		if (
 			const auto Suffix = Id.substr(Pos + i.Pattern.size());
-			std::any_of(ALL_CONST_RANGE(i.AntipatternsAfter),
-				[&](string_view const Str){ return starts_with(Suffix, Str); })
+			std::ranges::any_of(i.AntipatternsAfter,
+				[&](string_view const Str){ return Suffix.starts_with(Str); })
 		)
 			return Value;
 
@@ -374,11 +346,17 @@ static auto capatibilities_from_product_id(const os::fs::file& Device)
 	STORAGE_PROPERTY_QUERY PropertyQuery{ StorageDeviceProperty, PropertyStandardQuery };
 
 	if (!Device.IoControl(IOCTL_STORAGE_QUERY_PROPERTY, &PropertyQuery, sizeof(PropertyQuery), &DescriptorHeader, sizeof(DescriptorHeader)) || !DescriptorHeader.Size)
+	{
+		LOGWARNING(L"IOCTL_STORAGE_QUERY_PROPERTY: {}"sv, os::last_error());
 		return CAPABILITIES_NONE;
+	}
 
 	const char_ptr_n<os::default_buffer_size> Buffer(DescriptorHeader.Size);
 	if (!Device.IoControl(IOCTL_STORAGE_QUERY_PROPERTY, &PropertyQuery, sizeof(PropertyQuery), Buffer.data(), static_cast<DWORD>(Buffer.size())))
+	{
+		LOGWARNING(L"IOCTL_STORAGE_QUERY_PROPERTY: {}"sv, os::last_error());
 		return CAPABILITIES_NONE;
+	}
 
 	const auto& DeviceDescriptor = view_as<STORAGE_DEVICE_DESCRIPTOR>(Buffer.data());
 
@@ -415,7 +393,7 @@ static auto get_cd_type(cdrom_device_capabilities const caps)
 		{ cd_type::hddvdrw,      CAPABILITIES_HDDVDRW },
 		{ cd_type::hddvdr,       CAPABILITIES_HDDVDR },
 		{ cd_type::hddvdrom,     CAPABILITIES_HDDVDROM },
-		{ cd_type::bdrw,         CAPABILITIES_BDRW },
+		{ cd_type::bdre,         CAPABILITIES_BDRE },
 		{ cd_type::bdr,          CAPABILITIES_BDR },
 		{ cd_type::bdrom,        CAPABILITIES_BDROM },
 		{ cd_type::dvdram,       CAPABILITIES_DVDRAM },
@@ -426,9 +404,9 @@ static auto get_cd_type(cdrom_device_capabilities const caps)
 		{ cd_type::cdrom,        CAPABILITIES_CDROM },
 	};
 
-	const auto ItemIterator = std::find_if(CONST_RANGE(DeviceCaps, i)
+	const auto ItemIterator = std::ranges::find_if(DeviceCaps, [caps](const auto& i)
 	{
-		return (caps & i.second) == i.second;
+		return flags::check_all(caps, i.second);
 	});
 
 	return ItemIterator == std::cend(DeviceCaps)? cd_type::cdrom : ItemIterator->first;
@@ -444,7 +422,7 @@ cd_type get_cdrom_type(string_view RootDir)
 	string VolumePath(RootDir);
 	DeleteEndSlash(VolumePath);
 
-	if (starts_with(VolumePath, L"\\\\?\\"sv))
+	if (VolumePath.starts_with(L"\\\\?\\"sv))
 	{
 		VolumePath[2] = L'.';
 	}
@@ -453,7 +431,7 @@ cd_type get_cdrom_type(string_view RootDir)
 		VolumePath.insert(0, L"\\\\.\\"sv);
 	}
 
-	if (const auto Device = os::fs::file(VolumePath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING))
+	if (const auto Device = os::fs::file(VolumePath, GENERIC_READ | GENERIC_WRITE, os::fs::file_share_all, nullptr, OPEN_EXISTING))
 	{
 		if (const auto Capabilities = get_device_capabilities(Device); Capabilities != CAPABILITIES_NONE)
 			return get_cd_type(Capabilities);
@@ -470,13 +448,19 @@ bool is_removable_usb(string_view RootDir)
 	string drive(HasPathPrefix(RootDir)? RootDir : L"\\\\?\\"sv + RootDir);
 	DeleteEndSlash(drive);
 
-	const auto Device = os::fs::file(drive, STANDARD_RIGHTS_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING);
+	os::fs::file const Device(drive, STANDARD_RIGHTS_READ, os::fs::file_share_all, nullptr, OPEN_EXISTING);
 	if (!Device)
+	{
+		LOGWARNING(L"CreateFile({}): {}"sv, drive, os::last_error());
 		return false;
+	}
 
 	DISK_GEOMETRY DiskGeometry;
 	if (!Device.IoControl(IOCTL_DISK_GET_DRIVE_GEOMETRY, nullptr, 0, &DiskGeometry, sizeof(DiskGeometry)))
+	{
+		LOGWARNING(L"IOCTL_DISK_GET_DRIVE_GEOMETRY({}): {}"sv, drive, os::last_error());
 		return false;
+	}
 
 	return DiskGeometry.MediaType == FixedMedia || DiskGeometry.MediaType == RemovableMedia;
 }
@@ -485,7 +469,7 @@ bool is_removable_usb(string_view RootDir)
 
 #include "testing.hpp"
 
-TEST_CASE("product_id_to_capatibilities")
+TEST_CASE("cddrv.product_id_to_capatibilities")
 {
 	static const struct
 	{
@@ -503,7 +487,7 @@ TEST_CASE("product_id_to_capatibilities")
 		{ "DVD+RAM",     CAPABILITIES_DVDRAM    },
 		{ "BD_ROM",      CAPABILITIES_BDROM     },
 		{ "UberBDR",     CAPABILITIES_BDR       },
-		{ "HDBD/RW",     CAPABILITIES_BDRW      },
+		{ "HDBD/RE",     CAPABILITIES_BDRE      },
 		{ "HD-DVD-ROM",  CAPABILITIES_HDDVDROM  },
 		{ "HDDVDR",      CAPABILITIES_HDDVDR    },
 		{ "HDDVD RW",    CAPABILITIES_HDDVDRW   },
@@ -515,4 +499,16 @@ TEST_CASE("product_id_to_capatibilities")
 		REQUIRE(i.Result == product_id_to_capatibilities(i.Src));
 	}
 }
+
+TEST_CASE("cddrv.big_endian")
+{
+	std::uint32_t const Value = 0x123456;
+	unsigned char Buffer[3];
+	write_value_to_big_endian(Buffer, Value);
+	REQUIRE((Buffer[0] == 0x12 && Buffer[1] == 0x34 && Buffer[2] == 0x56));
+
+	const auto ValueCopy = read_value_from_big_endian<decltype(Value)>(Buffer);
+	REQUIRE(ValueCopy == Value);
+}
+
 #endif

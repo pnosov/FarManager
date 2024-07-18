@@ -76,7 +76,8 @@ FullYear:
 
    Windows supports years 1601 through 30827.
 */
-void ConvertDate(os::chrono::time_point Point, string& strDateText, string& strTimeText, int TimeLength, int FullYear, bool Brief = false, bool TextMonth = false);
+// (date, time)
+std::tuple<string, string> ConvertDate(os::chrono::time_point Point, int TimeLength, int FullYear, bool Brief = false, bool TextMonth = false);
 
 // (days, time)
 std::tuple<string, string> ConvertDuration(os::chrono::duration Duration);
@@ -84,9 +85,6 @@ std::tuple<string, string> ConvertDuration(os::chrono::duration Duration);
 string ConvertDurationToHMS(os::chrono::duration Duration);
 
 string MkStrFTime(string_view Format = {});
-
-bool utc_to_local(os::chrono::time_point UtcTime, SYSTEMTIME& LocalTime);
-bool local_to_utc(const SYSTEMTIME& LocalTime, os::chrono::time_point& UtcTime);
 
 class time_check: noncopyable
 {
@@ -106,5 +104,10 @@ private:
 	const clock_type::duration m_Interval;
 };
 
+// { "YYYY-MM-DD", "hh:mm:ss.sss" }, ISO 8601-like
+std::pair<string, string> format_datetime(SYSTEMTIME const& SystemTime);
+
+std::chrono::milliseconds till_next_second();
+std::chrono::milliseconds till_next_minute();
 
 #endif // DATETIME_HPP_58256A07_E483_4DB7_9DAC_DFA9D90D8A32

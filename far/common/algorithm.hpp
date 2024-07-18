@@ -35,10 +35,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "preprocessor.hpp"
 #include "type_traits.hpp"
 
+#include <ranges>
+#include <stdexcept>
+
 //----------------------------------------------------------------------------
 
-template<class T>
-void repeat(size_t count, const T& f)
+void repeat(size_t const count, const auto& f)
 {
 	for(size_t i = 0; i != count; ++i)
 	{
@@ -46,12 +48,13 @@ void repeat(size_t count, const T& f)
 	}
 }
 
-template<typename Iter1, typename Iter2>
-void apply_permutation(Iter1 first, Iter1 last, Iter2 indices)
+void apply_permutation(std::ranges::random_access_range auto& Range, std::random_access_iterator auto const indices)
 {
-	using difference_type = typename std::iterator_traits<Iter2>::value_type;
-	const difference_type length = std::distance(first, last);
-	for (difference_type i = 0; i < length; ++i)
+	auto first = std::ranges::begin(Range);
+	auto last = std::ranges::end(Range);
+	using index_type = std::iter_value_t<decltype(indices)>;
+
+	for (index_type i = 0, length = static_cast<index_type>(last - first); i != length; ++i)
 	{
 		auto current = i;
 		while (i != indices[current])
@@ -67,8 +70,8 @@ void apply_permutation(Iter1 first, Iter1 last, Iter2 indices)
 				indices[i] = next;
 				throw std::range_error("Not a permutation");
 			}
-			using std::swap;
-			swap(first[current], first[next]);
+
+			std::ranges::swap(first[current], first[next]);
 			indices[current] = current;
 			current = next;
 		}
@@ -76,69 +79,44 @@ void apply_permutation(Iter1 first, Iter1 last, Iter2 indices)
 	}
 }
 
-namespace detail
-{
-	template<typename T>
-	using try_emplace_hint = decltype(std::declval<T&>().emplace_hint(std::declval<T&>().end(), *std::declval<T&>().begin()));
-
-	template<class T>
-	inline constexpr bool has_emplace_hint_v = is_detected_v<try_emplace_hint, T>;
-}
-
 // Unified container emplace
-template<typename container, typename... args>
-void emplace(container& Container, args&&... Args)
+void emplace(auto& Container, auto&&... Args)
 {
-	if constexpr (detail::has_emplace_hint_v<container>)
+	if constexpr (requires { Container.emplace_hint(Container.end(), *Container.begin()); })
 		Container.emplace_hint(Container.end(), FWD(Args)...);
 	else
 		Container.emplace(Container.end(), FWD(Args)...);
 }
 
 // uniform "contains"
-
-namespace detail
-{
-	template<typename T>
-	using try_find = decltype(std::declval<T&>().find(std::declval<typename T::key_type&>()));
-
-	template<class T>
-	inline constexpr bool has_find_v = is_detected_v<try_find, T>;
-}
-
-template<typename container, typename element, REQUIRES(is_range_v<container>)>
 [[nodiscard]]
-constexpr bool contains(const container& Container, const element& Element)
+constexpr bool contains(std::ranges::range auto const& Range, const auto& Element)
 {
-	if constexpr (detail::has_find_v<container>)
+	if constexpr (requires { Range.contains(*Range.begin()); })
 	{
-		// associative containers
-		return Container.find(Element) != Container.cend();
+		return Range.contains(Element);
 	}
 	else
 	{
 		// everything else
-		const auto End = std::cend(Container);
-		return std::find(std::cbegin(Container), End, Element) != End;
+		const auto End = std::cend(Range);
+		return std::find(std::cbegin(Range), End, Element) != End;
 	}
 }
 
-template<typename min_type, typename value_type, typename max_type>
-constexpr bool in_closed_range(min_type const& Min, value_type const& Value, max_type const& Max)
+constexpr bool in_closed_range(auto const& Min, auto const& Value, auto const& Max)
 {
 	return Min <= Value && Value <= Max;
 }
 
-template<typename arg, typename... args>
-constexpr bool any_of(arg const& Arg, args const... Args)
+constexpr bool any_of(auto const& Arg, auto const&... Args)
 {
-	static_assert(sizeof...(Args));
+	static_assert(sizeof...(Args) > 0);
 
 	return (... || (Arg == Args));
 }
 
-template<typename... args>
-constexpr bool none_of(args const... Args)
+constexpr bool none_of(auto const&... Args)
 {
 	return !any_of(Args...);
 }

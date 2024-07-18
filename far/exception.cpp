@@ -37,10 +37,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 #include "imports.hpp"
 #include "encoding.hpp"
+#include "log.hpp"
+#include "tracer.hpp"
 
 // Platform:
+#include "platform.debug.hpp"
 
 // Common:
+#include "common/source_location.hpp"
 #include "common/string_utils.hpp"
 
 // External:
@@ -48,71 +52,91 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-error_state error_state::fetch()
+string source_location_to_string(source_location const& Location)
 {
-	return
-	{
-		errno,
-		GetLastError(),
-		imports.RtlGetLastNtStatus(),
-	};
-}
-
-string error_state::ErrnoStr() const
-{
-	return _wcserror(Errno);
-}
-
-string error_state::Win32ErrorStr() const
-{
-	return os::GetErrorString(false, Win32Error);
-}
-
-string error_state::NtErrorStr() const
-{
-	return os::GetErrorString(true, NtError);
-}
-
-std::array<string, 3> error_state::format_errors() const
-{
-	return
-	{
-		os::format_system_error(Errno, ErrnoStr()),
-		os::format_system_error(Win32Error, Win32ErrorStr()),
-		os::format_system_error(NtError, NtErrorStr())
-	};
+	return far::format(
+		L"{}, {}({})"sv,
+		encoding::utf8::get_chars(Location.function_name()),
+		encoding::utf8::get_chars(Location.file_name()),
+		Location.line());
 }
 
 namespace detail
 {
-	far_base_exception::far_base_exception(string_view const Message, const char* const Function, string_view const File, int const Line):
-		error_state_ex(fetch(), Message),
-		m_Function(Function),
-		m_Location(format(FSTR(L"{0}:{1}"), File, Line)),
-		m_FullMessage(format(FSTR(L"{0} (at {1}, {2})"), Message, encoding::utf8::get_chars(m_Function), m_Location))
+	string far_base_exception::to_string() const
+	{
+		return any()?
+			far::format(L"far_base_exception: {}, Error: {}"sv, full_message(), error_state::to_string()) :
+			far::format(L"far_base_exception: {}"sv, full_message());
+	}
+
+	far_base_exception::far_base_exception(error_state_ex ErrorState, source_location const& Location):
+		error_state_ex(std::move(ErrorState)),
+		m_Location(Location),
+		m_FullMessage(m_Location.function_name()? far::format(L"{} ({})"sv, What, source_location_to_string(m_Location)) : What)
+	{
+		LOGTRACE(L"{}"sv, *this);
+	}
+
+	far_std_exception::far_std_exception(string_view const Message, bool const CaptureErrors, source_location const& Location):
+		far_std_exception({ CaptureErrors? os::last_error() : error_state{}, Message, CaptureErrors? errno : 0 }, Location)
 	{
 	}
 
-	std::string far_std_exception::convert_message() const
+	std::string far_std_exception::convert_message(string_view const Message)
 	{
-		return encoding::utf8::get_bytes(full_message());
+		return encoding::utf8::get_bytes(Message);
 	}
 
 	break_into_debugger::break_into_debugger()
 	{
-		os::debug::breakpoint(false);
+		os::debug::breakpoint_if_debugging();
 	}
 }
 
-string error_state_ex::format_error() const
+string error_state_ex::ErrnoStr() const
 {
-	auto Str = What;
-	if (!Str.empty())
-		append(Str, L": "sv);
+	return os::format_errno(Errno);
+}
 
+string error_state_ex::system_error() const
+{
 	constexpr auto UseNtMessages = false;
+	return UseNtMessages? NtErrorStr() : Win32ErrorStr();
+}
 
-	return Str + os::format_system_error(
-		UseNtMessages? NtError : Win32Error,
-		UseNtMessages? NtErrorStr() : Win32ErrorStr());
+static auto with_exception_stacktrace(string_view const Str)
+{
+	string Result;
+
+	tracer.exception_stacktrace({}, [&](string_view const Line)
+	{
+		append(Result, Line, L'\n');
+	});
+
+	return Result.empty()? string(Str) : concat(Str, L"\n\n"sv, Result);
+}
+
+string error_state_ex::to_string() const
+{
+	if (any())
+	{
+		auto Str = error_state::to_string();
+		if (Errno)
+			Str = concat(ErrnoStr(), L", "sv, Str);
+
+		return with_exception_stacktrace(far::format(L"Message: {}, Error: {}"sv, What, Str));
+	}
+
+	return with_exception_stacktrace(far::format(L"Message: {}"sv, What));
+}
+
+string formattable<std::exception>::to_string(std::exception const& e)
+{
+	return with_exception_stacktrace(far::format(L"std::exception: {}"sv, encoding::utf8_or_ansi::get_chars(e.what())));
+}
+
+string unknown_exception_t::to_string()
+{
+	return with_exception_stacktrace(L"Unknown exception"sv);
 }

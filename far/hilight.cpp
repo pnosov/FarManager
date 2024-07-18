@@ -65,6 +65,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
+#include "common/2d/matrix.hpp"
 #include "common/bytes_view.hpp"
 #include "common/string_utils.hpp"
 #include "common/view/enumerate.hpp"
@@ -75,11 +76,18 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
+static const FarColor DefaultColor
+{
+	FCF_FG_INDEX | FCF_BG_INDEX | FCF_INHERIT_STYLE,
+	{colors::transparent(F_BLACK)},
+	{colors::transparent(F_BLACK)}
+};
+
 namespace names
 {
-#define STR_INIT(x) x = WSTRVIEW(x)
+#define STR_INIT(x) x = WIDE_SV_LITERAL(x)
 
-	static const string_view
+	static const auto
 		STR_INIT(NormalColor),
 		STR_INIT(SelectedColor),
 		STR_INIT(CursorColor),
@@ -89,6 +97,7 @@ namespace names
 		STR_INIT(MarkCharCursorColor),
 		STR_INIT(MarkCharSelectedCursorColor),
 		STR_INIT(MarkChar),
+		STR_INIT(Mark),
 		STR_INIT(ContinueProcessing),
 		STR_INIT(Group),
 		STR_INIT(UpperGroup),
@@ -143,8 +152,9 @@ static void SetHighlighting(bool DeleteOld, HierarchicalConfig& cfg)
 
 	const auto MakeFarColor = [](int ConsoleColour)
 	{
-		auto Colour = colors::ConsoleColorToFarColor(ConsoleColour);
+		auto Colour = colors::NtColorToFarColor(ConsoleColour);
 		colors::make_transparent(Colour.BackgroundColor);
+		Colour.Flags |= FCF_INHERIT_STYLE;
 		return Colour;
 	};
 
@@ -174,7 +184,7 @@ static void SetHighlighting(bool DeleteOld, HierarchicalConfig& cfg)
 		Params.SetAttr(i.IncludeAttr != 0, i.IncludeAttr, 0);
 
 		const auto Key = cfg.CreateKey(root, names::Group + str(Index));
-		FileFilter::SaveFilter(cfg, Key.get(), Params);
+		filters::SaveFilter(cfg, Key.get(), Params);
 
 		cfg.SetValue(Key, names::NormalColor, view_bytes(i.NormalColor));
 		cfg.SetValue(Key, names::CursorColor, view_bytes(i.CursorColor));
@@ -191,31 +201,30 @@ static void SetHighlighting(bool DeleteOld, HierarchicalConfig& cfg)
 
 		for (const auto& j: Default)
 		{
-			static const FarColor DefaultColor
-			{
-				FCF_FG_4BIT | FCF_BG_4BIT,
-				{colors::opaque(F_BLACK)},
-				{colors::transparent(F_BLACK)}
-			};
-
 			cfg.SetValue(Key, j, view_bytes(DefaultColor));
 		}
 	}
+}
+
+highlight::element::colors::colors():
+	FileColor(DefaultColor),
+	MarkColor(DefaultColor)
+{
 }
 
 highlight::configuration::configuration()
 {
 	const auto cfg = ConfigProvider().CreateHighlightConfig();
 	SetHighlighting(false, *cfg);
-	InitHighlightFiles(*cfg);
+	Load(*cfg);
 	UpdateCurrentTime();
 }
 
-static FileFilterParams LoadFilter(/*const*/ HierarchicalConfig& cfg, const HierarchicalConfig::key& key, int SortGroup)
+static FileFilterParams LoadHighlight(/*const*/ HierarchicalConfig& cfg, const HierarchicalConfig::key& key, int SortGroup)
 {
-	auto HData = FileFilter::LoadFilter(cfg, key.get());
+	auto Item = filters::LoadFilter(cfg, key.get());
 
-	HData.SetSortGroup(SortGroup);
+	Item.SetSortGroup(SortGroup);
 
 	highlight::element Colors{};
 
@@ -226,21 +235,32 @@ static FileFilterParams LoadFilter(/*const*/ HierarchicalConfig& cfg, const Hier
 		cfg.GetValue(key, names::mark_color(Index), Blob) && deserialise(Blob, Color.MarkColor);
 	}
 
-	unsigned long long MarkChar;
-	if (cfg.GetValue(key, names::MarkChar, MarkChar))
+	auto MarkRead = false;
+	if (string Mark; cfg.GetValue(key, names::Mark, Mark))
 	{
-		Colors.Mark.Char = LOWORD(MarkChar);
-		Colors.Mark.Transparent = LOBYTE(HIWORD(MarkChar)) == 0xff;
+		Colors.Mark.Mark = std::move(Mark);
+		MarkRead = true;
 	}
-	HData.SetColors(Colors);
+
+	if (unsigned long long MarkChar; cfg.GetValue(key, names::MarkChar, MarkChar))
+	{
+		// "MarkChar" used to contain both the mark character and the inheritance flag.
+		// "Mark" is the main storage of the mark now, but if it's not there, we try the old way:
+		const auto Char = static_cast<wchar_t>(extract_integer<WORD, 0>(MarkChar));
+		if (!MarkRead && Char)
+			Colors.Mark.Mark = Char;
+
+		Colors.Mark.Inherit = extract_integer<BYTE, 0>(extract_integer<WORD, 1>(MarkChar)) == 0xff;
+	}
+	Item.SetColors(Colors);
 
 	const auto ContinueProcessing = cfg.GetValue<bool>(key, names::ContinueProcessing);
-	HData.SetContinueProcessing(ContinueProcessing);
+	Item.SetContinueProcessing(ContinueProcessing);
 
-	return HData;
+	return Item;
 }
 
-void highlight::configuration::InitHighlightFiles(/*const*/ HierarchicalConfig& cfg)
+void highlight::configuration::Load(/*const*/ HierarchicalConfig& cfg)
 {
 	const struct
 	{
@@ -267,7 +287,7 @@ void highlight::configuration::InitHighlightFiles(/*const*/ HierarchicalConfig& 
 
 		for (const auto& Key: cfg.KeysEnumerator(root, Item.GroupName))
 		{
-			HiData.emplace_back(LoadFilter(cfg, Key, Item.Delta + (Item.Delta == DEFAULT_SORT_GROUP? 0 : *Item.Count)));
+			HiData.emplace_back(LoadHighlight(cfg, Key, Item.Delta + (Item.Delta == DEFAULT_SORT_GROUP? 0 : *Item.Count)));
 			++*Item.Count;
 		}
 	}
@@ -280,39 +300,23 @@ void highlight::configuration::ClearData()
 	FirstCount=UpperCount=LowerCount=LastCount=0;
 }
 
-static void ApplyDefaultStartingColors(highlight::element& Colors)
-{
-	for (auto& i: Colors.Color)
-	{
-		colors::make_opaque(i.FileColor.ForegroundColor);
-		colors::make_transparent(i.FileColor.BackgroundColor);
-		colors::make_opaque(i.MarkColor.ForegroundColor);
-		colors::make_transparent(i.MarkColor.BackgroundColor);
-	}
-
-	Colors.Mark.Transparent = true;
-	Colors.Mark.Char = 0;
-}
-
 static void ApplyBlackOnBlackColor(highlight::element::colors_array::value_type& Colors, DWORD PaletteColor)
 {
 	const auto InheritColor = [](FarColor& Color, const FarColor& Base)
 	{
-		if (!colors::color_value(Color.ForegroundColor) && !colors::color_value(Color.BackgroundColor))
-		{
-			Color.BackgroundColor = colors::alpha_value(Color.BackgroundColor) | colors::color_value(Base.BackgroundColor);
-			Color.ForegroundColor = colors::alpha_value(Color.ForegroundColor) | colors::color_value(Base.ForegroundColor);
-			Color.Flags &= FCF_EXTENDEDFLAGS;
-			Color.Flags |= Base.Flags;
-			Color.Reserved[0] = Base.Reserved[0];
-			Color.Reserved[1] = Base.Reserved[1];
-		}
+		const auto LegacyUseDefaultPaletteColor =
+			colors::is_opaque(Color.ForegroundColor) && !colors::color_value(Color.ForegroundColor) &&
+			colors::is_opaque(Color.BackgroundColor) && !colors::color_value(Color.BackgroundColor);
+
+		if (!LegacyUseDefaultPaletteColor)
+			return;
+
+		colors::make_transparent(Color.ForegroundColor);
+		colors::make_transparent(Color.BackgroundColor);
+		Color = colors::merge(Base, Color);
 	};
 
-	//Применим black on black.
-	//Для файлов возьмем цвета панели не изменяя прозрачность.
 	InheritColor(Colors.FileColor, Global->Opt->Palette[PaletteColor]);
-	//Для пометки возьмем цвета файла включая прозрачность.
 	InheritColor(Colors.MarkColor, Colors.FileColor);
 }
 
@@ -345,10 +349,10 @@ static void ApplyColors(highlight::element& DestColors, const highlight::element
 	}
 
 	//Унаследуем пометку из Src если она не прозрачная
-	if (!SrcColors.Mark.Transparent)
+	if (!SrcColors.Mark.Inherit)
 	{
-		DestColors.Mark.Transparent = false;
-		DestColors.Mark.Char = SrcColors.Mark.Char;
+		DestColors.Mark.Inherit = false;
+		DestColors.Mark.Mark = SrcColors.Mark.Mark;
 	}
 }
 
@@ -359,28 +363,8 @@ void highlight::configuration::ApplyFinalColor(element::colors_array::value_type
 	//Обработаем black on black чтоб после наследования были правильные цвета.
 	ApplyBlackOnBlackColor(Colors, PaletteColor);
 
-	const auto& PanelColor = Global->Opt->Palette[PaletteColor];
-
-	//Если какой то из текущих цветов (fore или back) прозрачный
-	//то унаследуем соответствующий цвет с панелей.
-	const auto ApplyColorPart = [&](FarColor& i, COLORREF FarColor::*ColorAccessor, const FARCOLORFLAGS Flag)
-	{
-		auto& ColorPart = std::invoke(ColorAccessor, i);
-		if(colors::is_transparent(ColorPart))
-		{
-			ColorPart = colors::transparent(std::invoke(ColorAccessor, PanelColor));
-			(PanelColor.Flags & Flag)? (i.Flags |= Flag) : (i.Flags &= ~Flag);
-		}
-	};
-
-	const auto ApplyColor = [&](FarColor& i)
-	{
-		ApplyColorPart(i, &FarColor::BackgroundColor, FCF_BG_4BIT);
-		ApplyColorPart(i, &FarColor::ForegroundColor, FCF_FG_4BIT);
-	};
-
-	ApplyColor(Colors.FileColor);
-	ApplyColor(Colors.MarkColor);
+	Colors.FileColor = colors::merge(Global->Opt->Palette[PaletteColor], Colors.FileColor);
+	Colors.MarkColor = colors::merge(Colors.FileColor, Colors.MarkColor);
 
 	//Паранойя но случится может:
 	//Обработаем black on black снова чтоб обработались унаследованные цвета.
@@ -396,9 +380,7 @@ const highlight::element* highlight::configuration::GetHiColor(const FileListIte
 {
 	SCOPED_ACTION(elevation::suppress);
 
-	element item = {};
-
-	ApplyDefaultStartingColors(item);
+	element item;
 
 	for (const auto& i: HiData)
 	{
@@ -418,10 +400,10 @@ const highlight::element* highlight::configuration::GetHiColor(const FileListIte
 	//for (const auto& i: zip(Item.Color, PalColor)) std::apply(ApplyFinalColor, i);
 
 	//Если символ пометки прозрачный то его как бы и нет вообще.
-	if (item.Mark.Transparent)
-		item.Mark.Char = 0;
+	if (item.Mark.Inherit)
+		item.Mark.Mark.clear();
 
-	return &*Colors.emplace(item).first;
+	return std::to_address(m_Colors.emplace(item).first);
 }
 
 int highlight::configuration::GetGroup(const FileListItem& Object, const FileList* Owner)
@@ -451,7 +433,7 @@ void highlight::configuration::FillMenu(VMenu2 *HiMenu,int MenuPos) const
 
 	for (const auto& i: Data)
 	{
-		for (const auto& Item: range(HiData.cbegin() + i.from, HiData.cbegin() + i.to))
+		for (const auto& Item: std::ranges::subrange(HiData.cbegin() + i.from, HiData.cbegin() + i.to))
 		{
 			HiMenu->AddItem(MenuString(&Item, true));
 		}
@@ -471,16 +453,16 @@ void highlight::configuration::FillMenu(VMenu2 *HiMenu,int MenuPos) const
 
 void highlight::configuration::ProcessGroups()
 {
-	for (int i = 0; i<FirstCount; i++)
+	for (const auto i: std::views::iota(0, FirstCount))
 		HiData[i].SetSortGroup(DEFAULT_SORT_GROUP);
 
-	for (int i=FirstCount; i<FirstCount+UpperCount; i++)
+	for (const auto i: std::views::iota(FirstCount, FirstCount + UpperCount))
 		HiData[i].SetSortGroup(i-FirstCount);
 
-	for (int i=FirstCount+UpperCount; i<FirstCount+UpperCount+LowerCount; i++)
+	for (const auto i: std::views::iota(FirstCount + UpperCount, FirstCount + UpperCount + LowerCount))
 		HiData[i].SetSortGroup(DEFAULT_SORT_GROUP+1+i-FirstCount-UpperCount);
 
-	for (int i=FirstCount+UpperCount+LowerCount; i<FirstCount+UpperCount+LowerCount+LastCount; i++)
+	for (const auto i: std::views::iota(FirstCount + UpperCount + LowerCount, FirstCount + UpperCount + LowerCount + LastCount))
 		HiData[i].SetSortGroup(DEFAULT_SORT_GROUP);
 }
 
@@ -488,8 +470,8 @@ size_t highlight::configuration::element_hash::operator()(const element& item) c
 {
 	size_t Seed = 0;
 
-	hash_combine(Seed, item.Mark.Char);
-	hash_combine(Seed, item.Mark.Transparent);
+	hash_combine(Seed, item.Mark.Mark);
+	hash_combine(Seed, item.Mark.Inherit);
 
 	for (const auto& i: item.Color)
 	{
@@ -550,6 +532,41 @@ void highlight::configuration::UpdateHighlighting(bool RefreshMasks)
 	Global->CtrlObject->Cp()->RightPanel()->Redraw();
 }
 
+//BUGBUG
+void HighlightDlgUpdateUserControl(matrix_view<FAR_CHAR_INFO> const& VBufColorExample, const highlight::element &Colors);
+
+void HighlightDlgUpdateUserControl(matrix_view<FAR_CHAR_INFO> const& VBufColorExample, const highlight::element &Colors)
+{
+	const size_t ColorIndices[]{ highlight::color::normal, highlight::color::selected, highlight::color::normal_current, highlight::color::selected_current };
+
+	for (const auto& [ColorRef, Index, Row]: zip(Colors.Color, ColorIndices, VBufColorExample))
+	{
+		auto BakedColor = ColorRef;
+		highlight::configuration::ApplyFinalColor(BakedColor, Index);
+
+		Row.front() = { BoxSymbols[BS_V2], {}, {}, colors::PaletteColorToFarColor(COL_PANELBOX) };
+
+		auto Iterator = Row.begin() + 1;
+
+		if (!Colors.Mark.Mark.empty() && !Colors.Mark.Inherit)
+		{
+			Iterator->Char = Colors.Mark.Mark.front();
+			Iterator->Attributes = BakedColor.MarkColor;
+			++Iterator;
+		}
+
+		const std::span FileArea(Iterator, Row.end() - 1);
+		const auto Str = fit_to_left(msg(lng::MHighlightExample), FileArea.size());
+
+		for (const auto& [Cell, Char]: zip(FileArea, Str))
+		{
+			Cell = { Char, {}, {}, BakedColor.FileColor };
+		}
+
+		Row.back() = { BoxSymbols[BS_V1], {}, {}, Row.front().Attributes };
+	}
+}
+
 void highlight::configuration::HiEdit(int MenuPos)
 {
 	const auto HiMenu = VMenu2::create(msg(lng::MHighlightTitle), {}, ScrY - 4);
@@ -585,7 +602,7 @@ void highlight::configuration::HiEdit(int MenuPos)
 							msg(lng::MHighlightWarning),
 							msg(lng::MHighlightAskRestore)
 						},
-						{ lng::MYes, lng::MCancel }) != Message::first_button)
+						{ lng::MYes, lng::MCancel }) != message_result::first_button)
 					{
 						break;
 					}
@@ -593,7 +610,7 @@ void highlight::configuration::HiEdit(int MenuPos)
 					const auto cfg = ConfigProvider().CreateHighlightConfig();
 					SetHighlighting(true, *cfg); //delete old settings
 
-					InitHighlightFiles(*cfg);
+					Load(*cfg);
 					FillMenu(HiMenu.get(), SelectPos);
 
 					NeedUpdate = true;
@@ -614,7 +631,7 @@ void highlight::configuration::HiEdit(int MenuPos)
 								msg(lng::MHighlightAskDel),
 								HiData[RealSelectPos].GetMask()
 							},
-							{ lng::MDelete, lng::MCancel }) != Message::first_button)
+							{ lng::MDelete, lng::MCancel }) != message_result::first_button)
 						{
 							break;
 						}
@@ -634,7 +651,7 @@ void highlight::configuration::HiEdit(int MenuPos)
 					int *Count=nullptr;
 					const auto RealSelectPos = MenuPosToRealPos(SelectPos, Count);
 
-					if (Count && RealSelectPos < static_cast<int>(HiData.size()) && FileFilterConfig(&HiData[RealSelectPos], true))
+					if (Count && RealSelectPos < static_cast<int>(HiData.size()) && FileFilterConfig(HiData[RealSelectPos], true))
 					{
 						HiMenu->DeleteItem(SelectPos);
 						HiMenu->AddItem(MenuItemEx(MenuString(&HiData[RealSelectPos], true)), SelectPos);
@@ -659,11 +676,11 @@ void highlight::configuration::HiEdit(int MenuPos)
 						if (Key == KEY_F5)
 							NewHData = HiData[RealSelectPos].Clone();
 
-						if (FileFilterConfig(&NewHData, true))
+						if (FileFilterConfig(NewHData, true))
 						{
 							(*Count)++;
 							const auto Iterator = HiData.emplace(HiData.begin()+RealSelectPos, std::move(NewHData));
-							HiMenu->AddItem(MenuItemEx(MenuString(&*Iterator, true)), SelectPos);
+							HiMenu->AddItem(MenuItemEx(MenuString(std::to_address(Iterator), true)), SelectPos);
 							HiMenu->SetSelectPos(SelectPos, 1);
 							NeedUpdate = true;
 						}
@@ -680,7 +697,7 @@ void highlight::configuration::HiEdit(int MenuPos)
 
 					if (Count && SelectPos > 0)
 					{
-						using std::swap;
+						using std::ranges::swap;
 						swap(HiMenu->at(SelectPos), HiMenu->at(SelectPos - 1));
 						if (UpperCount && RealSelectPos==FirstCount && RealSelectPos<FirstCount+UpperCount)
 						{
@@ -782,11 +799,11 @@ void highlight::configuration::HiEdit(int MenuPos)
 	}
 }
 
-static void SaveFilter(HierarchicalConfig& cfg, const HierarchicalConfig::key& key, const FileFilterParams* const CurHiData)
+static void SaveHighlight(HierarchicalConfig& cfg, const HierarchicalConfig::key& key, FileFilterParams const& Item)
 {
-	FileFilter::SaveFilter(cfg, key.get(), *CurHiData);
+	filters::SaveFilter(cfg, key.get(), Item);
 
-	const auto Colors = CurHiData->GetColors();
+	const auto Colors = Item.GetColors();
 
 	for (const auto& [Color, Index]: enumerate(Colors.Color))
 	{
@@ -794,13 +811,20 @@ static void SaveFilter(HierarchicalConfig& cfg, const HierarchicalConfig::key& k
 		cfg.SetValue(key, names::mark_color(Index), view_bytes(Color.MarkColor));
 	}
 
-	cfg.SetValue(key, names::MarkChar, MAKELONG(Colors.Mark.Char, MAKEWORD(Colors.Mark.Transparent? 0xff : 0, 0)));
-	cfg.SetValue(key, names::ContinueProcessing, CurHiData->GetContinueProcessing());
+	cfg.SetValue(key, names::Mark, Colors.Mark.Mark);
+
+	// "MarkChar" used to contain both the mark character and the inheritance flag.
+	// "Mark" is the main storage of the mark now, but we still store the first character in "MarkChar" for compatibility:
+	cfg.SetValue(key, names::MarkChar, make_integer<uint32_t>(
+		uint16_t{ Colors.Mark.Mark.empty()? wchar_t{} : Colors.Mark.Mark.front() },
+		make_integer<uint16_t, uint8_t>(Colors.Mark.Inherit? 0xff : 0, 0))
+	);
+	cfg.SetValue(key, names::ContinueProcessing, Item.GetContinueProcessing());
 }
 
-void highlight::configuration::Save(bool always)
+void highlight::configuration::Save(bool Always)
 {
-	if (!always && !m_Changed)
+	if (!m_Changed && !Always)
 		return;
 
 	m_Changed = false;
@@ -834,9 +858,9 @@ void highlight::configuration::Save(bool always)
 	{
 		const auto root = cfg->CreateKey(cfg->root_key, i.KeyName);
 
-		for (int j = i.from; j != i.to; ++j)
+		for (const auto j: std::views::iota(i.from, i.to))
 		{
-			SaveFilter(*cfg, cfg->CreateKey(root, i.GroupName + str(j - i.from)), &HiData[j]);
+			SaveHighlight(*cfg, cfg->CreateKey(root, i.GroupName + str(j - i.from)), HiData[j]);
 		}
 	}
 }

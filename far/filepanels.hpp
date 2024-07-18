@@ -51,14 +51,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class CommandLine;
 class MenuBar;
 
-class FilePanels:public window, public ViewerContainer
+class FilePanels final: public window, public ViewerContainer
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
-	static filepanels_ptr create(bool CreateRealPanels, int DirCount);
+	static filepanels_ptr create(bool CreateRealPanels);
 
 	explicit FilePanels(private_tag);
+	~FilePanels() override;
 
 	bool ProcessKey(const Manager::Key& Key) override;
 	bool ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent) override;
@@ -106,7 +107,7 @@ public:
 
 private:
 
-	void Init(int DirCount);
+	void Init();
 	static void SetPassivePanelInternal(panel_ptr ToBePassive);
 	void SetActivePanelInternal(panel_ptr ToBeActive);
 

@@ -41,7 +41,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/singleton.hpp"
-#include "common/view/select.hpp"
 
 // External:
 
@@ -71,25 +70,23 @@ class codepages: public singleton<codepages>
 
 public:
 	NONCOPYABLE(codepages);
-	~codepages();
 
 	bool SelectCodePage(uintptr_t& CodePage, bool ViewOnly, bool bShowAutoDetect);
 	size_t FillCodePagesList(Dialog* Dlg, size_t controlId, uintptr_t codePage, bool allowAuto, bool allowAll, bool allowDefault, bool allowChecked, bool bViewOnly);
 	void FillCodePagesList(std::vector<DialogBuilderListItem> &List, bool allowAuto, bool allowAll, bool allowDefault, bool allowChecked, bool bViewOnly);
 
-	static bool IsCodePageSupported(uintptr_t CodePage, size_t MaxCharSize = size_t(-1));
 	static std::optional<cp_info> GetInfo(uintptr_t CodePage);
+	static string FormatName(uintptr_t CodePage);
+	static string UnsupportedCharacterMessage(wchar_t Char);
 	static long long GetFavorite(uintptr_t cp);
 	static void SetFavorite(uintptr_t cp, long long value);
 	static void DeleteFavorite(uintptr_t cp);
 	static auto GetFavoritesEnumerator()
 	{
-		return select(ConfigProvider().GeneralCfg()->ValuesEnumerator<long long>(FavoriteCodePagesKey()),
-			[t = std::pair<unsigned long, long long>{}](const auto& i) mutable -> auto&
+		return ConfigProvider().GeneralCfg()->ValuesEnumerator<long long>(FavoriteCodePagesKey()) | std::views::transform(
+		[](const auto& i)
 		{
-			// All this magic is to keep reference semantics to make analysers happy.
-			t = { std::stoul(i.first), i.second };
-			return t;
+			return std::pair{ std::stoul(i.first), i.second };
 		});
 	}
 
@@ -97,6 +94,7 @@ private:
 	friend class system_codepages_enumerator;
 
 	codepages();
+	~codepages();
 
 	static bool GetCodePageCustomName(uintptr_t CodePage, string& CodePageName);
 	size_t GetMenuItemCodePage(size_t Position = -1) const;
@@ -109,7 +107,7 @@ private:
 	void AddStandardCodePage(string_view codePageName, uintptr_t codePage, int position = -1, bool enabled = true) const;
 	void AddSeparator(const string& Label, size_t position = -1) const;
 	size_t size() const;
-	size_t GetCodePageInsertPosition(uintptr_t codePage, size_t start, size_t length);
+	size_t GetCodePageInsertPosition(uintptr_t codePage, size_t start, size_t length) const;
 	void AddCodePages(DWORD codePages);
 	void SetFavorite(bool State);
 	void FillCodePagesVMenu(bool bViewOnly, bool bShowAutoDetect);

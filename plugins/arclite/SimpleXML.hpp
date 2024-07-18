@@ -7,6 +7,7 @@ namespace SimpleXML
 {//################################################################################################
 //#################################################################################################
 
+// BUGBUG remove & use string_view
 class str_view
 {
 public:
@@ -15,7 +16,6 @@ public:
 public:
 	constexpr str_view() : ps(nullptr), pe(nullptr) {}
 	constexpr str_view(const char *_Str) : ps(_Str), pe(_Str) {}
-	constexpr str_view(const str_view&) = default;
 	constexpr str_view(const char *_Str, size_t _Len) : ps(_Str), pe(_Str+_Len) {}
 	constexpr str_view(const char *_Beg, const char *_End) : ps(_Beg), pe(_End) {}
 	bool empty() const noexcept { return ps >= pe; }
@@ -24,7 +24,7 @@ public:
 	const char *begin() const noexcept { return ps; }
 	const char *end() const noexcept { return pe; }
 };
-constexpr auto operator "" _v(const char *_Str, size_t _Len) noexcept { return (str_view(_Str, _Len)); }
+constexpr auto operator ""_v(const char *_Str, size_t _Len) noexcept { return (str_view(_Str, _Len)); }
 inline bool operator==(const str_view& Lhs, const str_view& Rhs)
 { return std::equal(Lhs.begin(), Lhs.end(), Rhs.begin(), Rhs.end()); }
 inline bool operator!=(const str_view& Lhs, const str_view& Rhs) { return !(Lhs == Rhs); }

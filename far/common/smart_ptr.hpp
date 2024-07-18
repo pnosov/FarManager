@@ -32,15 +32,20 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "placement.hpp"
 #include "preprocessor.hpp"
-#include "range.hpp"
 #include "utility.hpp"
+
+#include <array>
+#include <bit>
+#include <memory>
+#include <variant>
+
+#include <cassert>
 
 //----------------------------------------------------------------------------
 
-template<typename T, size_t MinStaticSize, REQUIRES(std::is_trivially_copyable_v<T>)>
-class array_ptr: public span<T>
+template<typename T, size_t MinStaticSize> requires std::is_trivially_copyable_v<T>
+class array_ptr
 {
 public:
 	NONCOPYABLE(array_ptr);
@@ -48,7 +53,6 @@ public:
 	array_ptr() noexcept
 	{
 		m_Buffer.template emplace<static_type>();
-		init_span(0);
 	}
 
 	explicit array_ptr(size_t const Size, bool Init = false):
@@ -57,14 +61,17 @@ public:
 		reset(Size, Init);
 	}
 
-	array_ptr(array_ptr&& rhs) noexcept
+	array_ptr(array_ptr&& rhs) noexcept:
+		m_Buffer(std::move(rhs.m_Buffer)),
+		m_Size(std::exchange(rhs.m_Size, 0))
 	{
-		move_from(rhs);
 	}
 
 	array_ptr& operator=(array_ptr&& rhs) noexcept
 	{
-		return move_from(rhs);
+		m_Buffer = std::move(rhs.m_Buffer);
+		m_Size = std::exchange(rhs.m_Size, 0);
+		return *this;
 	}
 
 	void reset(size_t const Size = 0, bool const Init = false)
@@ -82,14 +89,19 @@ public:
 			m_Buffer.template emplace<static_type>();
 		}
 
-		init_span(Size);
+		m_Size = Size;
 	}
 
-	[[nodiscard]]
-	explicit operator bool() const noexcept
-	{
-		return !this->empty();
-	}
+	[[nodiscard]] auto data() const { return get_data(); }
+	[[nodiscard]] auto size() const { return m_Size; }
+	[[nodiscard]] auto empty() const { return !m_Size; }
+	[[nodiscard]] auto& operator[](size_t const Index) const { return data()[Index]; }
+	[[nodiscard]] explicit operator bool() const { return !empty(); }
+
+	[[nodiscard]] auto begin() const { return data(); }
+	[[nodiscard]] auto end() const { return begin() + m_Size; }
+	[[nodiscard]] auto cbegin() const { return begin(); }
+	[[nodiscard]] auto cend() const { return end(); }
 
 	[[nodiscard]]
 	T& operator*() const noexcept
@@ -103,39 +115,18 @@ private:
 	constexpr static size_t StaticSize = std::max(MinStaticSize, sizeof(dynamic_type) / sizeof(T));
 	using static_type = std::array<T, StaticSize>;
 
-	void init_span(size_t const Size) noexcept
+	[[nodiscard]]
+	T* get_data() const
 	{
-		static_cast<span<T>&>(*this) =
+		return std::visit(overload
 		{
-			std::visit(overload
-			{
-				[](static_type& Data){ return Data.data(); },
-				[](dynamic_type& Data){ return Data.get(); }
-			}, m_Buffer),
-			Size
-		};
-	}
-
-	bool is_dynamic(size_t const Size) const noexcept
-	{
-		return Size > StaticSize;
-	}
-
-	bool is_dynamic() const noexcept
-	{
-		return is_dynamic(this->size());
-	}
-
-	array_ptr& move_from(array_ptr& rhs) noexcept
-	{
-		m_Buffer = std::move(rhs.m_Buffer);
-		init_span(rhs.size());
-		rhs.init_span(0);
-
-		return *this;
+			[](static_type& Data) { return Data.data(); },
+			[](dynamic_type& Data) { return Data.get(); }
+		}, m_Buffer);
 	}
 
 	mutable std::variant<static_type, dynamic_type> m_Buffer;
+	size_t m_Size{};
 };
 
 template<size_t Size = 1>
@@ -147,32 +138,49 @@ using char_ptr_n = array_ptr<char, Size>;
 using wchar_t_ptr = wchar_t_ptr_n<1>;
 using char_ptr = char_ptr_n<1>;
 
-
-template<typename T, size_t Size = 1, REQUIRES(std::is_trivially_copyable_v<T>)>
-class block_ptr: public char_ptr_n<Size>
+// Storage for variable size structs, e.g. with data following the struct in the memory block
+template<typename T, size_t Size = 1> requires std::is_trivially_copyable_v<T>
+class block_ptr: private array_ptr<std::byte, Size>
 {
 public:
 	NONCOPYABLE(block_ptr);
 	MOVABLE(block_ptr);
 
-	using char_ptr_n<Size>::char_ptr_n;
+	using base = array_ptr<std::byte, Size>;
+	using base::base;
+	using base::reset;
+	using base::size;
+	using base::empty;
+	using base::operator bool;
+
 	block_ptr() noexcept = default;
 
 	[[nodiscard]]
-	decltype(auto) data() const noexcept
+	auto data() const noexcept
 	{
 		assert(this->size() >= sizeof(T));
-		return reinterpret_cast<T*>(char_ptr_n<Size>::data());
+		return std::bit_cast<T*>(base::data());
 	}
 
 	[[nodiscard]]
-	decltype(auto) operator->() const noexcept { return data(); }
+	auto operator->() const noexcept
+	{
+		return data();
+	}
 
 	[[nodiscard]]
-	decltype(auto) operator*() const noexcept {return *data();}
+	auto& operator*() const noexcept
+	{
+		return *data();
+	}
+
+	auto& bytes()
+	{
+		return static_cast<base&>(*this);
+	}
 };
 
-template <typename T>
+template<typename T>
 class unique_ptr_with_ondestroy
 {
 public:
@@ -221,23 +229,28 @@ public:
 	~ptr_setter() { m_Ptr->reset(m_RawPtr); }
 
 	[[nodiscard]]
-	auto operator&() { return &m_RawPtr; }
+	auto operator&() && { return &m_RawPtr; }
 
 private:
 	T* m_Ptr;
 	typename T::pointer m_RawPtr{};
 };
 
-template<typename owner, typename acquire, typename release>
+template<auto acquire, auto release, typename owner>
 [[nodiscard]]
-auto make_raii_wrapper(owner* Owner, const acquire& Acquire, const release& Release)
+auto make_raii_wrapper(owner* Owner)
 {
-	std::invoke(Acquire, Owner);
-	auto Releaser = [Release](owner* OwnerPtr)
+	std::invoke(acquire, Owner);
+
+	struct releaser
 	{
-		std::invoke(Release, OwnerPtr);
+		void operator()(owner* const OwnerPtr) const
+		{
+			std::invoke(release, OwnerPtr);
+		}
 	};
-	return std::unique_ptr<owner, std::remove_reference_t<decltype(Releaser)>>(Owner, std::move(Releaser));
+
+	return std::unique_ptr<owner, releaser>(Owner);
 }
 
 namespace detail

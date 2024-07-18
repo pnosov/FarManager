@@ -129,17 +129,17 @@ std::list<std::wstring> split(const std::wstring& str, wchar_t sep) {
 
 std::wstring combine(const std::list<std::wstring>& lst, wchar_t sep) {
   size_t size = 0;
-  for (std::list<std::wstring>::const_iterator str = lst.begin(); str != lst.end(); str++) {
+  for (const auto& str: lst) {
     if (size)
       size++;
-    size += str->size();
+    size += str.size();
   }
   std::wstring result;
   result.reserve(size);
-  for (std::list<std::wstring>::const_iterator str = lst.begin(); str != lst.end(); str++) {
+  for (const auto& str: lst) {
     if (!result.empty())
       result.append(1, sep);
-    result.append(*str);
+    result.append(str);
   }
   return result;
 }
@@ -223,4 +223,20 @@ std::wstring search_and_replace(const std::wstring& str, const std::wstring& sea
   }
   result.shrink_to_fit();
   return result;
+}
+
+bool str_start_with(const std::wstring& str, const wchar_t* prefix, const bool ignore_case) {
+  auto pref_len = wcslen(prefix);
+  if (pref_len > str.size())
+    return false;
+  return (ignore_case ? _wcsnicmp(str.c_str(), prefix, pref_len) : wcsncmp(str.c_str(), prefix, pref_len)) == 0;
+}
+
+bool str_end_with(const std::wstring& str, const wchar_t* suffix, const bool ignore_case)
+{
+  auto suff_len = wcslen(suffix);
+  if (suff_len > str.size())
+    return false;
+  size_t off = str.size() - suff_len;
+	return (ignore_case ? _wcsicmp(str.c_str()+off, suffix) : wcscmp(str.c_str()+off, suffix)) == 0;
 }

@@ -68,7 +68,7 @@ static void MixToFullPath(string& strPath)
 	for (size_t Pos = DirOffset; Pos < strPath.size();)
 	{
 		//fragment "."
-		if (strPath[Pos] != L'.' || (Pos && !IsSlash(strPath[Pos - 1])))
+		if (strPath[Pos] != L'.' || (Pos && !path::is_separator(strPath[Pos - 1])))
 		{
 			++Pos;
 			continue;
@@ -97,10 +97,10 @@ static void MixToFullPath(string& strPath)
 
 			//fragment "..\" or "../" or ".." at the end
 		case L'.':
-			if (Pos + 2 == strPath.size() || IsSlash(strPath[Pos + 2]))
+			if (Pos + 2 == strPath.size() || path::is_separator(strPath[Pos + 2]))
 			{
 				//Calculate subdir name offset
-				size_t n = strPath.find_last_of(L"\\/"sv, Pos-2);
+				size_t n = strPath.find_last_of(path::separators, Pos-2);
 				n = (n == string::npos || n < DirOffset) ? DirOffset : n+1;
 
 				//fragment "..\" or "../"
@@ -140,7 +140,7 @@ static void MixToFullPath(const string_view stPath, string& Dest, const string_v
 		{
 			blIgnore = true;
 		}
-		else if (!stPath.empty() && IsSlash(stPath.front())) //"\" or "\abc"
+		else if (!stPath.empty() && path::is_separator(stPath.front())) //"\" or "\abc"
 		{
 			++PathOffset;
 			if (!stCurrentDir.empty())
@@ -159,7 +159,7 @@ static void MixToFullPath(const string_view stPath, string& Dest, const string_v
 		break;
 
 	case root_type::drive_letter: //"C:" or "C:abc"
-		if(stPath.size() > 2 && IsSlash(stPath[2]))
+		if(stPath.size() > 2 && path::is_separator(stPath[2]))
 		{
 			PathOffset = 0;
 		}
@@ -185,7 +185,6 @@ static void MixToFullPath(const string_view stPath, string& Dest, const string_v
 	case root_type::win32nt_drive_letter: //"\\?\whatever"
 	case root_type::unc_remote:
 	case root_type::volume:
-	case root_type::pipe:
 	case root_type::unknown_rootlike:
 		blIgnore=true;
 		PathOffset = 0;
@@ -209,7 +208,7 @@ static void MixToFullPath(const string_view stPath, string& Dest, const string_v
 string ConvertNameToFull(string_view const Object)
 {
 	string strDest;
-	MixToFullPath(Object, strDest, os::fs::GetCurrentDirectory());
+	MixToFullPath(Object, strDest, os::fs::get_current_directory());
 	return strDest;
 }
 
@@ -222,7 +221,7 @@ std::optional<wchar_t> get_volume_drive(string_view const VolumePath)
 		string VolumePathNames;
 		if (os::fs::GetVolumePathNamesForVolumeName(SrcVolumeName, VolumePathNames))
 		{
-			for (const auto& i : enum_substrings(VolumePathNames.c_str()))
+			for (const auto& i: enum_substrings(VolumePathNames))
 			{
 				if (IsRootPath(i))
 					return upper(i.front());
@@ -235,7 +234,7 @@ std::optional<wchar_t> get_volume_drive(string_view const VolumePath)
 	string VolumeName;
 	const os::fs::enum_drives Enumerator(os::fs::get_logical_drives());
 
-	const auto ItemIterator = std::find_if(ALL_CONST_RANGE(Enumerator), [&](const wchar_t i)
+	const auto ItemIterator = std::ranges::find_if(Enumerator, [&](const wchar_t i)
 	{
 		return os::fs::GetVolumeNameForVolumeMountPoint(os::fs::drive::get_win32nt_root_directory(i), VolumeName) && equal_icase(VolumeName, SrcVolumeName);
 	});
@@ -272,16 +271,12 @@ string ConvertNameToReal(string_view const Object)
 
 	// Получим сначала полный путь до объекта обычным способом
 	const auto FullPath = ConvertNameToFull(Object);
-	auto strDest = FullPath;
 
 	string Path = FullPath;
 	os::fs::file File;
 
-	for (;;)
+	while (!File.Open(Path, 0, os::fs::file_share_all, nullptr, OPEN_EXISTING))
 	{
-		if (File.Open(Path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING))
-			break;
-
 		if (IsRootPath(Path))
 			break;
 
@@ -289,14 +284,14 @@ string ConvertNameToReal(string_view const Object)
 	}
 
 	if (!File)
-		return strDest;
+		return FullPath;
 
 	string FinalFilePath;
 	const auto Result = File.GetFinalPathName(FinalFilePath);
 	File.Close();
 
 	if (!Result || FinalFilePath.empty())
-		return strDest;
+		return FullPath;
 
 	// append non-existent path part (if present)
 	DeleteEndSlash(Path);
@@ -313,7 +308,7 @@ string ConvertNameToReal(string_view const Object)
 	if (PathPrefix.size() == 8) // \\?\UNC\...
 	{
 		// network -> network
-		if (starts_with(FinalFilePath, L"\\\\"sv))
+		if (FinalFilePath.starts_with(L"\\\\"sv))
 			return PathPrefix + string_view(FinalFilePath).substr(2);
 
 		// network -> local
@@ -321,7 +316,7 @@ string ConvertNameToReal(string_view const Object)
 	}
 
 	// local -> network
-	if (starts_with(FinalFilePath, L"\\\\"sv))
+	if (FinalFilePath.starts_with(L"\\\\"sv))
 		return L"\\\\?\\UNC\\"sv + string_view(FinalFilePath).substr(2);
 
 	// local -> local
@@ -337,7 +332,7 @@ static string ConvertName(string_view const Object, bool(*Mutator)(string_view, 
 
 	strDest = Object;
 
-	if (HasPathPrefix(Object) || !Mutator(NTPath(Object), strDest))
+	if (HasPathPrefix(Object) || !Mutator(nt_path(Object), strDest))
 		return string(Object);
 
 	switch (ParsePath(strDest))
@@ -379,14 +374,13 @@ string ConvertNameToUNC(string_view const Object)
 		// BugZ#449 - Неверная работа CtrlAltF с ресурсами Novell DS
 		// Здесь, если не получилось получить UniversalName и если это
 		// мапленный диск - получаем как для меню выбора дисков
-		string strTemp;
-		if (DriveLocalToRemoteName(true, strFileName, strTemp))
+		if (string strTemp; DriveLocalToRemoteName(true, strFileName, strTemp))
 		{
 			const auto SlashPos = FindSlash(strFileName);
 			if (SlashPos != string::npos)
 				path::append(strTemp, string_view(strFileName).substr(SlashPos + 1));
 
-			strFileName = strTemp;
+			strFileName = std::move(strTemp);
 		}
 	}
 	else
@@ -414,13 +408,13 @@ string ConvertNameToUNC(string_view const Object)
 // CheckFullPath используется в FCTL_SET[ANOTHER]PANELDIR
 void PrepareDiskPath(string &strPath, bool CheckFullPath)
 {
-	if (strPath.size() <= 1 || (strPath[1] != L':' && (!IsSlash(strPath[0]) || !IsSlash(strPath[1]))))
+	if (strPath.size() <= 1 || (strPath[1] != L':' && (!path::is_separator(strPath[0]) || !path::is_separator(strPath[1]))))
 		return;
 
 	// elevation not required during cosmetic operation
 	SCOPED_ACTION(elevation::suppress);
 
-	ReplaceSlashToBackslash(strPath);
+	path::inplace::normalize_separators(strPath);
 	const auto DoubleSlash = strPath[1] == L'\\';
 	remove_duplicates(strPath, L'\\');
 	if(DoubleSlash)
@@ -455,11 +449,11 @@ void PrepareDiskPath(string &strPath, bool CheckFullPath)
 		string TmpStr;
 		TmpStr.reserve(strPath.size());
 		size_t LastPos = StartPos;
-		const auto EndsWithSlash = IsSlash(strPath.back());
+		const auto EndsWithSlash = path::is_separator(strPath.back());
 
 		for (size_t i = StartPos; i <= strPath.size(); ++i)
 		{
-			if (!((i < strPath.size() && IsSlash(strPath[i])) || (i == strPath.size() && !EndsWithSlash)))
+			if (!((i < strPath.size() && path::is_separator(strPath[i])) || (i == strPath.size() && !EndsWithSlash)))
 				continue;
 
 			os::fs::find_data fd;

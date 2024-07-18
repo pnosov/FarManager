@@ -15,24 +15,9 @@ SRCS = \
 	global.cpp
 
 DOCS = \
-	arceng.hlf \
-	arcrus.hlf \
-	arcger.hlf \
-	arcukr.hlf \
-	arceng.lng \
-	arcrus.lng \
-	arcspa.lng \
-	arcita.lng \
-	arcbel.lng \
-	arcger.lng \
-	arcukr.lng \
-	MultiArc.TryIfNoOther.reg \
-	changelog
-
-include ../../far/makefile_gcc_common
+	MultiArc.TryIfNoOther.reg
 
 include ../makefile_gcc_def_inc
-
 include ../makefile_gcc_target_inc
 
 all: fmt

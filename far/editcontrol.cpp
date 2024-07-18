@@ -67,27 +67,19 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common/algorithm.hpp"
 #include "common/enum_tokens.hpp"
 #include "common/enum_substrings.hpp"
+#include "common/view/zip.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-EditControl::EditControl(window_ptr Owner, SimpleScreenObject* Parent, parent_processkey_t&& ParentProcessKey, Callback* aCallback, History* iHistory, FarList* iList, DWORD iFlags):
+EditControl::EditControl(window_ptr Owner, SimpleScreenObject* Parent, parent_processkey_t&& ParentProcessKey, Callback const* aCallback, History* iHistory, VMenu* iList, DWORD iFlags):
 	Edit(std::move(Owner)),
 	pHistory(iHistory),
 	pList(iList),
 	m_ParentProcessKey(ParentProcessKey? std::move(ParentProcessKey) : [Parent](const Manager::Key& Key) {return Parent->ProcessKey(Key); }),
-	MaxLength(-1),
-	CursorSize(-1),
-	CursorPos(0),
-	PrevCurPos(0),
-	MacroSelectionStart(-1),
-	SelectionStart(-1),
 	MacroAreaAC(MACROAREA_DIALOGAUTOCOMPLETION),
 	ECFlags(iFlags),
-	m_CallbackSuppressionsCount(),
-	Selection(false),
-	MenuUp(false),
 	ACState(ECFlags.Check(EC_ENABLEAUTOCOMPLETE))
 {
 	SetObjectColor();
@@ -106,7 +98,7 @@ EditControl::EditControl(window_ptr Owner, SimpleScreenObject* Parent, parent_pr
 
 void EditControl::Show()
 {
-	if (m_Where.width() > m_Str.size())
+	if (m_Where.width() > RealPosToVisual(m_Str.size()))
 	{
 		SetLeftPos(0);
 	}
@@ -143,14 +135,14 @@ void EditControl::SetMenuPos(VMenu2& menu)
 	}
 	else
 	{
-		menu.SetPosition({ m_Where.left, m_Where.top + 1, NewX2, std::min(static_cast<int>(ScrY), m_Where.top + 1 + MaxHeight) });
+		menu.SetPosition({ m_Where.left, m_Where.top + 1, NewX2, std::min(ScrY, m_Where.top + 1 + MaxHeight) });
 	}
 }
 
 static void AddSeparatorOrSetTitle(VMenu2& Menu, lng TitleId)
 {
 	bool Separator = false;
-	for (size_t i = 0; i != Menu.size(); ++i)
+	for (const auto i: std::views::iota(0uz, Menu.size()))
 	{
 		if (Menu.at(i).Flags & LIF_SEPARATOR)
 		{
@@ -174,15 +166,15 @@ static void AddSeparatorOrSetTitle(VMenu2& Menu, lng TitleId)
 static bool ParseStringWithQuotes(string_view const Str, string& Start, string& Token, bool& StartQuote)
 {
 	size_t Pos;
-	if (std::count(ALL_CONST_RANGE(Str), L'"') & 1) // odd quotes count
+	if (std::ranges::count(Str, L'"') & 1) // odd quotes count
 	{
 		Pos = Str.rfind(L'"');
 	}
 	else
 	{
-		auto WordDiv = GetSpaces() + Global->Opt->strWordDiv.Get();
-		static const auto NoQuote = L"\":\\/%.-"sv;
-		WordDiv.erase(std::remove_if(ALL_RANGE(WordDiv), [&](wchar_t i) { return contains(NoQuote, i); }), WordDiv.end());
+		auto WordDiv = GetBlanks() + Global->Opt->strWordDiv.Get();
+		static const auto NoQuote = L"\":\\/%.?-"sv;
+		std::erase_if(WordDiv, [&](wchar_t i){ return contains(NoQuote, i); });
 
 		for (Pos = Str.size() - 1; Pos != static_cast<size_t>(-1); Pos--)
 		{
@@ -239,7 +231,7 @@ static bool EnumWithQuoutes(VMenu2& Menu, const string_view strStart, const stri
 		const auto BuildQuotedString = [&](string Str)
 		{
 			if (!StartQuote)
-				QuoteSpace(Str);
+				inplace::QuoteSpace(Str);
 
 			auto Result = concat(strStart, Str);
 			if (StartQuote)
@@ -283,6 +275,18 @@ static bool EnumFiles(VMenu2& Menu, const string_view strStart, const string_vie
 		}
 	}
 
+	if (HasPathPrefix(Token) && Token.substr(L"\\\\?\\"sv.size()).find_first_of(path::separators) == Token.npos)
+	{
+		for (const auto& Namespace: { L"\\??"sv, L"\\GLOBAL??"sv })
+		{
+			for (const auto& i: os::fs::enum_devices(Namespace))
+			{
+				if (starts_with_icase(i, FileName))
+					ResultStrings.emplace(Token.substr(0, Token.size() - FileName.size()) + i);
+			}
+		}
+	}
+
 	return EnumWithQuoutes(Menu, strStart, Token, StartQuote, lng::MCompletionFilesTitle, ResultStrings);
 }
 
@@ -292,77 +296,62 @@ static bool EnumModules(VMenu2& Menu, const string_view strStart, const string_v
 
 	std::set<string, string_sort::less_t> ResultStrings;
 
-	for (const auto& i: enum_tokens(os::env::expand(Global->Opt->Exec.strExcludeCmds), L";"sv))
+	if (const auto Range = std::ranges::equal_range(Global->Opt->Exec.ExcludeCmds, Token, string_sort::less_icase, std::views::take(Token.size())); !Range.empty())
 	{
-		if (starts_with_icase(i, Token))
-		{
-			ResultStrings.emplace(i);
-		}
+		// TODO: insert_range
+		ResultStrings.insert(ALL_CONST_RANGE(Range));
 	}
 
+	if (const auto strPathEnv = os::env::get(L"PATH"sv); !strPathEnv.empty())
 	{
-		const auto strPathEnv(os::env::get(L"PATH"sv));
-		if (!strPathEnv.empty())
-		{
-			const auto PathExtList = enum_tokens(os::env::get_pathext(), L";"sv);
+		const auto PathExtList = enum_tokens(os::env::get_pathext(), L";"sv);
+		const auto Pattern = Token + L"*"sv;
 
-			const auto Pattern = Token + L"*"sv;
-			for (const auto& Path: enum_tokens_with_quotes(strPathEnv, L";"sv))
+		for (const auto& Path: enum_tokens_with_quotes(strPathEnv, L";"sv))
+		{
+			if (Path.empty())
+				continue;
+
+			for (const auto& FindData: os::fs::enum_files(path::join(Path, Pattern)))
 			{
-				if (Path.empty())
+				if (!os::fs::is_file(FindData))
 					continue;
 
-				for (const auto& FindData: os::fs::enum_files(path::join(Path, Pattern)))
+				const auto FindExt = name_ext(FindData.FileName).second;
+
+				for (const auto& Ext: PathExtList)
 				{
-					const auto FindExt = name_ext(FindData.FileName).second;
-					for (const auto& Ext: PathExtList)
+					if (starts_with_icase(Ext, FindExt))
 					{
-						if (starts_with_icase(Ext, FindExt))
-						{
-							ResultStrings.emplace(FindData.FileName);
-						}
+						ResultStrings.emplace(FindData.FileName);
 					}
 				}
 			}
 		}
 	}
 
-	static const auto RegPath = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"sv;
-	static const os::reg::key* RootFindKey[] = { &os::reg::key::current_user, &os::reg::key::local_machine, &os::reg::key::local_machine };
-
-	DWORD samDesired = KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE;
-
-	for (size_t i = 0; i != std::size(RootFindKey); ++i)
+	const auto enum_app_paths = [&](os::reg::key const& RootKey, DWORD const Flags = 0)
 	{
-		if (i == std::size(RootFindKey) - 1)
-		{
-			if (const auto RedirectionFlag = os::GetAppPathsRedirectionFlag())
-			{
-				samDesired |= RedirectionFlag;
-			}
-			else
-			{
-				break;
-			}
-		}
+		const auto SamDesired = KEY_ENUMERATE_SUB_KEYS | KEY_QUERY_VALUE | Flags;
 
-		if (const auto Key = os::reg::key::open(*RootFindKey[i], RegPath, samDesired))
+		const auto AppPathsKey = RootKey.open(L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\"sv, SamDesired);
+		if (!AppPathsKey)
+			return;
+
+		for (const auto& SubkeyName: AppPathsKey.enum_keys())
 		{
-			for (const auto& SubkeyName: os::reg::enum_key(Key))
+			if (const auto SubKey = AppPathsKey.open(SubkeyName, SamDesired); SubKey.exits({}) && starts_with_icase(SubkeyName, Token))
 			{
-				if (const auto SubKey = os::reg::key::open(Key, SubkeyName, samDesired))
-				{
-					if (SubKey.get({}))
-					{
-						if (starts_with_icase(SubkeyName, Token))
-						{
-							ResultStrings.emplace(SubkeyName);
-						}
-					}
-				}
+				ResultStrings.emplace(SubkeyName);
 			}
 		}
-	}
+	};
+
+	enum_app_paths(os::reg::key::current_user);
+	enum_app_paths(os::reg::key::local_machine);
+
+	if (const auto RedirectionFlag = os::GetAppPathsRedirectionFlag())
+		enum_app_paths(os::reg::key::local_machine, RedirectionFlag);
 
 	return EnumWithQuoutes(Menu, strStart, Token, StartQuote, lng::MCompletionFilesTitle, ResultStrings);
 }
@@ -417,10 +406,22 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 {
 	int Result=0;
 	static int Reenter=0;
-	if(ECFlags.Check(EC_ENABLEAUTOCOMPLETE) && !m_Str.empty() && !Reenter && is_input_queue_empty() && (Global->CtrlObject->Macro.GetState() == MACROSTATE_NOMACRO || Manual))
+	if(
+		ECFlags.Check(EC_ENABLEAUTOCOMPLETE) &&
+		!m_Str.empty() &&
+		!Reenter &&
+		is_input_queue_empty() &&
+		(
+			Manual ||
+			Global->CtrlObject->Macro.GetState() == MACROSTATE_NOMACRO ||
+			(Area == MACROAREA_DIALOGAUTOCOMPLETION && KeyMacro::IsMacroDialog(GetOwner()))
+		)
+	)
 	{
 		Reenter++;
-		const auto ComplMenu = VMenu2::create({}, {}, 0);
+		const auto ComplMenu = VMenu2::create({}, {});
+		m_ComplMenu = ComplMenu;
+
 		ComplMenu->SetDialogMode(DMODE_NODRAWSHADOW);
 		ComplMenu->SetModeMoving(false);
 		string CurrentInput = m_Str;
@@ -432,7 +433,7 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 			return (Manual && State) || (!Manual && State == 1);
 		};
 
-		const auto Complete = [&](VMenu2& Menu, const string& Str)
+		const auto Complete = [&](VMenu2& Menu, const string_view Str)
 		{
 			if (Str.empty())
 				return;
@@ -445,7 +446,7 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 				{
 					MenuItemEx Item;
 					// Preserve the case of the already entered part
-					Item.ComplexUserData = cmp_user_data{ Global->Opt->AutoComplete.AppendCompletion? Str + string_view(Name).substr(Str.size()) : L""s, Id };
+					Item.ComplexUserData = cmp_user_data{ Global->Opt->AutoComplete.AppendCompletion? Str + Name.substr(Str.size()) : L""s, Id };
 					Item.Name = Name;
 					Item.Flags |= IsLocked? LIF_CHECKED : LIF_NONE;
 					ComplMenu->AddItem(std::move(Item));
@@ -458,18 +459,20 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 			}
 			else if (pList)
 			{
-				for (const auto& i: span(pList->Items, pList->ItemsNumber))
+				for (const auto i: std::views::iota(0uz, pList->size()))
 				{
-					if (i.Text == Str.data() || !starts_with_icase(i.Text, Str))
+					string_view const Text = pList->at(i).Name;
+
+					if (!starts_with_icase(Text, Str))
 						continue;
 
-					MenuItemEx Item;
+					MenuItemEx Item(Text);
 					// Preserve the case of the already entered part
 					if (Global->Opt->AutoComplete.AppendCompletion)
 					{
-						Item.ComplexUserData = cmp_user_data{ Str + (i.Text + Str.size()) };
+						Item.ComplexUserData = cmp_user_data{ Str + Text.substr(Str.size()) };
 					}
-					ComplMenu->AddItem(i.Text);
+					ComplMenu->AddItem(Item);
 				}
 			}
 
@@ -504,7 +507,7 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 			const auto Data = ComplMenu->GetComplexUserDataPtr<cmp_user_data>(0);
 
 			// magic
-			if (SelStart > 1 && IsSlash(m_Str[SelStart - 1]) && m_Str[SelStart - 2] == L'"' && IsSlash(FirstItem[SelStart - 2]))
+			if (SelStart > 1 && path::is_separator(m_Str[SelStart - 1]) && m_Str[SelStart - 2] == L'"' && path::is_separator(FirstItem[SelStart - 2]))
 			{
 				m_Str.erase(SelStart - 2, 1);
 				SelStart--;
@@ -550,16 +553,21 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 				bool Visible;
 				size_t Size;
 				::GetCursorType(Visible, Size);
-				ComplMenu->Key(KEY_NONE);
 				bool IsChanged = false;
-				const auto ExitCode = ComplMenu->Run([&](const Manager::Key& RawKey)
+				const auto ExitCode = ComplMenu->RunEx([&](int Msg, void* Param)
 				{
-					auto MenuKey = RawKey();
-					::SetCursorType(Visible, Size);
-
-					if(!Global->Opt->AutoComplete.ModalList)
+					if (Msg != DN_INPUT)
 					{
-						const auto CurPos = ComplMenu->GetSelectPos();
+						if (Global->Opt->AutoComplete.ModalList)
+							return 0;
+
+						if (!IsChanged && (Msg == DN_DRAWDIALOGDONE || Msg == DN_DRAWDLGITEMDONE))
+						{
+							::SetCursorType(Visible, Size);
+							return 0;
+						}
+
+						const auto CurPos = Msg == DN_LISTCHANGE? static_cast<int>(std::bit_cast<intptr_t>(Param)) : ComplMenu->GetSelectPos();
 						if(CurPos>=0 && (PrevPos!=CurPos || IsChanged))
 						{
 							PrevPos=CurPos;
@@ -567,11 +575,36 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 							SetString(CurPos? ComplMenu->at(CurPos).Name : CurrentInput);
 							Show();
 						}
+
+						return 0;
 					}
-					if(MenuKey==KEY_CONSOLE_BUFFER_RESIZE)
-						SetMenuPos(*ComplMenu);
-					else if(MenuKey!=KEY_NONE)
+
+					const auto& ReadRec = *static_cast<INPUT_RECORD const*>(Param);
+
+					auto MenuKey = [&]() -> unsigned
 					{
+						// ugh
+						if (ReadRec.EventType == MOUSE_EVENT)
+						{
+							auto Position = ComplMenu->GetPosition();
+
+							++Position.left;
+							++Position.top;
+							--Position.right;
+							--Position.bottom;
+
+							if (!Position.contains(ReadRec.Event.MouseEvent.dwMousePosition))
+								return KEY_NONE;
+						}
+
+						return InputRecordToKey(&ReadRec);
+					}();
+
+					::SetCursorType(Visible, Size);
+
+						if (MenuKey == KEY_NONE)
+							return 0;
+
 						// ввод
 						if(in_closed_range(L' ', MenuKey, std::numeric_limits<wchar_t>::max()) || any_of(MenuKey, KEY_BS, KEY_DEL, KEY_NUMDEL))
 						{
@@ -666,6 +699,7 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 									}
 									m_ParentProcessKey(Manager::Key(MenuKey));
 									Show();
+									ComplMenu->Show();
 									return 1;
 								}
 
@@ -679,7 +713,6 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 							case KEY_NUMPAD7:
 							case KEY_END:
 							case KEY_NUMPAD1:
-							case KEY_IDLE:
 							case KEY_NONE:
 							case KEY_ESC:
 							case KEY_F10:
@@ -728,12 +761,12 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 							default:
 								{
 									ComplMenu->Close(-1);
-									BackKey=RawKey;
+									BackKey= Manager::Key(MenuKey, ReadRec);
 									Result=1;
 								}
 							}
 						}
-					}
+
 					return 0;
 				});
 				// mouse click
@@ -758,12 +791,18 @@ int EditControl::AutoCompleteProc(bool Manual,bool DelBlock,Manager::Key& BackKe
 	return Result;
 }
 
+void EditControl::ResizeConsole()
+{
+	if (const auto ComplMenu = m_ComplMenu.lock())
+		SetMenuPos(*ComplMenu);
+}
+
 void EditControl::AutoComplete(bool Manual,bool DelBlock)
 {
 	Manager::Key Key;
 	if(AutoCompleteProc(Manual,DelBlock,Key,MacroAreaAC))
 	{
-		struct FAR_INPUT_RECORD irec = { static_cast<DWORD>(Key()), Key.Event() };
+		const FAR_INPUT_RECORD irec{ static_cast<DWORD>(Key()), Key.Event() };
 		if(!Global->CtrlObject->Macro.ProcessEvent(&irec))
 			m_ParentProcessKey(Key);
 		const auto CurWindowType = Global->WindowManager->GetCurrentWindow()->GetType();
@@ -935,19 +974,19 @@ void EditControl::SetInputMask(string_view const InputMask)
 void EditControl::RefreshStrByMask(int InitMode)
 {
 	const auto Mask = GetInputMask();
-	if (!Mask.empty())
+	if (Mask.empty())
+		return;
+
+	m_Str.resize(Mask.size(), L' ');
+	MaxLength = m_Str.size();
+
+	for (const auto& [Str, Msk]: zip(m_Str, Mask))
 	{
-		const auto MaskLen = Mask.size();
-		m_Str.resize(MaskLen, L' ');
+		if (InitMode)
+			Str = MaskDefaultChar(Msk);
 
-		for (size_t i = 0; i != MaskLen; ++i)
-		{
-			if (InitMode)
-				m_Str[i]=L' ';
-
-			if (!CheckCharMask(Mask[i]))
-				m_Str[i]=Mask[i];
-		}
+		if (!CheckCharMask(Msk))
+			Str = Msk;
 	}
 }
 

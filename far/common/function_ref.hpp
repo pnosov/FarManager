@@ -33,30 +33,34 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "preprocessor.hpp"
+#include "function_traits.hpp"
+
+#include <bit>
+#include <functional>
 
 //----------------------------------------------------------------------------
 
-template <typename callable_type>
+template<typename callable_type>
 class function_ref;
 
-template <typename return_type, typename... args>
+template<typename return_type, typename... args>
 class function_ref<return_type(args...)> final
 {
 public:
 WARNING_PUSH()
 WARNING_DISABLE_MSC(4180) // qualifier applied to function type has no meaning; ignored
-	template<typename callable_type, REQUIRES(!std::is_same_v<std::decay_t<callable_type>, function_ref>)>
-	function_ref(const callable_type& Callable) noexcept:
-		m_Ptr(const_cast<void*>(reinterpret_cast<const void*>(&Callable))),
-		m_ErasedFn([](void* Ptr, args... Args) -> return_type
+	template<typename callable_type> requires (!std::same_as<std::decay_t<callable_type>, function_ref>)
+	explicit(false) function_ref(callable_type&& Callable) noexcept:
+		m_Ptr(to_ptr(FWD(Callable))),
+		m_ErasedFn([](intptr_t Ptr, args... Args) -> return_type
 		{
-			return std::invoke(*reinterpret_cast<const callable_type*>(Ptr), FWD(Args)...);
+			return std::invoke(from_ptr<callable_type>(Ptr), FWD(Args)...);
 		})
 	{
 	}
 WARNING_POP()
 
-	function_ref(std::nullptr_t) noexcept:
+	explicit(false) function_ref(std::nullptr_t) noexcept:
 		m_Ptr(),
 		m_ErasedFn()
 	{
@@ -70,14 +74,35 @@ WARNING_POP()
 	[[nodiscard]]
 	explicit operator bool() const noexcept
 	{
-		return m_Ptr != nullptr;
+		return m_Ptr != 0;
 	}
 
 private:
-	using signature_type = return_type(void*, args...);
+	template<typename callable_type>
+	static auto to_ptr(callable_type&& Callable)
+	{
+		if constexpr (std::is_pointer_v<callable_type>)
+			return std::bit_cast<intptr_t>(Callable);
+		else
+			return std::bit_cast<intptr_t>(&Callable);
+	}
 
-	void* m_Ptr;
+	template<typename callable_type>
+	static decltype(auto) from_ptr(intptr_t Ptr)
+	{
+		if constexpr (std::is_pointer_v<callable_type>)
+			return std::bit_cast<callable_type>(Ptr);
+		else
+			return *std::bit_cast<std::add_pointer_t<callable_type>>(Ptr);
+	}
+
+	using signature_type = return_type(intptr_t, args...);
+
+	intptr_t m_Ptr;
 	signature_type* m_ErasedFn;
 };
+
+template<typename object>
+function_ref(object) -> function_ref<typename function_traits<object>::signature_type>;
 
 #endif // FUNCTION_REF_HPP_0B2E3AF4_AB0A_4C89_9FC1_1A92AC2699A4

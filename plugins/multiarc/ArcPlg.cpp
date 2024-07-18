@@ -1,6 +1,8 @@
 ﻿#include "MultiArc.hpp"
 #include "marclng.hpp"
 
+#include <cstdlib>
+
 typedef int (__cdecl *FCMP)(const void *, const void *);
 
 ArcPlugins::ArcPlugins(const char *ModuleName)
@@ -23,10 +25,10 @@ ArcPlugins::ArcPlugins(const char *ModuleName)
 
 int __cdecl ArcPlugins::CompareFmtModules(const void *elem1, const void *elem2)
 {
-  char *left = (((struct PluginItem *)elem1)->ModuleName);
-  char *right = (((struct PluginItem *)elem2)->ModuleName);
-  DWORD try_left=(((struct PluginItem *)elem1)->TryIfNoOther);
-  DWORD try_right=(((struct PluginItem *)elem2)->TryIfNoOther);
+  const char *left = (((const PluginItem *)elem1)->ModuleName);
+  const char *right = (((const PluginItem *)elem2)->ModuleName);
+  DWORD try_left=(((const PluginItem *)elem1)->TryIfNoOther);
+  DWORD try_right=(((const PluginItem *)elem2)->TryIfNoOther);
 
   if (try_left && !try_right)
     return 1;
@@ -105,8 +107,7 @@ ArcPlugins::~ArcPlugins()
   for (int I=0;I<PluginsCount;I++)
     FreeLibrary(PluginsData[I].hModule);
 
-  if(PluginsData)
-    free(PluginsData);
+  free(PluginsData);
 }
 
 int ArcPlugins::IsArchive(char *Name,const unsigned char *Data,int DataSize)

@@ -1,7 +1,6 @@
-﻿#include "msg.h"
-#include "plugin.h"
+﻿#include "msg.hpp"
+#include "version.hpp"
 #include "guids.hpp"
-
 #include "utils.hpp"
 #include "sysutils.hpp"
 #include "farutils.hpp"
@@ -10,125 +9,356 @@
 #include "archive.hpp"
 #include "options.hpp"
 #include "cmdline.hpp"
+#include "sfx.hpp"
 
-std::wstring g_plugin_prefix;
-TriState g_detect_next_time = triUndef;
+static std::wstring g_plugin_prefix;
+static TriState g_detect_next_time = triUndef;
 
-void attach_sfx_module(const std::wstring& file_path, const SfxOptions& sfx_options);
+static const wchar_t ext_FAT[]   = L".fat";
+static const wchar_t ext_ExFAT[] = L".xfat";
+static const wchar_t ext_NTFS[]  = L".ntfs";
+static const wchar_t ext_EXT2[]  = L".ext2";
+static const wchar_t ext_EXT3[]  = L".ext3";
+static const wchar_t ext_EXT4[]  = L".ext4";
+static const wchar_t ext_EXTn[]  = L".ext";
+static const wchar_t ext_HFS[]   = L".hfs";
+static const wchar_t ext_APFS[]  = L".apfs";
 
-class Plugin {
+class Plugin
+{
 private:
-  std::shared_ptr<Archive> archive;
+	std::shared_ptr<Archive> archive;
 
-  std::wstring current_dir;
-  std::wstring extract_dir;
-  std::wstring created_dir;
-  std::wstring host_file;
-  std::wstring panel_title;
-  std::vector<InfoPanelLine> info_lines;
-  bool real_archive_file;
-  bool need_close_panel;
+	std::wstring current_dir;
+	std::wstring extract_dir;
+	std::wstring created_dir;
+	std::wstring host_file;
+	std::wstring panel_title;
+	std::vector<InfoPanelLine> info_lines;
+	bool real_archive_file;
+	bool need_close_panel;
 
 public:
-  Plugin(bool real_file=true): archive(new Archive()), real_archive_file(real_file), need_close_panel(false) {}
+	char    part_mode{ '\0' };  // '\0' 'm'br, 'g'pt
+	int     part_idx {  -1  };  // -1 or partition index
+	std::unique_ptr<Plugin> partition;
 
-  static Plugin* open(const Archives& archives, bool real_file=true) {
-    if (archives.size() == 0)
-      FAIL(E_ABORT);
+	bool    recursive_panel{ false };
+	char    del_on_close   { '\0'  };
 
-    intptr_t format_idx;
-    if (archives.size() == 1) {
-      format_idx = 0;
-    }
-    else {
-      Far::MenuItems format_names;
-      for (unsigned i = 0; i < archives.size(); i++) {
-        format_names.add(archives[i]->arc_chain.to_string());
-      }
-      format_idx = Far::menu(c_format_menu_guid, Far::get_msg(MSG_PLUGIN_NAME), format_names);
-      if (format_idx == -1)
-        FAIL(E_ABORT);
-    }
+public:
+	Plugin(bool real_file = true)
+	 : archive(new Archive()), real_archive_file(real_file), need_close_panel(false)
+	{ }
 
-    std::unique_ptr<Plugin> plugin(new Plugin(real_file));
-    plugin->archive = archives[format_idx];
-    return plugin.release();
-  }
+	static Plugin* open(const Archives& archives, bool real_file = true)
+	{
+		if (archives.size() == 0)
+			FAIL(E_ABORT);
 
-  void info(OpenPanelInfo* opi) {
-    opi->StructSize = sizeof(OpenPanelInfo);
-    opi->Flags = OPIF_ADDDOTS | OPIF_SHORTCUT;
-    opi->CurDir = current_dir.c_str();
-    panel_title = Far::get_msg(MSG_PLUGIN_NAME);
-    if (archive->is_open()) {
-      panel_title += L":" + archive->arc_chain.to_string() + L":" + archive->arc_name();
-      if (!current_dir.empty())
-        panel_title += L":" + current_dir;
-      host_file = archive->arc_path;
-      if (archive->has_crc)
-        opi->Flags |= OPIF_USECRC32;
-    }
-    opi->HostFile = host_file.c_str();
-    opi->Format = g_plugin_prefix.c_str();
-    opi->PanelTitle = panel_title.c_str();
-    if (g_options.own_panel_view_mode) {
-      opi->StartPanelMode = '0' + g_options.panel_view_mode;
-      opi->StartSortMode = g_options.panel_sort_mode;
-      opi->StartSortOrder = g_options.panel_reverse_sort;
-    }
+		intptr_t format_idx;
+		if (archives.size() == 1)
+		{
+			format_idx = 0;
+		}
+		else
+		{
+			Far::MenuItems format_names;
+			for (unsigned i = 0; i < archives.size(); i++)
+			{
+				format_names.add(archives[i]->arc_chain.to_string());
+			}
+			format_idx = Far::menu(c_format_menu_guid, Far::get_msg(MSG_PLUGIN_NAME), format_names);
+			if (format_idx == -1)
+				FAIL(E_ABORT);
+		}
 
-    info_lines.clear();
-    info_lines.reserve(archive->arc_attr.size() + 1);
-    InfoPanelLine ipl;
-    std::for_each(archive->arc_attr.begin(), archive->arc_attr.end(), [&] (const Attr& attr) {
-      ipl.Text = attr.name.c_str();
-      ipl.Data = attr.value.c_str();
-      ipl.Flags = 0;
-      info_lines.push_back(ipl);
-    });
-    opi->InfoLines = info_lines.data();
-    opi->InfoLinesNumber = static_cast<int>(info_lines.size());
-  }
+		auto plugin = std::make_unique<Plugin>(real_file);
+		plugin->archive = archives[format_idx];
+		if (!plugin->archive->arc_chain.empty())
+		{
+			const auto& type = plugin->archive->arc_chain.back().type;
+			if (type == c_mbr) plugin->part_mode = 'm';
+			if (type == c_gpt) plugin->part_mode = 'g';
+		}
+		return plugin.release();
+	}
 
-  void set_dir(const std::wstring& dir) {
-    if (!archive->is_open())
-      FAIL(E_ABORT);
-    std::wstring new_dir;
-    if (dir.empty() || dir == L"\\")
-      new_dir.assign(dir);
-    else if (dir == L"..")
-      new_dir = extract_file_path(current_dir);
-    else if (dir[0] == L'\\') // absolute path
-      new_dir.assign(dir);
-    else
-      new_dir.assign(L"\\").append(add_trailing_slash(remove_path_root(current_dir))).append(dir);
+	const wchar_t* guess_fs_ext(const uint32_t f_index)
+	{
+		union { unsigned char bs[1024*2]; uint64_t zeroes[1024/sizeof(uint64_t)]; } u;
+		ComObject<IInStream> sub_stream;
+		if (!archive->get_stream(f_index, sub_stream.ref()))
+			return nullptr;
+		UInt32 nr = 0;
+		if (S_OK != sub_stream->Read(u.bs, sizeof(u.bs), &nr) || nr != sizeof(u.bs))
+			return nullptr;
 
-    if (new_dir == L"\\")
-      new_dir.clear();
+		if (u.bs[510] == '\x55' && u.bs[511] == '\xAA') {
+			if (memcmp(u.bs + 0x03, "EXFAT   ", 8) == 0)
+				return ext_ExFAT;
+			if (memcmp(u.bs + 0x03, "NTFS    ", 8) == 0)
+				return ext_NTFS;
+			if (memcmp(u.bs + 0x52, "FAT32   ", 8) == 0)
+				return ext_FAT;
+			if (memcmp(u.bs + 0x36, "FAT16   ", 8) == 0)
+				return ext_FAT;
+			if (memcmp(u.bs + 0x36, "FAT12   ", 8) == 0)
+				return ext_FAT;
+		}
 
-    archive->find_dir(new_dir);
-    current_dir = new_dir;
-  }
+		if (u.bs[0x438] == 0x53 && u.bs[0x439] == 0xEF) { // 0xEF53 -- ExtFS superblock_magic
+			bool zero_1k = true;
+			for (size_t i = 0; i < _countof(u.zeroes); ++i) {
+				if (u.zeroes[i] != 0) {
+					zero_1k = false; break;
+				}
+			}
+			if (zero_1k) {
+				if (u.bs[0x44c] == 0x00) // s_rev_level
+					return ext_EXT2;
+				if (u.bs[0x44c] == 0x01) { // s_rev_level
+					return (u.bs[0x45c] & 0x04) == 0x00 ? ext_EXT2 : ext_EXT3; // s_feature_compat HAS_JOURNAL bit
+				}
+				return ext_EXTn;
+			}
+		}
+
+		return nullptr;
+	}
+	//
+	void correct_part_root_name(std::wstring& name, const uint32_t f_index, const DWORD attrs, const uint64_t fsize, const uint64_t psize)
+	{
+		if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+			return;
+		if (fsize != psize)
+			return;
+		const auto offs = archive->get_offset(f_index);
+		if (offs == ~0ull)
+			return;
+
+		const auto dot1 = name.find(L'.');
+		if (dot1 == std::wstring::npos) // skip if extension missed
+			return;
+		const auto dot2 = name.find(L'.', dot1+1);
+		if (dot2 == dot1 + 4 && name[dot1] == part_mode) // N.(mpr|gpt).EXT -- already converted
+			return;
+
+		const wchar_t* ext = guess_fs_ext(f_index);
+		if (!ext) {
+			if (str_end_with(name, L".apfs"))
+				ext = ext_APFS;
+			else if (str_end_with(name, L".hfs") || str_end_with(name, L".hfsx"))
+				ext = ext_HFS;
+			else if (str_end_with(name, ext_EXT4))
+				ext = ext_EXTn;
+		}
+		if (ext)
+			name = std::to_wstring(f_index) + (part_mode == 'm' ? L".mbr" : L".gpt") + ext;
+	}
+	//
+	bool part_index_to_item(const UInt32 index, Far::PanelItem& i)
+	{
+		if (!part_mode)
+			return false;
+
+		i.file_size = archive->get_size(index);
+		if (!i.file_size)
+			return false;
+		i.pack_size = archive->get_psize(index);
+		if (i.file_size != i.pack_size)
+			return false;
+
+		i.file_attributes = archive->get_attr(index);
+		i.file_name = archive->get_path(index);
+		correct_part_root_name(i.file_name, index, i.file_attributes, i.file_size, i.pack_size);
+
+		i.creation_time    = { 0, 0 }; //
+		i.last_access_time = { 0, 0 }; //
+		i.last_write_time  = { 0, 0 }; //
+		i.alt_file_name.clear();       // not used in set_partition()
+
+		i.user_data = (void *)(uintptr_t)(index);
+		return true;
+	}
+	//
+	bool set_partition(const Far::PanelItem& i)
+	{
+		if (!part_mode || !current_dir.empty())
+			return false;
+		if (!i.file_size || i.file_size != i.pack_size || (i.file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+			return false;
+		const auto index = (UInt32)(size_t)i.user_data;
+		const auto off = archive->get_offset(index);
+		if (off == ~0ULL)
+			return false;
+
+		const ArcType* p_type = nullptr;
+		if      (str_end_with(i.file_name, ext_FAT  )) p_type = &c_fat;
+		else if (str_end_with(i.file_name, ext_ExFAT)) p_type = &c_xfat;
+		else if (str_end_with(i.file_name, ext_NTFS )) p_type = &c_ntfs;
+		else if (str_end_with(i.file_name, ext_APFS )) p_type = &c_apfs;
+		else if (str_end_with(i.file_name, ext_HFS  )) p_type = &c_hfs;
+		else if (str_end_with(i.file_name, ext_EXT2 )) p_type = &c_ext4;
+		else if (str_end_with(i.file_name, ext_EXT3 )) p_type = &c_ext4;
+		else if (str_end_with(i.file_name, ext_EXT4 )) p_type = &c_ext4;
+		else if (str_end_with(i.file_name, ext_EXTn )) p_type = &c_ext4;
+		else
+			return false;
+
+		part_idx  = -1;
+		partition = nullptr;
+		ComObject<IInStream> sub_stream;
+		if (!archive->get_stream(index, sub_stream.ref()))
+			return false;
+
+		auto part_archive = std::make_shared<Archive>();
+		if (!part_archive->open(sub_stream, *p_type, true))
+			return false;
+
+		part_idx = index;
+		current_dir = std::to_wstring(index);
+
+		part_archive->parent = archive;
+		part_archive->arc_path = archive->arc_path + L":" + current_dir;
+		part_archive->arc_info = archive->arc_info;
+		part_archive->arc_chain = archive->arc_chain;
+		part_archive->arc_chain.emplace_back(*p_type, off);
+
+		partition = std::make_unique<Plugin>(false);
+		partition->archive = part_archive;
+		partition->host_file = host_file;
+
+		return true;
+	}
+
+	void info(OpenPanelInfo* opi)
+	{
+		if (part_mode && !current_dir.empty() && partition) {
+			partition->info(opi);
+			opi->CurDir = current_dir.c_str();
+			return;
+		}
+
+		opi->StructSize = sizeof(OpenPanelInfo);
+		opi->Flags = OPIF_ADDDOTS | OPIF_SHORTCUT
+			| (recursive_panel     ? OPIF_RECURSIVEPANEL    : 0)
+			| (del_on_close == 'd' ? OPIF_DELETEDIRONCLOSE  : 0)
+			| (del_on_close == 'f' ? OPIF_DELETEFILEONCLOSE : 0)
+		;
+		opi->CurDir = current_dir.c_str();
+		panel_title = Far::get_msg(MSG_PLUGIN_NAME);
+		if (archive->is_open()) {
+			panel_title += L":" + archive->arc_chain.to_string() + L":" + archive->arc_name();
+			if (!current_dir.empty())
+				panel_title += L":" + current_dir;
+			host_file = archive->arc_path;
+			if (archive->m_has_crc)
+				opi->Flags |= OPIF_USECRC32;
+		}
+		opi->HostFile = host_file.c_str();
+		opi->Format = g_plugin_prefix.c_str();
+		opi->PanelTitle = panel_title.c_str();
+		if (g_options.own_panel_view_mode) {
+			opi->StartPanelMode = '0' + g_options.panel_view_mode;
+			opi->StartSortMode = g_options.panel_sort_mode;
+			opi->StartSortOrder = g_options.panel_reverse_sort;
+		}
+
+		info_lines.clear();
+		info_lines.reserve(archive->arc_attr.size() + 1);
+		InfoPanelLine ipl;
+		std::for_each(archive->arc_attr.begin(), archive->arc_attr.end(), [&](const Attr& attr) {
+			ipl.Text = attr.name.c_str();
+			ipl.Data = attr.value.c_str();
+			ipl.Flags = 0;
+			info_lines.push_back(ipl);
+		});
+		opi->InfoLines = info_lines.data();
+		opi->InfoLinesNumber = static_cast<int>(info_lines.size());
+	}
+
+	void set_dir(const std::wstring& dir)
+	{
+		if (!archive->is_open())
+			FAIL(E_ABORT);
+		std::wstring new_dir;
+		if (dir.empty() || dir == L"\\")
+			new_dir.assign(dir);
+		else if (dir == L"..")
+			new_dir = extract_file_path(current_dir);
+		else if (dir[0] == L'\\') // absolute path
+			new_dir.assign(dir);
+		else
+			new_dir.assign(L"\\").append(add_trailing_slash(remove_path_root(current_dir))).append(dir);
+
+		if (new_dir == L"\\")
+			new_dir.clear();
+
+		if (!part_mode) {
+			archive->find_dir(new_dir);
+			current_dir = std::move(new_dir);
+			return;
+		}
+
+		// all code below for partition mode
+		//
+		if (new_dir.empty()) { // root level
+			const auto pidx = part_idx;
+			part_idx = -1;
+			partition = nullptr;
+			current_dir = std::move(new_dir);
+			Far::panel_go_to_part(PANEL_ACTIVE, pidx);
+			return;
+		}
+
+		if (new_dir[0] != '\\' || !isdigit(new_dir[1]))
+			FAIL(E_ABORT);
+		const auto new_idx = _wtoi(new_dir.c_str() + 1);
+		if (new_idx != part_idx) {
+			Far::PanelItem p_item;
+			if (!part_index_to_item((UInt32)new_idx, p_item) || !set_partition(p_item))
+				FAIL(E_ABORT);
+		}
+
+		std::wstring new_subdir;
+		const auto pos = new_dir.find(L'\\', 1);
+		if (pos != std::wstring::npos)
+			new_subdir = new_dir.substr(pos);
+
+		partition->set_dir(new_subdir);
+		current_dir = std::move(new_dir);
+		return;
+	}
 
   void list(PluginPanelItem** panel_items, size_t* items_number) {
     if (!archive->is_open())
       FAIL(E_ABORT);
+
+    if (part_mode && !current_dir.empty()) { // partition sub panel
+      if (partition)
+        return partition->list(panel_items, items_number);
+      FAIL(E_ABORT);
+    }
+
     UInt32 dir_index = archive->find_dir(current_dir);
     FileIndexRange dir_list = archive->get_dir_list(dir_index);
     size_t size = dir_list.second - dir_list.first;
-    std::unique_ptr<PluginPanelItem[]> items(new PluginPanelItem[size]);
+    auto items = std::make_unique<PluginPanelItem[]>(size);
     memset(items.get(), 0, size * sizeof(PluginPanelItem));
     unsigned idx = 0;
     std::for_each(dir_list.first, dir_list.second, [&] (UInt32 file_index) {
-      const ArcFileInfo& file_info = archive->file_list[file_index];
-      const DWORD c_valid_attributes = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM;
-      items[idx].FileAttributes = archive->get_attr(file_index) & c_valid_attributes;
+      ArcFileInfo& file_info = archive->file_list[file_index];
+      constexpr DWORD c_valid_attributes = FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM;
+		items[idx].FileAttributes = archive->get_attr(file_index) & c_valid_attributes;
       items[idx].CreationTime = archive->get_ctime(file_index);
       items[idx].LastAccessTime = archive->get_atime(file_index);
       items[idx].LastWriteTime = archive->get_mtime(file_index);
       items[idx].FileSize = archive->get_size(file_index);
       items[idx].AllocationSize = archive->get_psize(file_index);
-      items[idx].FileName = const_cast<wchar_t*>(file_info.name.c_str());
+      if (part_mode && current_dir.empty()) // MBR or GPT root
+        correct_part_root_name(file_info.name, file_index, items[idx].FileAttributes, items[idx].FileSize, items[idx].AllocationSize);
+		items[idx].FileName = const_cast<wchar_t*>(file_info.name.c_str());
       items[idx].UserData.Data = reinterpret_cast<void*>(static_cast<size_t>(file_index));
       items[idx].CRC32 = archive->get_crc(file_index);
       idx++;
@@ -147,6 +377,7 @@ public:
 
   class PluginPanelItemAccessor {
   public:
+    virtual ~PluginPanelItemAccessor() = default;
     virtual const PluginPanelItem* get(size_t idx) const = 0;
     virtual size_t size() const = 0;
   };
@@ -197,7 +428,7 @@ public:
       dst_dir = options.dst_dir;
       update_dst_dir();
       if (!options.password.empty())
-        archive->password = options.password;
+        archive->m_password = options.password;
     }
     if (op_mode & OPM_TOPLEVEL)
     {
@@ -218,7 +449,7 @@ public:
       indices.push_back(static_cast<UInt32>(reinterpret_cast<size_t>(panel_items.get(i)->UserData.Data)));
     }
 
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+    const auto error_log = std::make_shared<ErrorLog>();
     std::vector<UInt32> extracted_indices;
     archive->extract(src_dir_index, indices, options, error_log, options.move_files == triTrue ? &extracted_indices : nullptr);
 
@@ -247,6 +478,11 @@ public:
   }
 
   void get_files(const PluginPanelItem* panel_items, intptr_t items_number, int move, const wchar_t** dest_path, OPERATION_MODES op_mode) {
+    if (part_mode && !current_dir.empty() && partition) {
+      partition->get_files(panel_items, items_number, move, dest_path, op_mode);
+      return;
+    }
+
     class PluginPanelItems: public PluginPanelItemAccessor {
     private:
       const PluginPanelItem* panel_items;
@@ -254,10 +490,10 @@ public:
     public:
       PluginPanelItems(const PluginPanelItem* panel_items, size_t items_number): panel_items(panel_items), items_number(items_number) {
       }
-      virtual const PluginPanelItem* get(size_t idx) const {
+      const PluginPanelItem* get(size_t idx) const override {
         return panel_items + idx;
       }
-      virtual size_t size() const {
+      size_t size() const override {
         return items_number;
       }
     };
@@ -282,11 +518,11 @@ public:
       PluginPanelItems(HANDLE h_plugin): h_plugin(h_plugin) {
         CHECK(Far::get_panel_info(h_plugin, panel_info));
       }
-      virtual const PluginPanelItem* get(size_t idx) const {
+      const PluginPanelItem* get(size_t idx) const override {
         Far::get_panel_item(h_plugin, FCTL_GETSELECTEDPANELITEM, idx, buf);
         return reinterpret_cast<const PluginPanelItem*>(buf.data());
       }
-      virtual size_t size() const {
+      size_t size() const override {
         return panel_info.SelectedItemsNumber;
       }
     };
@@ -298,7 +534,7 @@ public:
   static void extract(const std::vector<std::wstring>& arc_list, ExtractOptions options) {
     std::wstring dst_dir = options.dst_dir;
     std::wstring dst_file_name;
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+    const auto error_log = std::make_shared<ErrorLog>();
     for (unsigned i = 0; i < arc_list.size(); i++) {
       std::unique_ptr<Archives> archives;
       try {
@@ -319,8 +555,8 @@ public:
       }
 
       std::shared_ptr<Archive> archive = (*archives)[0];
-      if (archive->password.empty())
-        archive->password = options.password;
+      if (archive->m_password.empty())
+        archive->m_password = options.password;
       archive->make_index();
 
       FileIndexRange dir_list = archive->get_dir_list(c_root_index);
@@ -394,7 +630,7 @@ public:
     std::vector<std::wstring> arc_list;
     arc_list.reserve(cmd.arc_list.size());
     std::for_each(cmd.arc_list.begin(), cmd.arc_list.end(), [&] (const std::wstring& arc_name) {
-      arc_list.push_back(Far::get_absolute_path(arc_name));
+      arc_list.emplace_back(Far::get_absolute_path(arc_name));
     });
     ExtractOptions options = cmd.options;
     options.dst_dir = Far::get_absolute_path(cmd.options.dst_dir);
@@ -413,8 +649,8 @@ public:
       throw Error(Far::get_msg(MSG_ERROR_NOT_ARCHIVE), arch_name, __FILE__, __LINE__);
 
     std::shared_ptr<Archive> archive = (*archives)[0];
-    if (archive->password.empty())
-      archive->password = options.password;
+    if (archive->m_password.empty())
+      archive->m_password = options.password;
     archive->make_index();
     auto nf = static_cast<UInt32>(archive->file_list.size());
     std::vector<UInt32> matched_indices;
@@ -446,8 +682,8 @@ public:
       throw Error(Far::get_msg(MSG_ERROR_NOT_ARCHIVE), arch_name, __FILE__, __LINE__);
 
     std::shared_ptr<Archive> archive = (*archives)[0];
-    if (archive->password.empty())
-      archive->password = options.password;
+    if (archive->m_password.empty())
+      archive->m_password = options.password;
     archive->make_index();
     auto nf = static_cast<UInt32>(archive->file_list.size());
     std::vector<UInt32> matched_indices;
@@ -462,12 +698,14 @@ public:
     }
     if (!matched_indices.empty()) {
         std::sort(matched_indices.begin(), matched_indices.end(), [&](const auto&a, const auto& b) { // group by parent
-        return static_cast<Int32>(archive->file_list[a].parent) < static_cast<Int32>(archive->file_list[a].parent);
+        return static_cast<Int32>(archive->file_list[a].parent) < static_cast<Int32>(archive->file_list[b].parent);
       });
-      std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+      const auto error_log = std::make_shared<ErrorLog>();
       size_t im = 0, nm = matched_indices.size();
+      std::vector<UInt32> indices;
+      indices.reserve(nm);
       while (im < nm) {
-        std::vector<UInt32> indices;
+        indices.clear();
         auto parent = archive->file_list[matched_indices[im]].parent;
         while (im < nm && archive->file_list[matched_indices[im]].parent == parent)
           indices.push_back(matched_indices[im++]);
@@ -531,7 +769,7 @@ public:
   }
 
   static void bulk_test(const std::vector<std::wstring>& arc_list) {
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+    const auto error_log = std::make_shared<ErrorLog>();
     for (unsigned i = 0; i < arc_list.size(); i++) {
       std::unique_ptr<Archives> archives;
       Error err;
@@ -590,7 +828,7 @@ public:
     std::vector<std::wstring> arc_list;
     arc_list.reserve(cmd.arc_list.size());
     std::for_each(cmd.arc_list.begin(), cmd.arc_list.end(), [&] (const std::wstring& arc_name) {
-      arc_list.push_back(Far::get_absolute_path(arc_name));
+      arc_list.emplace_back(Far::get_absolute_path(arc_name));
     });
     Plugin::bulk_test(arc_list);
   }
@@ -644,11 +882,11 @@ public:
         }
       }
       archive->load_update_props();
-      options.method = archive->method;
-      options.solid = archive->solid;
-      options.encrypt = archive->encrypted;
+      options.method = archive->m_method;
+      options.solid = archive->m_solid;
+      options.encrypt = archive->m_encrypted;
       options.encrypt_header = triUndef;
-      options.password = archive->password;
+      options.password = archive->m_password;
 
       //options.level = archive->level;
       options.level = g_options.update_level;
@@ -672,16 +910,18 @@ public:
     if (ArcAPI::formats().count(options.arc_type) == 0)
       FAIL_MSG(Far::get_msg(MSG_ERROR_NO_FORMAT));
     if (new_arc) {
+      if (!options.encrypt)
+        options.password.clear();
       if (File::exists(options.arc_path)) {
         if (Far::message(c_overwrite_archive_dialog_guid, Far::get_msg(MSG_PLUGIN_NAME) + L"\n" + Far::get_msg(MSG_UPDATE_DLG_CONFIRM_OVERWRITE), 0, FMSG_MB_YESNO) != 0)
           FAIL(E_ABORT);
       }
     }
     else {
-      archive->level = options.level;
-      archive->method = options.method;
-      archive->solid = options.solid;
-      archive->encrypted = options.encrypt;
+      archive->m_level = options.level;
+      archive->m_method = options.method;
+      archive->m_solid = options.solid;
+      archive->m_encrypted = options.encrypt;
     }
 
     bool all_path_abs = true;
@@ -718,7 +958,7 @@ public:
       }
     }
 
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+    const auto error_log = std::make_shared<ErrorLog>();
     if (new_arc)
       archive->create(common_src_path, file_names, options, error_log);
     else
@@ -798,8 +1038,8 @@ public:
         FAIL(E_ABORT);
     }
 
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
-    std::shared_ptr<Archive>(new Archive())->create(src_path, file_list, options, error_log);
+    const auto error_log = std::make_shared<ErrorLog>();
+    std::make_shared<Archive>()->create(src_path, file_list, options, error_log);
 
     if (!error_log->empty()) {
       show_error_log(*error_log);
@@ -821,7 +1061,7 @@ public:
     std::vector<std::wstring> files;
     files.reserve(cmd.files.size());
     std::for_each(cmd.files.begin(), cmd.files.end(), [&] (const std::wstring& file) {
-      files.push_back(Far::get_absolute_path(file));
+      files.emplace_back(Far::get_absolute_path(file));
     });
 
     // load listfiles
@@ -830,7 +1070,7 @@ public:
       std::list<std::wstring> fl = parse_listfile(str);
       files.reserve(files.size() + fl.size());
       std::for_each(fl.begin(), fl.end(), [&] (const std::wstring& file) {
-        files.push_back(Far::get_absolute_path(file));
+        files.emplace_back(Far::get_absolute_path(file));
       });
     });
 
@@ -861,9 +1101,9 @@ public:
 
     CHECK(get_app_option(FSSF_SYSTEM, c_copy_opened_files_option, options.open_shared));
 
-    std::shared_ptr<ErrorLog> error_log(new ErrorLog());
+    const auto error_log = std::make_shared<ErrorLog>();
     if (cmd.new_arc) {
-      std::shared_ptr<Archive>(new Archive())->create(src_path, files, options, error_log);
+      std::make_shared<Archive>()->create(src_path, files, options, error_log);
 
       if (upcase(Far::get_panel_dir(PANEL_ACTIVE)) == upcase(extract_file_path(options.arc_path)))
         Far::panel_go_to_file(PANEL_ACTIVE, options.arc_path);
@@ -876,11 +1116,11 @@ public:
       open_options.detect = false;
       open_options.password = options.password;
       open_options.arc_types = ArcAPI::formats().get_arc_types();
-      std::unique_ptr<Archives> archives(Archive::open(open_options));
+      const auto archives = Archive::open(open_options);
       if (archives->empty())
         throw Error(Far::get_msg(MSG_ERROR_NOT_ARCHIVE), options.arc_path, __FILE__, __LINE__);
 
-      std::shared_ptr<Archive> archive = (*archives)[0];
+      const auto archive = (*archives)[0];
       if (!archive->updatable())
         throw Error(Far::get_msg(MSG_ERROR_NOT_UPDATABLE), options.arc_path, __FILE__, __LINE__);
 
@@ -889,14 +1129,14 @@ public:
       options.arc_type = archive->arc_chain.back().type;
       archive->load_update_props();
       if (!cmd.level_defined)
-        options.level = archive->level;
+        options.level = archive->m_level;
       if (!cmd.method_defined)
-        options.method = archive->method;
+        options.method = archive->m_method;
       if (!cmd.solid_defined)
-        options.solid = archive->solid;
+        options.solid = archive->m_solid;
       if (!cmd.encrypt_defined) {
-        options.encrypt = archive->encrypted;
-        options.password = archive->password;
+        options.encrypt = archive->m_encrypted;
+        options.password = archive->m_password;
       }
 
       archive->update(src_path, files, std::wstring(), options, error_log);
@@ -994,7 +1234,7 @@ void WINAPI GetGlobalInfoW(GlobalInfo* info) {
   info->Version = PLUGIN_VERSION;
   info->Guid = c_plugin_guid;
   info->Title = PLUGIN_NAME;
-  info->Description = PLUGIN_DESCRIPTION;
+  info->Description = PLUGIN_DESC;
   info->Author = FARCOMPANYNAME;
 }
 
@@ -1010,7 +1250,7 @@ void WINAPI SetStartupInfoW(const PluginStartupInfo* info) {
 
 void WINAPI GetPluginInfoW(PluginInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   static const wchar_t* plugin_menu[1];
   static const wchar_t* config_menu[1];
   plugin_menu[0] = Far::msg_ptr(MSG_PLUGIN_NAME);
@@ -1024,7 +1264,7 @@ void WINAPI GetPluginInfoW(PluginInfo* info) {
   info->PluginConfig.Strings = config_menu;
   info->PluginConfig.Count = ARRAYSIZE(config_menu);
   info->CommandPrefix = g_plugin_prefix.c_str();
-  FAR_ERROR_HANDLER_END(return, return, false);
+  FAR_ERROR_HANDLER_END(return, return, false)
 }
 
 static HANDLE analyse_open(const AnalyseInfo* info, bool from_analyse) {
@@ -1064,7 +1304,7 @@ static HANDLE analyse_open(const AnalyseInfo* info, bool from_analyse) {
         else if (g_options.use_disabled_formats && disabled_formats.count(arc_name) != 0)
           arc_type = options.arc_types.erase(arc_type);
         else
-          arc_type++;
+          ++arc_type;
       }
       if (options.arc_types.empty())
         FAIL(E_INVALIDARG);
@@ -1118,7 +1358,7 @@ void WINAPI CloseAnalyseW(const CloseAnalyseInfo* info) {
 HANDLE WINAPI OpenW(const OpenInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
   bool delayed_analyse_open = false;
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   if (info->OpenFrom == OPEN_PLUGINSMENU) {
     Far::MenuItems menu_items;
     unsigned open_menu_id = menu_items.add(Far::get_msg(MSG_MENU_OPEN));
@@ -1187,7 +1427,12 @@ HANDLE WINAPI OpenW(const OpenInfo* info) {
       case cmdOpen: {
         OpenOptions options = parse_open_command(cmd_args).options;
         options.arc_path = Far::get_absolute_path(options.arc_path);
-        return Plugin::open(*Archive::open(options));
+        auto plugin = Plugin::open(*Archive::open(options));
+		  if (plugin) {
+			  plugin->recursive_panel = options.recursive_panel;
+			  plugin->del_on_close = options.delete_on_close;
+		  }
+		  return plugin;
       }
       case cmdCreate:
       case cmdUpdate:
@@ -1274,46 +1519,46 @@ HANDLE WINAPI OpenW(const OpenInfo* info) {
   }
 
   return nullptr;
-  FAR_ERROR_HANDLER_END(return nullptr, return delayed_analyse_open ? PANEL_STOP : nullptr, delayed_analyse_open);
+  FAR_ERROR_HANDLER_END(return nullptr, return delayed_analyse_open ? PANEL_STOP : nullptr, delayed_analyse_open)
 }
 
 void WINAPI ClosePanelW(const struct ClosePanelInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   Plugin* plugin = reinterpret_cast<Plugin*>(info->hPanel);
   IGNORE_ERRORS(plugin->close());
   delete plugin;
-  FAR_ERROR_HANDLER_END(return, return, true);
+  FAR_ERROR_HANDLER_END(return, return, true)
 }
 
 void WINAPI GetOpenPanelInfoW(OpenPanelInfo* info) {
   CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->info(info);
-  FAR_ERROR_HANDLER_END(return, return, false);
+  FAR_ERROR_HANDLER_END(return, return, false)
 }
 
 intptr_t WINAPI SetDirectoryW(const SetDirectoryInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->set_dir(info->Dir);
   return TRUE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & (OPM_SILENT | OPM_FIND)) != 0);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & (OPM_SILENT | OPM_FIND)) != 0)
 }
 
 intptr_t WINAPI GetFindDataW(GetFindDataInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->list(&info->PanelItem, &info->ItemsNumber);
   return TRUE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & (OPM_SILENT | OPM_FIND)) != 0);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & (OPM_SILENT | OPM_FIND)) != 0)
 }
 
 void WINAPI FreeFindDataW(const FreeFindDataInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   delete[] info->PanelItem;
-  FAR_ERROR_HANDLER_END(return, return, false);
+  FAR_ERROR_HANDLER_END(return, return, false)
 }
 
 intptr_t WINAPI GetFilesW(GetFilesInfo *info) {
@@ -1321,36 +1566,36 @@ intptr_t WINAPI GetFilesW(GetFilesInfo *info) {
   FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->get_files(info->PanelItem, info->ItemsNumber, info->Move, &info->DestPath, info->OpMode);
   return 1;
-  FAR_ERROR_HANDLER_END(return 0, return -1, (info->OpMode & (OPM_FIND | OPM_QUICKVIEW)) != 0);
+  FAR_ERROR_HANDLER_END(return 0, return -1, (info->OpMode & (OPM_FIND | OPM_QUICKVIEW)) != 0)
 }
 
 intptr_t WINAPI PutFilesW(const PutFilesInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->put_files(info->PanelItem, info->ItemsNumber, info->Move, info->SrcPath, info->OpMode);
   return 2;
-  FAR_ERROR_HANDLER_END(return 0, return -1, (info->OpMode & OPM_FIND) != 0);
+  FAR_ERROR_HANDLER_END(return 0, return -1, (info->OpMode & OPM_FIND) != 0)
 }
 
 intptr_t WINAPI DeleteFilesW(const DeleteFilesInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->delete_files(info->PanelItem, info->ItemsNumber, info->OpMode);
   return TRUE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & OPM_SILENT) != 0);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & OPM_SILENT) != 0)
 }
 
 intptr_t WINAPI MakeDirectoryW(MakeDirectoryInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   reinterpret_cast<Plugin*>(info->hPanel)->create_dir(&info->Name, info->OpMode);
   return 1;
-  FAR_ERROR_HANDLER_END(return -1, return -1, (info->OpMode & OPM_SILENT) != 0);
+  FAR_ERROR_HANDLER_END(return -1, return -1, (info->OpMode & OPM_SILENT) != 0)
 }
 
 intptr_t WINAPI ProcessHostFileW(const ProcessHostFileInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   Far::MenuItems menu_items;
   menu_items.add(Far::get_msg(MSG_TEST_MENU));
   intptr_t item = Far::menu(c_arccmd_menu_guid, Far::get_msg(MSG_PLUGIN_NAME), menu_items);
@@ -1363,29 +1608,45 @@ intptr_t WINAPI ProcessHostFileW(const ProcessHostFileInfo* info) {
   }
   else
     return FALSE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & OPM_SILENT) != 0);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, (info->OpMode & OPM_SILENT) != 0)
 }
 
 intptr_t WINAPI ProcessPanelInputW(const struct ProcessPanelInputInfo* info) {
   //CriticalSectionLock lock(GetExportSync());
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   if (info->Rec.EventType == KEY_EVENT) {
     const KEY_EVENT_RECORD& key_event = info->Rec.Event.KeyEvent;
-    if ((key_event.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0 && key_event.wVirtualKeyCode == 'A') {
-      reinterpret_cast<Plugin*>(info->hPanel)->show_attr();
+    const auto ctrl  = (key_event.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
+    const auto alt   = (key_event.dwControlKeyState & (LEFT_ALT_PRESSED  | RIGHT_ALT_PRESSED )) != 0;
+    const auto shift = (key_event.dwControlKeyState & SHIFT_PRESSED) != 0;
+	 auto plugin = reinterpret_cast<Plugin*>(info->hPanel);
+    // Ctrl+A
+    if (key_event.wVirtualKeyCode == 'A' && ctrl && !alt && !shift) {
+      plugin->show_attr();
       return TRUE;
     }
-    else if ((key_event.dwControlKeyState & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED)) != 0 && key_event.wVirtualKeyCode == VK_F6) {
-      reinterpret_cast<Plugin*>(info->hPanel)->extract();
+    // Alt+F6
+    else if (key_event.wVirtualKeyCode == VK_F6 && !ctrl && alt && !shift) {
+      plugin->extract();
       return TRUE;
+    }
+    // Enter [Ctrl+PgDn]
+    else if (!alt && !shift && (
+      (key_event.wVirtualKeyCode==VK_RETURN && !ctrl) || (key_event.wVirtualKeyCode==VK_NEXT && ctrl)
+    )){
+      Far::PanelItem panel_item = Far::get_current_panel_item(PANEL_ACTIVE);
+      if (plugin->set_partition(panel_item)) {
+        Far::update_panel(PANEL_ACTIVE, false, true);
+		  return TRUE;
+      }
     }
   }
   return FALSE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, false);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, false)
 }
 
 intptr_t WINAPI ConfigureW(const struct ConfigureInfo* info) {
-  FAR_ERROR_HANDLER_BEGIN;
+  FAR_ERROR_HANDLER_BEGIN
   PluginSettings settings;
   settings.handle_create = g_options.handle_create;
   settings.handle_commands = g_options.handle_commands;
@@ -1426,7 +1687,7 @@ intptr_t WINAPI ConfigureW(const struct ConfigureInfo* info) {
   }
   else
     return FALSE;
-  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, false);
+  FAR_ERROR_HANDLER_END(return FALSE, return FALSE, false)
 }
 
 void WINAPI ExitFARW(const struct ExitInfo* Info) {

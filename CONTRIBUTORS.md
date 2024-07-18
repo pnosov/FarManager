@@ -1,3 +1,6 @@
+﻿|[Polski](CONTRIBUTORS-PL.md)|
+|-|
+
 # Far Group past and present
 * Valentin Skirdin
 * Ivan Sintyurin
@@ -118,6 +121,15 @@
 * Gerardo Garcia
 * Bernd Giesen
 * Juri Petrashko
+* Valentіn Kolesnіkov
+* Вя Лi
+* Michal Breškovec
+* Miroslav Pták
+* Peter Valach
+* Paweł Pawlak
+* XSAk
+* Arūnas Bartišius
+* Rohitab Batra
  
-> And special thanks to all of our community members!  
+> And special thanks to all of our community members!<br/>
 > You are not less important than the people mentioned here.

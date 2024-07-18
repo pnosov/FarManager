@@ -46,8 +46,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "console.hpp"
 #include "colormix.hpp"
 #include "global.hpp"
+#include "char_width.hpp"
+#include "encoding.hpp"
 
 // Platform:
+#include "platform.debug.hpp"
 
 // Common:
 #include "common/2d/algorithm.hpp"
@@ -64,10 +67,6 @@ enum
 	SBFLAGS_FLUSHEDTITLE    = 3_bit,
 };
 
-//#if defined(SYSLOG_OT)
-// #define DIRECT_SCREEN_OUT
-//#endif
-
 static bool is_visible(point const& Where)
 {
 	return
@@ -78,6 +77,38 @@ static bool is_visible(point const& Where)
 static bool is_visible(rectangle const& Where)
 {
 	return Where.left <= ScrX && Where.top <= ScrY && Where.right >= 0 && Where.bottom >= 0;
+}
+
+static void invalidate_broken_pairs_in_cache(matrix<FAR_CHAR_INFO>const& Buf, matrix<FAR_CHAR_INFO>& Shadow, rectangle const Where, point const Point)
+{
+	const auto
+		IsLeft = !Point.x && Where.left,
+		IsRight = Point.x == Where.width() - 1 && Where.right != ScrX;
+
+	if (!IsLeft && !IsRight)
+		return;
+
+	const auto X1X2 = IsLeft?
+		std::pair{ Where.left - 1, Where.left      } :
+		std::pair{ Where.right,    Where.right + 1 };
+
+	const auto
+		BufRowData = Buf[Where.top + Point.y],
+		ShadowRowData = Shadow[Where.top + Point.y];
+
+	const auto
+		&Buf0 = BufRowData[X1X2.first],
+		&Buf1 = BufRowData[X1X2.second];
+
+	auto Pair0 = Buf0, Pair1 = Buf1;
+	if (sanitise_pair(Pair0, Pair1))
+	{
+		if (Pair0 != Buf0)
+			ShadowRowData[X1X2.first] = {};
+
+		if (Pair1 != Buf1)
+			ShadowRowData[X1X2.second] = {};
+	}
 }
 
 ScreenBuf::ScreenBuf():
@@ -91,10 +122,10 @@ void ScreenBuf::DebugDump() const
 	string s;
 	s.reserve(Buf.width() + 1);
 
-	for (size_t row_num = 0; row_num != Buf.height(); ++row_num)
+	for (const auto row_num: std::views::iota(0uz, Buf.height()))
 	{
 		const auto& row = Buf[row_num];
-		std::transform(ALL_CONST_RANGE(row), std::back_inserter(s), [](const auto& i) { return i.Char; });
+		std::ranges::transform(row, std::back_inserter(s), &FAR_CHAR_INFO::Char);
 		s.push_back(L'\n');
 		os::debug::print(s);
 		s.clear();
@@ -104,7 +135,7 @@ void ScreenBuf::DebugDump() const
 
 void ScreenBuf::AllocBuf(size_t rows, size_t cols)
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	if (rows == Buf.height() && cols == Buf.width())
 		return;
@@ -117,10 +148,20 @@ void ScreenBuf::AllocBuf(size_t rows, size_t cols)
 */
 void ScreenBuf::FillBuf()
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	rectangle const ReadRegion{ 0, 0, static_cast<int>(Buf.width() - 1), static_cast<int>(Buf.height() - 1) };
 	console.ReadOutput(Buf, ReadRegion);
+
+	for (auto& i: Buf.vector())
+	{
+		colors::make_transparent(i.Attributes.ForegroundColor);
+		colors::make_transparent(i.Attributes.BackgroundColor);
+		i.Attributes.Flags |= FCF_FOREIGN;
+	}
+
+	console.stash_output();
+
 	Shadow = Buf;
 	point CursorPosition;
 	console.GetCursorPosition(CursorPosition);
@@ -129,25 +170,32 @@ void ScreenBuf::FillBuf()
 
 /* Записать Text в виртуальный буфер
 */
-void ScreenBuf::Write(int X, int Y, span<const FAR_CHAR_INFO> Text)
+void ScreenBuf::Write(int X, int Y, std::span<const FAR_CHAR_INFO> Text)
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	if (X<0)
 	{
-		Text.pop_front(std::min(static_cast<size_t>(-X), Text.size()));
+		Text = Text.subspan(std::min(static_cast<size_t>(-X), Text.size()));
 		X=0;
 	}
 
 	if (X >= static_cast<int>(Buf.width()) || Y >= static_cast<int>(Buf.height()) || Text.empty() || Y < 0)
 		return;
 
-	if (static_cast<size_t>(X + Text.size()) > Buf.width())
-		Text.pop_back(Text.size() - (Buf.width() - X));
+	if (X + Text.size() > Buf.width())
+		Text = Text.first(Buf.width() - X);
 
-	for (size_t i = 0; i != Text.size(); ++i)
+	for (const auto i: std::views::iota(0uz, Text.size()))
 	{
 		Buf[Y][X + i] = Text[i];
+	}
+
+	if (char_width::is_enabled())
+	{
+		rectangle const Where{ X, Y, static_cast<int>(X + Text.size() - 1), Y };
+		invalidate_broken_pairs_in_cache(Buf, Shadow, Where, { 0, 0 });
+		invalidate_broken_pairs_in_cache(Buf, Shadow, Where, { Where.right - X, 0 });
 	}
 
 	SBFlags.Clear(SBFLAGS_FLUSHED);
@@ -160,40 +208,171 @@ void ScreenBuf::Write(int X, int Y, span<const FAR_CHAR_INFO> Text)
 */
 void ScreenBuf::Read(rectangle Where, matrix<FAR_CHAR_INFO>& Dest)
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	fix_coordinates(Where);
 
-	for (auto i = Where.top; i <= Where.bottom; ++i)
+	for (const auto i: std::views::iota(Where.top + 0, Where.bottom + 1))
 	{
 		const auto Row = Buf[i];
-		std::copy_n(Row.cbegin() + Where.left, Where.width(), Dest[i - Where.top].begin());
+		std::copy_n(Row.begin() + Where.left, Where.width(), Dest[i - Where.top].begin());
 	}
 }
 
-/* Изменить значение цветовых атрибутов в соответствии с маской
-   (применяется для "создания" тени)
-*/
-void ScreenBuf::ApplyShadow(rectangle Where)
+static unsigned char apply_nt_index_shadow(unsigned char const Color)
+{
+	// If it's intense then remove the intensity.
+	if (Color & FOREGROUND_INTENSITY)
+		return Color & ~FOREGROUND_INTENSITY;
+
+	// 0x07 (silver) is technically "non-intense white", so it should become black as all the other non-intense colours.
+	// However, making it 0x08 (grey or "intense black") instead gives better results.
+	if (Color == F_LIGHTGRAY)
+		return F_DARKGRAY;
+
+	// Non-intense can't get any darker, so just return black.
+	return F_BLACK;
+}
+
+static bool apply_index_shadow(FarColor& Color, COLORREF FarColor::* ColorAccessor, bool const Is256ColorAvailable)
+{
+	using namespace colors::index;
+
+	// Reduce the intensity or make black.
+	// Technically the other branch can merge index colours too,
+	// but this should give more predictable results than the approximation.
+
+	Color = colors::resolve_defaults(Color);
+	auto& ColorPart = std::invoke(ColorAccessor, Color);
+	const auto Index = colors::index_value(ColorPart);
+	const auto Alpha = colors::alpha_bits(ColorPart);
+
+	if (Index <= nt_last)
+	{
+		ColorPart = Alpha | apply_nt_index_shadow(Index);
+		return true;
+	}
+
+	if (!Is256ColorAvailable)
+		return false;
+
+	if (Index <= cube_last)
+	{
+		const auto CubeIndex = Index - cube_first;
+		const auto z = CubeIndex / (cube_size * cube_size);
+		const auto y = (CubeIndex - z * (cube_size * cube_size)) / cube_size;
+		const auto x = CubeIndex % cube_size;
+
+		const auto NewIndex = cube_first + x / 2 + (y / 2) * cube_size + z / 2 * cube_size * cube_size;
+		ColorPart = Alpha | NewIndex;
+	}
+	else
+	{
+		const auto GreyIndex = Index - grey_first;
+		ColorPart = Alpha | (grey_first + GreyIndex / 2);
+	}
+
+	return true;
+}
+
+static void apply_shadow(FarColor& Color, COLORREF FarColor::* ColorAccessor, const FARCOLORFLAGS Flag, FarColor const& TrueShadow, bool const Is256ColorAvailable)
+{
+	if (Color.Flags & Flag && apply_index_shadow(Color, ColorAccessor, Is256ColorAvailable))
+		return;
+
+	// Apply half-transparent black and hope that the approximation will yield something sensible.
+	Color = colors::merge(Color, TrueShadow);
+}
+
+void ScreenBuf::ApplyShadow(rectangle Where, bool const IsLegacy)
 {
 	if (!is_visible(Where))
 		return;
 
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	fix_coordinates(Where);
 
-	for_submatrix(Buf, Where, [](FAR_CHAR_INFO& Element)
+	const auto CharWidthEnabled = char_width::is_enabled();
+	const auto IsTrueColorAvailable = console.IsVtActive() || console.ExternalRendererLoaded();
+	const auto Is256ColorAvailable = IsTrueColorAvailable;
+
+	static constexpr FarColor
+		TrueShadowFull{ FCF_INHERIT_STYLE, { 0x80'000000 }, { 0x80'000000 }, { 0x80'000000 } },
+		TrueShadowFore{ FCF_INHERIT_STYLE, { 0x80'000000 }, { 0x00'000000 }, { 0x00'000000 } },
+		TrueShadowBack{ FCF_INHERIT_STYLE, { 0x00'000000 }, { 0x80'000000 }, { 0x00'000000 } },
+		TrueShadowUndl{ FCF_INHERIT_STYLE, { 0x00'000000 }, { 0x00'000000 }, { 0x80'000000 } };
+
+	for_submatrix(Buf, Where, [&](FAR_CHAR_INFO& Element, point const Point)
 	{
-		Element.Attributes.BackgroundColor = 0;
-
-		const auto Mask = Element.Attributes.IsFg4Bit()? FOREGROUND_INTENSITY : 0x808080;
-
-		Element.Attributes.ForegroundColor &= ~Mask;
-		if (!colors::color_value(Element.Attributes.ForegroundColor))
+		if (IsLegacy)
 		{
-			Element.Attributes.ForegroundColor = Mask;
+			// This piece is for usage with repeated Message() calls.
+			// It generates a stable shadow that does not fade to black when reapplied over and over.
+			// We really, really should ditch the Message pattern.
+			Element.Attributes.IsBgIndex()?
+				colors::set_index_value(Element.Attributes.BackgroundColor, F_BLACK) :
+				colors::set_color_value(Element.Attributes.BackgroundColor, 0);
+
+			const auto apply_shadow = [](COLORREF& ColorRef, bool const IsIndex)
+			{
+				if (IsIndex)
+				{
+					auto Color = colors::index_value(ColorRef);
+
+					if (Color <= colors::index::nt_last)
+					{
+						if (Color == F_LIGHTGRAY)
+							Color = F_DARKGRAY;
+						else if (const auto Mask = FOREGROUND_INTENSITY; Color != Mask)
+							Color &= ~Mask;
+					}
+					else if (Color <= colors::index::cube_last)
+					{
+						colors::rgb6 rgb(Color);
+
+						rgb.r = std::min<uint8_t>(rgb.r, 2);
+						rgb.g = std::min<uint8_t>(rgb.g, 2);
+						rgb.b = std::min<uint8_t>(rgb.b, 2);
+
+						Color = rgb;
+					}
+					else
+					{
+						Color = std::min<uint8_t>(Color, colors::index::grey_first + colors::index::grey_count / 2);
+					}
+
+					colors::set_index_value(ColorRef, Color);
+				}
+				else
+				{
+					const auto Mask = 0x808080;
+					auto Color = colors::color_value(ColorRef);
+
+					if (Color != Mask)
+						Color &= ~Mask;
+
+					colors::set_color_value(ColorRef, Color);
+				}
+			};
+
+			apply_shadow(Element.Attributes.ForegroundColor, Element.Attributes.IsFgIndex());
+			apply_shadow(Element.Attributes.UnderlineColor, Element.Attributes.IsUnderlineIndex());
 		}
+		else if (IsTrueColorAvailable)
+		{
+			// We have TrueColor, so just fill whatever is there with half-transparent black.
+			Element.Attributes = colors::merge(Element.Attributes, TrueShadowFull);
+		}
+		else
+		{
+			apply_shadow(Element.Attributes, &FarColor::ForegroundColor, FCF_FG_INDEX, TrueShadowFore, Is256ColorAvailable);
+			apply_shadow(Element.Attributes, &FarColor::BackgroundColor, FCF_BG_INDEX, TrueShadowBack, Is256ColorAvailable);
+			apply_shadow(Element.Attributes, &FarColor::UnderlineColor, FCF_FG_UNDERLINE_INDEX, TrueShadowUndl, Is256ColorAvailable);
+		}
+
+		if (CharWidthEnabled)
+			invalidate_broken_pairs_in_cache(Buf, Shadow, Where, Point);
 	});
 
 	debug_flush();
@@ -201,58 +380,23 @@ void ScreenBuf::ApplyShadow(rectangle Where)
 
 /* Непосредственное изменение цветовых атрибутов
 */
-// used in block selection
-void ScreenBuf::ApplyColor(rectangle Where, const FarColor& Color, bool PreserveExFlags)
+void ScreenBuf::ApplyColor(rectangle Where, const FarColor& Color)
 {
 	if (!is_visible(Where))
 		return;
 
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	fix_coordinates(Where);
 
-	if(PreserveExFlags)
+	const auto CharWidthEnabled = char_width::is_enabled();
+
+	for_submatrix(Buf, Where, [&](FAR_CHAR_INFO& Element, point const Point)
 	{
-		for_submatrix(Buf, Where, [&Color](FAR_CHAR_INFO& Element)
-		{
-			const auto ExFlags = Element.Attributes.Flags&FCF_EXTENDEDFLAGS;
-			Element.Attributes = Color;
-			Element.Attributes.Flags = (Element.Attributes.Flags&~FCF_EXTENDEDFLAGS) | ExFlags;
-		});
-	}
-	else
-	{
-		for_submatrix(Buf, Where, [&Color](FAR_CHAR_INFO& Element)
-		{
-			Element.Attributes = Color;
-		});
-	}
+		Element.Attributes = colors::merge(Element.Attributes, Color);
 
-	debug_flush();
-}
-
-/* Непосредственное изменение цветовых атрибутов с заданным цветом исключением
-*/
-// used in stream selection
-void ScreenBuf::ApplyColor(rectangle Where, const FarColor& Color, const FarColor& ExceptColor, bool ForceExFlags)
-{
-	if (!is_visible(Where))
-		return;
-
-	SCOPED_ACTION(std::lock_guard)(CS);
-
-	fix_coordinates(Where);
-
-	for_submatrix(Buf, Where, [&](FAR_CHAR_INFO& Element)
-	{
-		if (Element.Attributes.ForegroundColor != ExceptColor.ForegroundColor || Element.Attributes.BackgroundColor != ExceptColor.BackgroundColor)
-		{
-			Element.Attributes = Color;
-		}
-		else if (ForceExFlags)
-		{
-			Element.Attributes.Flags = (Element.Attributes.Flags&~FCF_EXTENDEDFLAGS) | (Color.Flags&FCF_EXTENDEDFLAGS);
-		}
+		if (CharWidthEnabled)
+			invalidate_broken_pairs_in_cache(Buf, Shadow, Where, Point);
 	});
 
 	debug_flush();
@@ -265,13 +409,18 @@ void ScreenBuf::FillRect(rectangle Where, const FAR_CHAR_INFO& Info)
 	if (!is_visible(Where))
 		return;
 
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
 	fix_coordinates(Where);
 
-	for_submatrix(Buf, Where, [&Info](FAR_CHAR_INFO& Element)
+	const auto CharWidthEnabled = char_width::is_enabled();
+
+	for_submatrix(Buf, Where, [&](FAR_CHAR_INFO& Element, point const Point)
 	{
 		Element = Info;
+
+		if (CharWidthEnabled)
+			invalidate_broken_pairs_in_cache(Buf, Shadow, Where, Point);
 	});
 
 	SBFlags.Clear(SBFLAGS_FLUSHED);
@@ -279,13 +428,85 @@ void ScreenBuf::FillRect(rectangle Where, const FAR_CHAR_INFO& Info)
 	debug_flush();
 }
 
+void ScreenBuf::Invalidate(flush_type const FlushType)
+{
+	if (flags::check_one(FlushType, flush_type::screen))
+	{
+		SBFlags.Clear(SBFLAGS_FLUSHED);
+		Shadow.vector().assign(Shadow.vector().size(), {});
+	}
+
+	if (flags::check_one(FlushType, flush_type::cursor))
+		SBFlags.Clear(SBFLAGS_FLUSHEDCURPOS | SBFLAGS_FLUSHEDCURTYPE);
+
+	if (flags::check_one(FlushType, flush_type::title))
+		SBFlags.Clear(SBFLAGS_FLUSHEDTITLE);
+}
+
+static void expand_write_region_if_needed(matrix<FAR_CHAR_INFO>& Buf, rectangle& WriteRegion)
+{
+	enum class border
+	{
+		unchecked,
+		expanded,
+		checked
+	};
+
+	auto
+		Left = border::unchecked,
+		Right = border::unchecked;
+
+	for (;;)
+	{
+		auto
+			LeftChanged = false,
+			RightChanged = false;
+
+		for (const auto Row: std::views::iota(WriteRegion.top + 0, WriteRegion.bottom + 1))
+		{
+			const auto RowData = Buf[Row];
+
+			if (
+				const auto& First = RowData[WriteRegion.left];
+				Left != border::checked && WriteRegion.left && (First.Attributes.Flags & COMMON_LVB_TRAILING_BYTE || encoding::utf16::is_low_surrogate(First.Char))
+			)
+			{
+				--WriteRegion.left;
+				Left = border::expanded;
+				LeftChanged = true;
+				break;
+			}
+
+			if (
+				const auto& Last = RowData[WriteRegion.right];
+				Right != border::checked && WriteRegion.right != ScrX && (Last.Attributes.Flags & COMMON_LVB_LEADING_BYTE || encoding::utf16::is_high_surrogate(Last.Char))
+			)
+			{
+				++WriteRegion.right;
+				Right = border::expanded;
+				RightChanged = true;
+				break;
+			}
+		}
+
+		if (!LeftChanged && !RightChanged)
+			break;
+
+		if (!LeftChanged)
+			Left = border::checked;
+
+		if (!RightChanged)
+			Right = border::checked;
+	}
+}
+
 /* "Сбросить" виртуальный буфер на консоль
 */
 void ScreenBuf::Flush(flush_type FlushType)
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
 
-	if (FlushType & flush_type::title && !SBFlags.Check(SBFLAGS_FLUSHEDTITLE))
+	if (flags::check_one(FlushType, flush_type::title) && !SBFlags.Check(SBFLAGS_FLUSHEDTITLE))
 	{
 		console.SetTitle(m_Title);
 		SBFlags.Set(SBFLAGS_FLUSHEDTITLE);
@@ -297,14 +518,16 @@ void ScreenBuf::Flush(flush_type FlushType)
 	if (!console.IsViewportVisible())
 		return;
 
-	if (FlushType & flush_type::screen)
+	if (flags::check_one(FlushType, flush_type::screen))
 	{
+		ShowTime();
+
 		if (!Global->SuppressIndicators)
 		{
 			const auto SetMacroChar = [this](FAR_CHAR_INFO& Where, wchar_t Char, WORD Color)
 			{
 				Where.Char = Char;
-				Where.Attributes = colors::ConsoleColorToFarColor(Color);
+				Where.Attributes = colors::NtColorToFarColor(Color);
 				SBFlags.Clear(SBFLAGS_FLUSHED);
 			};
 
@@ -334,11 +557,6 @@ void ScreenBuf::Flush(flush_type FlushType)
 
 		if (!SBFlags.Check(SBFLAGS_FLUSHED))
 		{
-			if (Global->IsPanelsActive() && Global->Opt->Clock)
-			{
-				ShowTime();
-			}
-
 			std::vector<rectangle> WriteList;
 			bool Changes=false;
 
@@ -373,10 +591,12 @@ void ScreenBuf::Flush(flush_type FlushType)
 			else
 			{
 				bool Started=false;
-				rectangle WriteRegion = { static_cast<int>(Buf.width() - 1), static_cast<int>(Buf.height() - 1), 0, 0 };
+				rectangle WriteRegion{ static_cast<int>(Buf.width() - 1), static_cast<int>(Buf.height() - 1), 0, 0 };
+
+				const auto CharWidthEnabled = char_width::is_enabled();
 
 				auto PtrBuf = Buf.data(), PtrShadow = Shadow.data();
-				for (size_t I = 0, Height = Buf.height(); I < Height; ++I)
+				for (const auto I: std::views::iota(0uz, Buf.height()))
 				{
 					for (size_t J = 0, Width = Buf.width(); J < Width; ++J, ++PtrBuf, ++PtrShadow)
 					{
@@ -397,26 +617,39 @@ void ScreenBuf::Flush(flush_type FlushType)
 								// кстати, и при выключенном тоже (но реже).
 								// баг, конечно, не наш, но что делать.
 								// расширяем область прорисовки влево-вправо на 1 символ:
-								WriteRegion.left = std::max(static_cast<int>(0), static_cast<int>(WriteRegion.left - 1));
-								WriteRegion.right = std::min(static_cast<int>(WriteRegion.right + 1), static_cast<int>(Buf.width() - 1));
+								WriteRegion.left = std::max(0, WriteRegion.left - 1);
+								WriteRegion.right = std::min(WriteRegion.right + 1, static_cast<int>(Buf.width() - 1));
 							}
 
 							bool Merge=false;
 							if (!WriteList.empty())
 							{
 								auto& Last = WriteList.back();
-								const int MAX_DELTA = 5;
-								if (WriteRegion.top - 1 == Last.bottom && ((WriteRegion.left >= Last.left && WriteRegion.left - Last.left < MAX_DELTA) || (Last.right >= WriteRegion.right && Last.right - WriteRegion.right < MAX_DELTA)))
+								const int MAX_DELTA = 1;
+								if (
+									WriteRegion.top - Last.bottom < 1 + MAX_DELTA &&
+									std::abs(WriteRegion.left - Last.left) < MAX_DELTA &&
+									std::abs(WriteRegion.right - Last.right) < MAX_DELTA
+								)
 								{
 									Last.bottom = WriteRegion.bottom;
 									Last.left = std::min(Last.left, WriteRegion.left);
 									Last.right = std::max(Last.right, WriteRegion.right);
+
+									if (CharWidthEnabled)
+										expand_write_region_if_needed(Buf, Last);
+
 									Merge=true;
 								}
 							}
 
 							if (!Merge)
+							{
+								if (CharWidthEnabled)
+									expand_write_region_if_needed(Buf, WriteRegion);
+
 								WriteList.emplace_back(WriteRegion);
+							}
 
 							WriteRegion.left = static_cast<int>(Buf.width() - 1);
 							WriteRegion.top = static_cast<int>(Buf.height() - 1);
@@ -429,13 +662,16 @@ void ScreenBuf::Flush(flush_type FlushType)
 
 				if (Started)
 				{
+					if (CharWidthEnabled)
+						expand_write_region_if_needed(Buf, WriteRegion);
+
 					WriteList.emplace_back(WriteRegion);
 				}
 			}
 
 			if (Changes)
 			{
-				if (IsConsoleSizeChanged())
+				if (IsConsoleViewportSizeChanged())
 				{
 					// We must draw something, but canvas has been changed, drawing on it will make things only worse
 					Changes = false;
@@ -445,13 +681,15 @@ void ScreenBuf::Flush(flush_type FlushType)
 
 			if (Changes)
 			{
-				for (const auto& i: WriteList)
-				{
-					console.WriteOutput(Buf, { i.left, i.top }, i);
-				}
+				// WriteOutput can make changes to the buffer to patch DBSC collisions,
+				// which means that the screen output will effectively be different from Shadow
+				// and certain areas won't be updated properly.
+				// To address this, we allow it to write into the buffer and pass Shadow instead:
 
-				console.Commit();
 				Shadow = Buf;
+
+				console.WriteOutputGather(Shadow, WriteList);
+				console.Commit();
 			}
 
 			if (MacroCharUsed)
@@ -468,7 +706,7 @@ void ScreenBuf::Flush(flush_type FlushType)
 		}
 	}
 
-	if (FlushType & flush_type::cursor)
+	if (flags::check_one(FlushType, flush_type::cursor))
 	{
 		// Example: a dialog with an edit control, dragged beyond the screen
 		const auto IsCursorInBuffer = is_visible(m_CurPos);
@@ -476,7 +714,20 @@ void ScreenBuf::Flush(flush_type FlushType)
 		// Skip setting cursor position if it's not in the viewport to prevent Windows from repositioning the console window
 		if (!SBFlags.Check(SBFLAGS_FLUSHEDCURPOS) && IsCursorInBuffer && console.IsPositionVisible(m_CurPos))
 		{
-			console.SetCursorPosition(m_CurPos);
+			auto CorrectedPosition = m_CurPos;
+
+			if (m_CurPos.x > 0)
+			{
+				const auto& Cell = Buf.at(m_CurPos.y, m_CurPos.x);
+				const auto& PrevCell = Buf.at(m_CurPos.y, m_CurPos.x - 1);
+
+				if (is_valid_surrogate_pair(PrevCell.Char, Cell.Char) || (char_width::is_enabled() && Cell.Attributes.Flags & COMMON_LVB_TRAILING_BYTE))
+				{
+					--CorrectedPosition.x;
+				}
+			}
+
+			console.SetCursorPosition(CorrectedPosition);
 			SBFlags.Set(SBFLAGS_FLUSHEDCURPOS);
 		}
 
@@ -506,18 +757,19 @@ void ScreenBuf::SetLockCount(int Count)
 
 void ScreenBuf::MoveCursor(point const Point)
 {
-	SCOPED_ACTION(std::lock_guard)(CS);
+	SCOPED_ACTION(std::scoped_lock)(CS);
+
+	if (Point == m_CurPos)
+		return;
+
+	m_CurPos = Point;
 
 	if (!is_visible(m_CurPos))
 	{
 		CurVisible = false;
 	}
 
-	if(Point != m_CurPos || !CurVisible)
-	{
-		m_CurPos = Point;
-		SBFlags.Clear(SBFLAGS_FLUSHEDCURPOS);
-	}
+	SBFlags.Clear(SBFLAGS_FLUSHEDCURPOS);
 }
 
 point ScreenBuf::GetCursorPos() const
@@ -573,57 +825,8 @@ void ScreenBuf::RestoreElevationChar()
 	}
 }
 
-//  проскроллировать буфер вверх.
-void ScreenBuf::Scroll(size_t Count)
-{
-	assert(Count);
-
-	SCOPED_ACTION(std::lock_guard)(CS);
-
-	const FAR_CHAR_INFO Fill{ L' ', colors::PaletteColorToFarColor(COL_COMMANDLINEUSERSCREEN) };
-
-	if (Global->Opt->WindowMode)
-	{
-		if (console.IsScrollbackPresent())
-		{
-			rectangle Region = { 0, 0, ScrX, static_cast<int>(Count - 1) };
-
-			// TODO: matrix_view to avoid copying
-			matrix<FAR_CHAR_INFO> BufferBlock(Count, ScrX + 1);
-			Read(Region, BufferBlock);
-
-			console.ScrollNonClientArea(Count, Fill);
-
-			Region.top = -static_cast<int>(Count);
-			Region.bottom = -1;
-			console.WriteOutput(BufferBlock, Region);
-		}
-		else
-		{
-			// Even if there's no scrollback there might be the right area
-			console.ScrollNonClientArea(Count, Fill);
-		}
-	}
-
-	if (Count && Count < Buf.height())
-	{
-		auto& RawBuf = Buf.vector();
-		const auto size = RawBuf.size();
-		RawBuf.erase(RawBuf.begin(), RawBuf.begin() + Count * Buf.width());
-		RawBuf.resize(size, Fill);
-
-		SBFlags.Clear(SBFLAGS_FLUSHED);
-	}
-
-	debug_flush();
-}
-
 void ScreenBuf::SetClearTypeFix(int const ClearTypeFix)
 {
-	// 'New' console doesn't need this
-	if (::console.IsVtSupported())
-		return;
-
 	m_ClearTypeFix = ClearTypeFix;
 }
 

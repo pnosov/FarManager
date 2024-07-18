@@ -214,7 +214,7 @@ class ArcCommand
     ~ArcCommand(); //$ AA 25.11.2001
 
   public:
-    int GetExecCode() {return(ExecCode);};
+    int GetExecCode() {return(ExecCode);}
 };
 
 
@@ -297,7 +297,6 @@ extern const char *SortModes[];
 
 extern DWORD PriorityProcessCode[];
 
-extern OSVERSIONINFO WinVer;
 /*
   Functions
 */

@@ -43,6 +43,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Common:
 #include "common/2d/matrix.hpp"
 #include "common/2d/rectangle.hpp"
+#include "common/function_ref.hpp"
 #include "common/singleton.hpp"
 
 // External:
@@ -78,55 +79,55 @@ enum
 
 enum BOX_DEF_SYMBOLS
 {
-	BS_X_B0,          // 0xB0
-	BS_X_B1,          // 0xB1
-	BS_X_B2,          // 0xB2
-	BS_V1,            // 0xB3
-	BS_R_H1V1,        // 0xB4
-	BS_R_H2V1,        // 0xB5
-	BS_R_H1V2,        // 0xB6
-	BS_RT_H1V2,       // 0xB7
-	BS_RT_H2V1,       // 0xB8
-	BS_R_H2V2,        // 0xB9
-	BS_V2,            // 0xBA
-	BS_RT_H2V2,       // 0xBB
-	BS_RB_H2V2,       // 0xBC
-	BS_RB_H1V2,       // 0xBD
-	BS_RB_H2V1,       // 0xBE
-	BS_RT_H1V1,       // 0xBF
-	BS_LB_H1V1,       // 0xС0
-	BS_B_H1V1,        // 0xС1
-	BS_T_H1V1,        // 0xС2
-	BS_L_H1V1,        // 0xС3
-	BS_H1,            // 0xС4
-	BS_C_H1V1,        // 0xС5
-	BS_L_H2V1,        // 0xС6
-	BS_L_H1V2,        // 0xС7
-	BS_LB_H2V2,       // 0xС8
-	BS_LT_H2V2,       // 0xС9
-	BS_B_H2V2,        // 0xСA
-	BS_T_H2V2,        // 0xСB
-	BS_L_H2V2,        // 0xСC
-	BS_H2,            // 0xСD
-	BS_C_H2V2,        // 0xСE
-	BS_B_H2V1,        // 0xСF
-	BS_B_H1V2,        // 0xD0
-	BS_T_H2V1,        // 0xD1
-	BS_T_H1V2,        // 0xD2
-	BS_LB_H1V2,       // 0xD3
-	BS_LB_H2V1,       // 0xD4
-	BS_LT_H2V1,       // 0xD5
-	BS_LT_H1V2,       // 0xD6
-	BS_C_H1V2,        // 0xD7
-	BS_C_H2V1,        // 0xD8
-	BS_RB_H1V1,       // 0xD9
-	BS_LT_H1V1,       // 0xDA
-	BS_X_DB,          // 0xDB
-	BS_X_DC,          // 0xDC
-	BS_X_DD,          // 0xDD
-	BS_X_DE,          // 0xDE
-	BS_X_DF,          // 0xDF
-	BS_SPACE,         // 0x20
+	BS_X_B0,          // ░
+	BS_X_B1,          // ▒
+	BS_X_B2,          // ▓
+	BS_V1,            // │
+	BS_R_H1V1,        // ┤
+	BS_R_H2V1,        // ╡
+	BS_R_H1V2,        // ╢
+	BS_RT_H1V2,       // ╖
+	BS_RT_H2V1,       // ╕
+	BS_R_H2V2,        // ╣
+	BS_V2,            // ║
+	BS_RT_H2V2,       // ╗
+	BS_RB_H2V2,       // ╝
+	BS_RB_H1V2,       // ╜
+	BS_RB_H2V1,       // ╛
+	BS_RT_H1V1,       // ┐
+	BS_LB_H1V1,       // └
+	BS_B_H1V1,        // ┴
+	BS_T_H1V1,        // ┬
+	BS_L_H1V1,        // ├
+	BS_H1,            // ─
+	BS_C_H1V1,        // ┼
+	BS_L_H2V1,        // ╞
+	BS_L_H1V2,        // ╟
+	BS_LB_H2V2,       // ╚
+	BS_LT_H2V2,       // ╔
+	BS_B_H2V2,        // ╩
+	BS_T_H2V2,        // ╦
+	BS_L_H2V2,        // ╠
+	BS_H2,            // ═
+	BS_C_H2V2,        // ╬
+	BS_B_H2V1,        // ╧
+	BS_B_H1V2,        // ╨
+	BS_T_H2V1,        // ╤
+	BS_T_H1V2,        // ╥
+	BS_LB_H1V2,       // ╙
+	BS_LB_H2V1,       // ╘
+	BS_LT_H2V1,       // ╒
+	BS_LT_H1V2,       // ╓
+	BS_C_H1V2,        // ╫
+	BS_C_H2V1,        // ╪
+	BS_RB_H1V1,       // ┘
+	BS_LT_H1V1,       // ┌
+	BS_X_DB,          // █
+	BS_X_DC,          // ▄
+	BS_X_DD,          // ▌
+	BS_X_DE,          // ▐
+	BS_X_DF,          // ▀
+	BS_SPACE,         // ' '
 
 	BS_COUNT
 };
@@ -152,31 +153,55 @@ int WhereY();
 void MoveCursor(point Point);
 point GetCursorPos();
 void SetCursorType(bool Visible, size_t Size);
+void HideCursor();
+void ShowCursor();
 void SetInitialCursorType();
 void GetCursorType(bool& Visible, size_t& Size);
 void MoveRealCursor(int X,int Y);
-void ScrollScreen(int Count);
 bool DoWeReallyHaveToScroll(short Rows);
+
+struct position_parser_state
+{
+	size_t StringIndex{};
+	size_t VisualIndex{};
+
+	function_ref<void(size_t, size_t)> signal{nullptr};
+};
+
+size_t string_pos_to_visual_pos(string_view Str, size_t StringPos, size_t TabSize, position_parser_state* SavedState = {});
+size_t visual_pos_to_string_pos(string_view Str, size_t VisualPos, size_t TabSize, position_parser_state* SavedState = {});
+
+size_t visual_string_length(string_view Str);
+
+bool is_valid_surrogate_pair(string_view Str);
+bool is_valid_surrogate_pair(wchar_t First, wchar_t Second);
 
 void Text(point Where, const FarColor& Color, string_view Str);
 
-void Text(string_view Str);
-inline void Text(wchar_t const c) { return Text({ &c, 1 }); }
+size_t Text(string_view Str, size_t MaxWidth);
+size_t Text(string_view Str);
 
-void Text(lng MsgId);
+size_t Text(wchar_t Char, size_t MaxWidth);
+size_t Text(wchar_t Char);
 
-void VText(string_view Str);
+size_t Text(lng MsgId, size_t MaxWidth);
+size_t Text(lng MsgId);
 
-void HiText(string_view Str,const FarColor& HiColor, bool isVertText = false);
+size_t VText(string_view Str, size_t MaxWidth);
+size_t VText(string_view Str);
+
+size_t HiText(string_view Str, const FarColor& Color, size_t MaxWidth);
+size_t HiText(string_view Str, const FarColor& Color);
+
+size_t HiVText(string_view Str, const FarColor& Color, size_t MaxWidth);
+size_t HiVText(string_view Str, const FarColor& Color);
+
 void PutText(rectangle Where, const FAR_CHAR_INFO* Src);
 void GetText(rectangle Where, matrix<FAR_CHAR_INFO>& Dest);
 
-void BoxText(string_view Str, bool IsVert = false);
-inline void BoxText(wchar_t const Chr) { return BoxText({ &Chr, 1 }, false); }
-
 void SetScreen(rectangle Where, wchar_t Ch,const FarColor& Color);
-void MakeShadow(rectangle Where);
-void ChangeBlockColor(rectangle Where, const FarColor& Color);
+void MakeShadow(rectangle Where, bool IsLegacy = false);
+void DropShadow(rectangle Where, bool IsLegacy = false);
 void SetColor(int Color);
 void SetColor(PaletteColors Color);
 void SetColor(const FarColor& Color);
@@ -225,35 +250,42 @@ size_t HiStrlen(string_view Str);
 size_t HiFindRealPos(string_view Str, size_t Pos);
 string HiText2Str(string_view Str, size_t* HotkeyVisualPos = {});
 bool HiTextHotkey(string_view Str, wchar_t& Hotkey, size_t* HotkeyVisualPos = {});
-void RemoveHighlights(string& Str);
 
 namespace inplace
 {
+	void remove_highlight(string& Str);
 	void escape_ampersands(string& Str);
 }
 
+string remove_highlight(string Str);
+string remove_highlight(string_view Str);
+string escape_ampersands(string Str);
 string escape_ampersands(string_view Str);
 
 bool IsConsoleFullscreen();
-bool IsConsoleSizeChanged();
+bool IsConsoleViewportSizeChanged();
 
 void SaveNonMaximisedBufferSize(point const& Size);
 point GetNonMaximisedBufferSize();
 
 void AdjustConsoleScreenBufferSize();
 
+void SetPalette();
+
 class consoleicons: public singleton<consoleicons>
 {
 	IMPLEMENTS_SINGLETON;
 
 public:
-	void set_icon();
+	void update_icon();
+	void set_icon(int IconId);
 	void restore_icon();
 
 	size_t size() const;
 
 private:
 	consoleicons() = default;
+	~consoleicons() = default;
 
 	struct icon
 	{
@@ -265,7 +297,7 @@ private:
 	icon m_Small{false};
 };
 
-size_t ConsoleChoice(string_view Message, string_view Choices, size_t Default);
-bool ConsoleYesNo(string_view Message, bool Default);
+size_t ConsoleChoice(string_view Message, string_view Choices, size_t Default, function_ref<void()> MessagePrinter);
+bool ConsoleYesNo(string_view Message, bool Default, function_ref<void()> MessagePrinter);
 
 #endif // INTERF_HPP_A91E1A99_C78E_41EC_B0F8_5C35A6C99116

@@ -96,6 +96,8 @@ struct OpenOptions {
   ArcTypes arc_types;
   std::wstring password;
   int *open_password_len;
+  bool recursive_panel;
+  char delete_on_close;
   OpenOptions();
 };
 
@@ -193,7 +195,6 @@ struct Attr {
 };
 typedef std::list<Attr> AttrList;
 
-int al_round(double d);
 unsigned calc_percent(UInt64 completed, UInt64 total);
 UInt64 get_module_version(const std::wstring& file_path);
 UInt64 parse_size_string(const std::wstring& str);

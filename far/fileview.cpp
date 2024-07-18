@@ -46,7 +46,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fileedit.hpp"
 #include "cmdline.hpp"
 #include "savescr.hpp"
-#include "syslog.hpp"
 #include "interf.hpp"
 #include "keyboard.hpp"
 #include "config.hpp"
@@ -54,6 +53,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "mix.hpp"
 #include "stddlg.hpp"
 #include "macroopcode.hpp"
+#include "notification.hpp"
 #include "plugins.hpp"
 #include "lang.hpp"
 #include "exitcode.hpp"
@@ -62,8 +62,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "pathmix.hpp"
 #include "global.hpp"
 #include "exception.hpp"
+#include "flink.hpp"
+#include "cddrv.hpp"
+#include "codepage.hpp"
 
 // Platform:
+#include "platform.hpp"
+#include "platform.concurrency.hpp"
 #include "platform.fs.hpp"
 
 // Common:
@@ -73,14 +78,80 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
+class FileViewer::f3_key_timer
+{
+public:
+	f3_key_timer():
+		m_Timer(500ms, {}, [this]{ m_Expired = true; })
+	{
+	}
+
+	bool expired() const
+	{
+		return m_Expired;
+	}
+
+private:
+	os::concurrency::timer m_Timer;
+	std::atomic_bool m_Expired{};
+};
+
+class FileViewer::reload_timer
+{
+public:
+	void start(string_view const FileName)
+	{
+		if (!m_UpdatePeriod)
+		{
+			m_UpdatePeriod = [&]
+			{
+				const auto PathRoot = GetPathRoot(FileName);
+
+				switch (os::fs::drive::get_type(PathRoot))
+				{
+				case DRIVE_REMOVABLE: return is_removable_usb(PathRoot)? 1s : 0s;
+				case DRIVE_FIXED:     return 1s;
+				case DRIVE_REMOTE:    return 1s;
+				case DRIVE_CDROM:     return 0s;
+				case DRIVE_RAMDISK:   return 1s;
+				default:              return 0s;
+				}
+			}();
+		}
+
+		if (*m_UpdatePeriod != 0s)
+		{
+			m_ReloadTimer = os::concurrency::timer(*m_UpdatePeriod, *m_UpdatePeriod, [this]
+			{
+				message_manager::instance().notify(m_Listener.GetEventName());
+			});
+		}
+	}
+
+	void stop()
+	{
+		m_ReloadTimer = {};
+	}
+
+private:
+	// Deliberately empty. It doesn't have to do anything,
+	// its only purpose is waking up the main loop
+	// and generating KEY_NONE to reload the file.
+	listener m_Listener{ listener::scope{L"FileView"sv}, [] {}};
+
+	std::optional<std::chrono::milliseconds> m_UpdatePeriod;
+	os::concurrency::timer m_ReloadTimer;
+};
+
 FileViewer::FileViewer(private_tag, bool const DisableEdit, string_view const Title):
 	m_DisableEdit(DisableEdit),
-	m_StrTitle(Title)
+	m_StrTitle(Title),
+	m_ReloadTimer(std::make_unique<reload_timer>())
 {
 }
 
 fileviewer_ptr FileViewer::create(
-	const string& Name,
+	string_view const Name,
 	bool EnableSwitch,
 	bool DisableHistory,
 	bool DisableEdit,
@@ -108,7 +179,7 @@ fileviewer_ptr FileViewer::create(
 
 
 fileviewer_ptr FileViewer::create(
-	const string& Name,
+	string_view const Name,
 	bool EnableSwitch,
 	bool DisableHistory,
 	string_view Title,
@@ -116,8 +187,6 @@ fileviewer_ptr FileViewer::create(
 	uintptr_t aCodePage)
 {
 	const auto FileViewerPtr = std::make_shared<FileViewer>(private_tag(), true, Title);
-
-	_OT(SysLog(L"[%p] FileViewer::FileViewer(II variant...)", this));
 
 	// BUGBUG WHY ALL THIS?
 	if (Position.left < 0)
@@ -152,7 +221,7 @@ fileviewer_ptr FileViewer::create(
 
 
 void FileViewer::Init(
-	const string& Name,
+	string_view const Name,
 	bool const EnableSwitch,
 	bool const DisableHistory,
 	long long const ViewStartPos,
@@ -189,6 +258,11 @@ void FileViewer::Init(
 		return;
 	}
 
+	if (!m_DisableHistory && m_Name != L"-"sv)
+	{
+		Global->CtrlObject->ViewHistory->AddToHistory(m_View->GetFileName(), HR_VIEWER);
+	}
+
 	if (ViewStartPos != -1)
 		m_View->SetFilePos(ViewStartPos);
 
@@ -204,7 +278,9 @@ void FileViewer::Init(
 	}
 
 	ShowConsoleTitle();
-	m_F3KeyOnly=true;
+
+	m_F3Timer = std::make_unique<f3_key_timer>();
+	m_ReloadTimer->start(m_Name);
 
 	if (EnableSwitch)
 	{
@@ -306,12 +382,17 @@ long long FileViewer::VMProcess(int OpCode,void *vParam,long long iParam)
 
 bool FileViewer::ProcessKey(const Manager::Key& Key)
 {
+	if (m_F3Timer)
+	{
+		if (Key() == KEY_F3 && !m_F3Timer->expired())
+			return false;
+
+		m_F3Timer.reset();
+	}
+
 	const auto LocalKey = Key();
 	if (m_RedrawTitle && ((LocalKey & 0x00ffffff) < KEY_END_FKEY || IsInternalKeyReal(LocalKey & 0x00ffffff)))
 		ShowConsoleTitle();
-
-	if (none_of(LocalKey, KEY_F3, KEY_IDLE))
-		m_F3KeyOnly=false;
 
 	switch (LocalKey)
 	{
@@ -367,7 +448,7 @@ bool FileViewer::ProcessKey(const Manager::Key& Key)
 		case KEY_RCTRLO:
 			if (Global->WindowManager->ShowBackground())
 			{
-				SetCursorType(false, 0);
+				HideCursor();
 				WaitKey();
 				Global->WindowManager->RefreshAll();
 			}
@@ -375,9 +456,6 @@ bool FileViewer::ProcessKey(const Manager::Key& Key)
 
 		case KEY_F3:
 		case KEY_NUMPAD5:  case KEY_SHIFTNUMPAD5:
-			if (m_F3KeyOnly)
-				return true;
-			[[fallthrough]];
 		case KEY_ESC:
 		case KEY_F10:
 			Global->WindowManager->DeleteWindow();
@@ -388,9 +466,9 @@ bool FileViewer::ProcessKey(const Manager::Key& Key)
 			{
 				const auto cp = m_View->m_Codepage;
 				const auto strViewFileName = m_View->GetFileName();
-				while(!os::fs::file(strViewFileName, FILE_READ_DATA, FILE_SHARE_READ|(Global->Opt->EdOpt.EditOpenedForWrite?FILE_SHARE_WRITE:0), nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN))
+				while (!os::fs::file(strViewFileName, FILE_READ_DATA, os::fs::file_share_read | (Global->Opt->EdOpt.EditOpenedForWrite? FILE_SHARE_WRITE : 0), nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN))
 				{
-					if (OperationFailed(error_state::fetch(), strViewFileName, lng::MEditTitle, msg(lng::MEditCannotOpen), false) != operation::retry)
+					if (OperationFailed(os::last_error(), strViewFileName, lng::MEditTitle, msg(lng::MEditCannotOpen), false) != operation::retry)
 						return true;
 				}
 				const auto FilePos = m_View->GetFilePos();
@@ -454,7 +532,6 @@ bool FileViewer::ProcessKey(const Manager::Key& Key)
 
 bool FileViewer::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 {
-	m_F3KeyOnly = false;
 	if (!m_View->ProcessMouse(MouseEvent))
 		if (!m_windowKeyBar->ProcessMouse(MouseEvent))
 			return false;
@@ -490,19 +567,15 @@ void FileViewer::SetTempViewName(string_view const Name, bool const DeleteFolder
 
 FileViewer::~FileViewer()
 {
-	_OT(SysLog(L"[%p] ~FileViewer::FileViewer()",this));
 }
 
 void FileViewer::OnDestroy()
 {
-	_OT(SysLog(L"[%p] FileViewer::OnDestroy()",this));
-
 	m_bClosing = true;
 
 	if (!m_DisableHistory && (Global->CtrlObject->Cp()->ActivePanel() || m_Name != L"-"sv))
-	{
 		Global->CtrlObject->ViewHistory->AddToHistory(m_View->GetFileName(), HR_VIEWER);
-	}
+
 	m_View->OnDestroy();
 }
 
@@ -513,8 +586,6 @@ bool FileViewer::CanFastHide() const
 
 int FileViewer::ViewerControl(int Command, intptr_t Param1, void *Param2) const
 {
-	_VCTLLOG(CleverSysLog SL(L"FileViewer::ViewerControl()"));
-	_VCTLLOG(SysLog(L"(Command=%s, Param2=[%d/0x%08X])",_VCTL_ToName(Command),(int)Param2,Param2));
 	const auto result = m_View->ViewerControl(Command, Param1, Param2);
 	if (result&&VCTL_GETINFO==Command)
 	{
@@ -550,7 +621,7 @@ void FileViewer::ShowStatus() const
 	SetColor(COL_VIEWERSTATUS);
 	GotoXY(m_Where.left, m_Where.top);
 
-	auto StatusLine = format(FSTR(L"│{0}│{1:5.5}│{2:<10}│{3:.3} {4:<3}│{5:4}"),
+	auto StatusLine = far::format(L"│{}│{:5.5}│{:<10}│{:.3} {:<3}│{:4}"sv,
 		L"thd"[m_View->m_DisplayMode],
 		ShortReadableCodepageName(m_View->m_Codepage),
 		m_View->FileSize,
@@ -560,7 +631,7 @@ void FileViewer::ShowStatus() const
 	);
 
 	// Explicitly signed types - it's too easy to screw it up on small console sizes otherwise
-	const int ClockSize = Global->Opt->ViewerEditorClock && IsFullScreen()? static_cast<int>(Global->CurrentTime.size()) : 0;
+	const int ClockSize = Global->Opt->Clock && IsFullScreen()? static_cast<int>(Global->CurrentTime.size()) : 0;
 	const int AvailableSpace = std::max(0, ObjWidth() - ClockSize - (ClockSize? 1 : 0));
 	inplace::cut_right(StatusLine, AvailableSpace);
 	const int NameWidth = std::max(0, AvailableSpace - static_cast<int>(StatusLine.size()));
@@ -569,15 +640,18 @@ void FileViewer::ShowStatus() const
 	Text(StatusLine);
 
 	if (ClockSize)
-	{
 		Text(L'│'); // Separator before the clock
-		ShowTime();
-	}
 }
 
 void FileViewer::OnChangeFocus(bool focus)
 {
 	window::OnChangeFocus(focus);
+
+	if (focus)
+		m_ReloadTimer->start(m_Name);
+	else
+		m_ReloadTimer->stop();
+
 	if (!m_bClosing)
 	{
 		Global->CtrlObject->Plugins->ProcessViewerEvent(focus? VE_GOTFOCUS : VE_KILLFOCUS, nullptr, m_View.get());

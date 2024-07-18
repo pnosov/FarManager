@@ -52,17 +52,16 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "plugins.hpp"
 #include "lang.hpp"
 #include "fileattr.hpp"
-#include "string_utils.hpp"
 #include "cvtname.hpp"
 #include "global.hpp"
 #include "exception.hpp"
+#include "log.hpp"
 
 // Platform:
 
 // Common:
 #include "common/enum_tokens.hpp"
 #include "common/from_string.hpp"
-#include "common/function_traits.hpp"
 
 // External:
 #include "format.hpp"
@@ -132,13 +131,7 @@ void ShellUpdatePanels(panel_ptr SrcPanel, bool NeedSetUpADir)
 			//  AnotherPanel->Update(UPDATE_KEEP_SELECTION|UPDATE_SECONDARY);
 			//else
 			{
-				// Сбросим время обновления панели. Если там есть нотификация - обновится сама.
-				if (const auto AnotherFileList = std::dynamic_pointer_cast<FileList>(AnotherPanel))
-				{
-					AnotherFileList->ResetLastUpdateTime();
-				}
-
-				AnotherPanel->UpdateIfChanged(false);
+				AnotherPanel->UpdateIfChanged();
 			}
 		}
 	}
@@ -307,7 +300,7 @@ bool MakePathForUI(DWORD Key, string &strPathName)
 				return false;
 
 			if (Global->Opt->QuotedName & QUOTEDNAME_INSERT)
-				QuoteSpace(strPathName);
+				inplace::QuoteSpace(strPathName);
 
 			return true;
 		}
@@ -321,7 +314,7 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 {
 	// BUGBUG, add error checking
 
-	FN_RETURN_TYPE(DeserialiseViewSettings) Columns;
+	std::vector<column> Columns;
 
 	for (const auto& Type: enum_tokens(ColumnTitles, L","sv))
 	{
@@ -329,8 +322,6 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 			continue;
 
 		column NewColumn{};
-
-		const auto TypeOrig = upper(Type);
 
 		if (Type.front() == L'N')
 		{
@@ -369,10 +360,10 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 			}
 		}
 		else if (
-			starts_with(Type, L"DM"sv) ||
-			starts_with(Type, L"DC"sv) ||
-			starts_with(Type, L"DA"sv) ||
-			starts_with(Type, L"DE"sv))
+			Type.starts_with(L"DM"sv) ||
+			Type.starts_with(L"DC"sv) ||
+			Type.starts_with(L"DA"sv) ||
+			Type.starts_with(L"DE"sv))
 		{
 			switch (Type[1])
 			{
@@ -412,23 +403,24 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 		}
 		else
 		{
-			const auto ItemIterator = std::find_if(CONST_RANGE(ColumnInfo, i) { return Type == i.String; });
+			const auto ItemIterator = std::ranges::find(ColumnInfo, Type, &column_info::String);
 			if (ItemIterator != std::cend(ColumnInfo))
 				NewColumn.type = ItemIterator->Type;
 			else if (Type.size() >= 2 && Type.size() <= 3 && Type.front() == L'C')
 			{
 				size_t Index;
-				if (from_string(string_view(TypeOrig).substr(1), Index))
+				if (from_string(Type.substr(1), Index))
 					NewColumn.type = static_cast<column_type>(static_cast<size_t>(column_type::custom_0) + Index);
 				else
 				{
-					// TODO: diagnostics
+					LOGWARNING(L"Incorrect custom column {}"sv, Type);
+					// TODO: error message?
 				}
 			}
 			else
 			{
-				// Unknown column type
-				// TODO: error message
+				LOGWARNING(L"Unknown column type {}"sv, Type);
+				// TODO: error message?
 				continue;
 			}
 		}
@@ -436,8 +428,8 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 		Columns.emplace_back(NewColumn);
 	}
 
-	const auto EnumWidths = enum_tokens(ColumnWidths, L","sv);
-	auto EnumWidthsRange = range(EnumWidths);
+	enum_tokens const EnumWidths(ColumnWidths, L","sv);
+	std::ranges::subrange EnumWidthsRange(EnumWidths);
 
 	for (auto& i: Columns)
 	{
@@ -445,21 +437,15 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 
 		if (!EnumWidthsRange.empty())
 		{
-			Width = EnumWidthsRange.front();
-			EnumWidthsRange.pop_front();
+			Width = *EnumWidthsRange.begin();
+			EnumWidthsRange.advance(1);
 		}
 
 		// "column types" is a determinant here (see the loop header) so we can't break or continue here -
 		// if "column sizes" ends earlier or if user entered two commas we just use default size.
-		if (Width.empty())
+		if (!Width.empty() && !from_string(Width, i.width))
 		{
-			Width = L"0"sv;
-		}
-
-		if (!from_string(Width, i.width))
-		{
-			// TODO: diagnostics
-			i.width = 0;
+			LOGWARNING(L"Incorrect column width {}"sv, Width);
 		}
 
 		i.width_type = col_width::fixed;
@@ -486,7 +472,7 @@ std::vector<column> DeserialiseViewSettings(string_view const ColumnTitles, stri
 
 std::pair<string, string> SerialiseViewSettings(const std::vector<column>& Columns)
 {
-	FN_RETURN_TYPE(SerialiseViewSettings) Result;
+	std::pair<string, string> Result;
 	auto& [strColumnTitles, strColumnWidths] = Result;
 
 	const auto GetModeSymbol = [](FILEPANEL_COLUMN_FLAGS Mode)
@@ -506,7 +492,8 @@ std::pair<string, string> SerialiseViewSettings(const std::vector<column>& Colum
 		case COLFLAGS_NOEXTENSION:     return L'N';
 		case COLFLAGS_RIGHTALIGNFORCE: return L'F';
 		case COLFLAGS_MARK_DYNAMIC:    return L'D';
-		default:                     throw MAKE_FAR_FATAL_EXCEPTION(format(FSTR(L"Unexpected mode {0}"), as_underlying_type(Mode)));
+		default:
+			throw far_fatal_exception(far::format(L"Unexpected mode {}"sv, std::to_underlying(Mode)));
 		}
 	};
 
@@ -666,25 +653,26 @@ string FormatStr_DateTime(os::chrono::time_point FileTime, column_type const Col
 			break;
 	}
 
-	string strDateStr,strTimeStr;
+	const auto& [Date, Time] = ConvertDate(FileTime, ColumnWidth, FullYear, Brief, TextMonth);
 
-	ConvertDate(FileTime, strDateStr, strTimeStr, ColumnWidth, FullYear, Brief, TextMonth);
+	string OutStr;
 
-	string strOutStr;
 	switch(ColumnType)
 	{
 		case column_type::date:
-			strOutStr=strDateStr;
+			OutStr = Date;
 			break;
+
 		case column_type::time:
-			strOutStr=strTimeStr;
+			OutStr = Time;
 			break;
+
 		default:
-			strOutStr = concat(strDateStr, L' ', strTimeStr);
+			OutStr = concat(Date, L' ', Time);
 			break;
 	}
 
-	return fit_to_right(strOutStr, Width);
+	return fit_to_right(OutStr, Width);
 }
 
 string FormatStr_Size(
@@ -720,7 +708,7 @@ string FormatStr_Size(
 			lng::MListFolder,
 		};
 
-		const auto LabelSize = msg(*std::max_element(ALL_CONST_RANGE(FolderLabels), [](lng a, lng b) { return msg(a).size() < msg(b).size(); })).size();
+		const auto LabelSize = std::ranges::fold_left(FolderLabels, 0uz, [](size_t const Value, lng const Id) { return std::max(Value, msg(Id).size()); });
 
 		string TypeName;
 
@@ -737,26 +725,27 @@ string FormatStr_Size(
 				// Directory Junction or Volume Mount Point
 				case IO_REPARSE_TAG_MOUNT_POINT:
 					{
-						lng ID_Msg = lng::MListJunction;
+						auto ID_Msg = lng::MListJunction;
 						if (Global->Opt->PanelDetailedJunction && !CurDir.empty())
 						{
-							string strLinkName;
-							if (GetReparsePointInfo(path::join(CurDir, PointToName(strName)), strLinkName))
+							if (string strLinkName; GetReparsePointInfo(path::join(CurDir, PointToName(strName)), strLinkName))
 							{
 								NormalizeSymlinkName(strLinkName);
-								bool Root;
-								if(ParsePath(strLinkName, nullptr, &Root) == root_type::volume && Root)
-								{
+
+								if(bool Root; ParsePath(strLinkName, nullptr, &Root) == root_type::volume && Root)
 									ID_Msg = lng::MListVolMount;
-								}
 							}
 						}
-						TypeName=msg(ID_Msg);
+						TypeName = msg(ID_Msg);
 					}
 					break;
 
+				case IO_REPARSE_TAG_SYMLINK:
+					TypeName = msg(lng::MListSymlink);
+					break;
+
 				default:
-					if (!reparse_tag_to_string(ReparseTag, TypeName) && !Global->Opt->ShowUnknownReparsePoint)
+					if (!reparse_tag_to_string(ReparseTag, TypeName, Global->Opt->ShowUnknownReparsePoint) && TypeName.empty())
 						TypeName = msg(lng::MListUnknownReparsePoint);
 					break;
 				}

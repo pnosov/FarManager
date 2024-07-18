@@ -2,12 +2,7 @@
 
 #include "FARCmds.hpp"
 #include "Lang.hpp"
-#include <initguid.h>
 #include "guid.hpp"
-
-#ifndef LIGHTGRAY
-#define LIGHTGRAY 7
-#endif
 
 static wchar_t* getCurrDir(bool winApi)
 {
@@ -37,7 +32,7 @@ static void killTemp(wchar_t *TempFileName)
 	if (FileExists(TempFileName))
 	{
 		DeleteFile(TempFileName);
-		wchar_t *PtrName=(wchar_t*)FSF.PointToName(TempFileName);
+		wchar_t *PtrName=const_cast<wchar_t*>(FSF.PointToName(TempFileName));
 		if (PtrName > TempFileName)
 			*PtrName = 0;
 		RemoveDirectory(TempFileName);
@@ -50,12 +45,10 @@ static HANDLE createFile(wchar_t *Name,int catchOut)
 
 	if (catchOut)
 	{
-		SECURITY_ATTRIBUTES sa;
-		memset(&sa, 0, sizeof(sa));
+		SECURITY_ATTRIBUTES sa{};
 		sa.nLength = sizeof(sa);
-		sa.lpSecurityDescriptor = NULL;
 		sa.bInheritHandle = TRUE;
-		hFile = CreateFile(Name,GENERIC_WRITE,FILE_SHARE_READ,&sa,CREATE_ALWAYS,FILE_FLAG_SEQUENTIAL_SCAN,NULL);
+		hFile = CreateFile(Name,GENERIC_WRITE,FILE_SHARE_READ,&sa,CREATE_ALWAYS,FILE_FLAG_SEQUENTIAL_SCAN,{});
 	}
 	else
 	{
@@ -68,18 +61,21 @@ static HANDLE createFile(wchar_t *Name,int catchOut)
 
 static void createFileStream(const wchar_t *Name,HANDLE hFile,TShowOutputStreamData *sd, HANDLE StdOutput)
 {
-	SECURITY_ATTRIBUTES sa;
-	memset(&sa, 0, sizeof(sa));
+	SECURITY_ATTRIBUTES sa{};
 	sa.nLength = sizeof(sa);
-	sa.lpSecurityDescriptor = NULL;
 	sa.bInheritHandle = TRUE;
 
-	sd->hRead = CreateFile(Name,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,&sa,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,NULL);
+	sd->hRead = CreateFile(Name,GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,&sa,OPEN_EXISTING,FILE_FLAG_SEQUENTIAL_SCAN,{});
 	sd->hWrite   = hFile;
 	sd->hConsole = StdOutput;
 }
 
 #if 0
+
+#ifndef LIGHTGRAY
+#define LIGHTGRAY 7
+#endif
+
 static void clearScreen(HANDLE StdOutput,HANDLE StdInput,CONSOLE_SCREEN_BUFFER_INFO& csbi)
 {
 	wchar_t* Blank=new wchar_t[csbi.dwSize.X+1];
@@ -93,12 +89,12 @@ static void clearScreen(HANDLE StdOutput,HANDLE StdInput,CONSOLE_SCREEN_BUFFER_I
 		Color.ForegroundColor = LIGHTGRAY;
 		Color.BackgroundColor = 0;
 		for (int Y = 0 ; Y < csbi.dwSize.Y ; Y++)
-			Info.Text(0, Y, &Color, Blank);
+			PsInfo.Text(0, Y, &Color, Blank);
 
 		delete[] Blank;
 	}
 
-	Info.Text(0, 0, 0, NULL);
+	PsInfo.Text(0, 0, 0, {});
 }
 
 static void restoreScreen(HANDLE StdOutput,HANDLE StdInput,DWORD ConsoleMode,CONSOLE_SCREEN_BUFFER_INFO& csbi)
@@ -114,7 +110,7 @@ static void restoreScreen(HANDLE StdOutput,HANDLE StdInput,DWORD ConsoleMode,CON
 	dest.X = dest.Y = 0;
 	fill.Char.UnicodeChar = L' ';
 	fill.Attributes = LIGHTGRAY;
-	ScrollConsoleScreenBuffer(StdOutput, &src, NULL, dest, &fill);
+	ScrollConsoleScreenBuffer(StdOutput, &src, {}, dest, &fill);
 }
 #endif
 
@@ -154,51 +150,45 @@ static bool validForView(const wchar_t *FileName, bool viewEmpty, bool editNew)
 	wchar_t *ptrFileName=new wchar_t[lstrlen(FileName)+1];
 	wchar_t *ptrCurDir=nullptr;
 
-	if (ptrFileName)
+	lstrcpy(ptrFileName,FileName);
+
+	if (*ptrFileName && FSF.PointToName(ptrFileName) == ptrFileName)
 	{
-		lstrcpy(ptrFileName,FileName);
+		int dirSize=(int)PsInfo.PanelControl(PANEL_ACTIVE,FCTL_GETPANELDIRECTORY,0,{});
 
-		if (*ptrFileName && FSF.PointToName(ptrFileName) == ptrFileName)
+		if (dirSize)
 		{
-			int dirSize=(int)Info.PanelControl(PANEL_ACTIVE,FCTL_GETPANELDIRECTORY,0,0);
+			const auto dirInfo=reinterpret_cast<FarPanelDirectory*>(new char[dirSize]);
 
-			if (dirSize)
-			{
-			    FarPanelDirectory* dirInfo=(FarPanelDirectory*)new char[dirSize];
-			    if (dirInfo)
-			    {
-				    dirInfo->StructSize = sizeof(FarPanelDirectory);
-					Info.PanelControl(PANEL_ACTIVE,FCTL_GETPANELDIRECTORY,dirSize,dirInfo);
+			dirInfo->StructSize = sizeof(FarPanelDirectory);
+			PsInfo.PanelControl(PANEL_ACTIVE,FCTL_GETPANELDIRECTORY,dirSize,dirInfo);
 
-					int Size=lstrlen(dirInfo->Name)+1;
-					ptrCurDir=new wchar_t[Size+lstrlen(FileName)+8];
-					if (ptrCurDir)
-					{
-						lstrcpy(ptrCurDir,dirInfo->Name);
-						lstrcat(ptrCurDir,L"\\");
-						lstrcat(ptrCurDir,ptrFileName);
+			int Size=lstrlen(dirInfo->Name)+1;
+			ptrCurDir=new wchar_t[Size+lstrlen(FileName)+8];
 
-						delete[] ptrFileName;
-						ptrFileName=ptrCurDir;
-					}
+			lstrcpy(ptrCurDir,dirInfo->Name);
+			lstrcat(ptrCurDir,L"\\");
+			lstrcat(ptrCurDir,ptrFileName);
 
-					delete[](char*)dirInfo;
-				}
-			}
+			delete[] ptrFileName;
+			ptrFileName=ptrCurDir;
+
+			delete[](char*)dirInfo;
 		}
 	}
 
-	if (ptrFileName && *ptrFileName && FileExists(ptrFileName))
+
+	if (*ptrFileName && FileExists(ptrFileName))
 	{
 		if (viewEmpty)
 			Ret = true;
 		else
 		{
-			HANDLE Handle = CreateFile(ptrFileName,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,0,NULL);
+			HANDLE Handle = CreateFile(ptrFileName,GENERIC_READ,FILE_SHARE_READ,{},OPEN_EXISTING,0,{});
 
 			if (Handle != INVALID_HANDLE_VALUE)
 			{
-				DWORD size = GetFileSize(Handle, NULL);
+				DWORD size = GetFileSize(Handle, {});
 				CloseHandle(Handle);
 
 				Ret = size && (size != 0xFFFFFFFF);
@@ -208,11 +198,8 @@ static bool validForView(const wchar_t *FileName, bool viewEmpty, bool editNew)
 	else if (editNew)
 		Ret=true;
 
-	if (ptrCurDir)
-		delete[] ptrCurDir;
-
-	if (ptrFileName)
-		delete[] ptrFileName;
+	delete[] ptrCurDir;
+	delete[] ptrFileName;
 
 	return Ret;
 }
@@ -226,33 +213,31 @@ static DWORD showPartOfOutput(TShowOutputStreamData *sd, bool mainProc)
 	{
 		#define READBUFSIZE 4096
 		wchar_t *ReadBuf=new wchar_t[READBUFSIZE+1];
-		if (ReadBuf)
+
+		DWORD BytesRead = 0;
+		if (ReadFile(sd->hRead, ReadBuf, READBUFSIZE, &BytesRead, {}))
 		{
-			DWORD BytesRead = 0;
-			if (ReadFile(sd->hRead, ReadBuf, READBUFSIZE, &BytesRead, NULL))
+			if (BytesRead)
 			{
-				if (BytesRead)
-				{
-					DWORD dummy;
-					size_t shift=0;
-					ReadBuf[BytesRead] = 0;
-					bool unicode=false;
-					ReadBuf=ConvertBuffer(ReadBuf,BytesRead/sizeof(wchar_t),TRUE,shift,&unicode);
+				DWORD dummy;
+				size_t shift=0;
+				ReadBuf[BytesRead] = 0;
+				bool unicode=false;
+				ReadBuf=ConvertBuffer(ReadBuf,BytesRead/sizeof(wchar_t),TRUE,shift,&unicode);
 
-					WriteConsole(sd->hConsole, ReadBuf+shift, unicode?BytesRead/sizeof(wchar_t):lstrlen(ReadBuf+shift), &dummy, NULL);
+				WriteConsole(sd->hConsole, ReadBuf+shift, unicode?BytesRead/sizeof(wchar_t):lstrlen(ReadBuf+shift), &dummy, {});
 
-					Res = BytesRead;
-				}
+				Res = BytesRead;
 			}
-
-			delete[] ReadBuf;
 		}
+
+		delete[] ReadBuf;
 	}
 
 	return Res;
 }
 
-DWORD WINAPI ThreadWhatUpdateScreen(LPVOID par)
+static DWORD WINAPI ThreadWhatUpdateScreen(LPVOID par)
 {
 	if (par)
 	{
@@ -296,7 +281,7 @@ DWORD WINAPI ThreadWhatUpdateScreen(LPVOID par)
 
 					if (hCheck != INVALID_HANDLE_VALUE)
 					{
-						sCheck[i] = GetFileSize(hCheck, NULL);
+						sCheck[i] = GetFileSize(hCheck, {});
 
 						if (sCheck[i] == 0xFFFFFFFF)
 							sCheck[i] = 0;
@@ -316,7 +301,7 @@ DWORD WINAPI ThreadWhatUpdateScreen(LPVOID par)
 					*buff = 0;
 
 				const wchar_t *MsgItems[] = { td->title, td->cmd, buff };
-				Info.Message(&MainGuid, nullptr, 0, NULL, MsgItems, ARRAYSIZE(MsgItems), 0);
+				PsInfo.Message(&MainGuid, nullptr, 0, {}, MsgItems, ARRAYSIZE(MsgItems), 0);
 			}
 		}
 	}
@@ -333,73 +318,67 @@ static bool MakeTempNames(wchar_t** FileName1, wchar_t** FileName2)
 	// create temp-dir
 	size_t sizeTempName=FSF.MkTemp(nullptr,0,tmpPrefix);
 	wchar_t *NameDir=new wchar_t[sizeTempName+1];
-	if (NameDir)
+
+	FSF.MkTemp(NameDir,sizeTempName,tmpPrefix);
+
+	DeleteFile(NameDir);
+
+	if (CreateDirectory(NameDir, {}))
 	{
-		FSF.MkTemp(NameDir,sizeTempName,tmpPrefix);
+		bool ok = false;
 
-		DeleteFile(NameDir);
+		wchar_t *tempFileName1=nullptr;
+		wchar_t *tempFileName2=nullptr;
 
-		if (CreateDirectory(NameDir, NULL))
+		wchar_t fullcmd[MAX_PATH*2]; // ????
+
+		// create temp-file1
+		if (GetTempFileName(NameDir, tmpPrefix, 0, fullcmd))
 		{
-			bool ok = false;
+			tempFileName1=new wchar_t[lstrlen(fullcmd)+1];
 
-			wchar_t *tempFileName1=nullptr;
-			wchar_t *tempFileName2=nullptr;
+			lstrcpy(tempFileName1, fullcmd);
 
-			wchar_t fullcmd[MAX_PATH*2]; // ????
-
-			// create temp-file1
+			// create temp-file2
 			if (GetTempFileName(NameDir, tmpPrefix, 0, fullcmd))
 			{
-				tempFileName1=new wchar_t[lstrlen(fullcmd)+1];
-				if (tempFileName1)
-				{
-					lstrcpy(tempFileName1, fullcmd);
+				tempFileName2=new wchar_t[lstrlen(fullcmd)+1];
 
-					// create temp-file2
-					if (GetTempFileName(NameDir, tmpPrefix, 0, fullcmd))
-					{
-						tempFileName2=new wchar_t[lstrlen(fullcmd)+1];
-						if (tempFileName2)
-						{
-							lstrcpy(tempFileName2, fullcmd);
-							ok=true;
-						}
-					}
-				}
+				lstrcpy(tempFileName2, fullcmd);
+				ok=true;
 			}
-
-			if (ok)
-			{
-				if (FileName1)
-					*FileName1=tempFileName1;
-
-				if (FileName2)
-					*FileName2=tempFileName2;
-
-				delete[] NameDir;
-				return true;
-			}
-
-			if (tempFileName1)
-			{
-				DeleteFile(tempFileName1);
-				delete[] tempFileName1;
-				tempFileName1=nullptr;
-			}
-
-			if (tempFileName2)
-			{
-				DeleteFile(tempFileName2);
-				delete[] tempFileName2;
-				tempFileName2=nullptr;
-			}
-
-			RemoveDirectory(NameDir);
 		}
 
-		delete[] NameDir;
+		if (ok)
+		{
+			if (FileName1)
+				*FileName1=tempFileName1;
+
+			if (FileName2)
+				*FileName2=tempFileName2;
+
+			delete[] NameDir;
+			return true;
+		}
+
+		if (tempFileName1)
+		{
+			DeleteFile(tempFileName1);
+			delete[] tempFileName1;
+			tempFileName1=nullptr;
+		}
+
+		if (tempFileName2)
+		{
+			DeleteFile(tempFileName2);
+			delete[] tempFileName2;
+			tempFileName2=nullptr;
+		}
+
+		RemoveDirectory(NameDir);
 	}
+
+	delete[] NameDir;
 
 	return false;
 
@@ -445,38 +424,33 @@ static const wchar_t* MakeExecuteString(const wchar_t *Cmd)
 		8
 	];
 
-	if (temp)
+	lstrcpy(temp,COMSPEC);
+
+	if(quoted_par)
+		lstrcat(temp,L"\"");
+
+	if (NewCmdStr)
 	{
-		lstrcpy(temp,COMSPEC);
-
-		if(quoted_par)
+		if(quote_cmd)
 			lstrcat(temp,L"\"");
-
-		if (NewCmdStr)
-		{
-			if(quote_cmd)
-				lstrcat(temp,L"\"");
-			lstrcat(temp,NewCmdStr);
-			if(quote_cmd)
-				lstrcat(temp,L"\"");
-		}
-       	if (NewCmdPar)
-       	{
-			lstrcat(temp,L" ");
-			lstrcat(temp,FSF.Trim(NewCmdPar));
-		}
-
-		if(quoted_par)
+		lstrcat(temp,NewCmdStr);
+		if(quote_cmd)
 			lstrcat(temp,L"\"");
-
-		wchar_t *fullcmd=ExpandEnv(temp,nullptr);
-
-		delete[] temp;
-
-		return fullcmd;
+	}
+    if (NewCmdPar)
+    {
+		lstrcat(temp,L" ");
+		lstrcat(temp,FSF.Trim(NewCmdPar));
 	}
 
-	return nullptr;
+	if(quoted_par)
+		lstrcat(temp,L"\"");
+
+	wchar_t *fullcmd=ExpandEnv(temp,nullptr);
+
+	delete[] temp;
+
+	return fullcmd;
 }
 
 /*
@@ -492,7 +466,7 @@ static wchar_t *loadFile(const wchar_t *fn, DWORD maxSize, BOOL outputtofile, si
 	foundFile = false;
 	shift=0;
 
-	wchar_t *Ptr = NULL;
+	wchar_t *Ptr{};
 
 	wchar_t *Temp=ExpandEnv(fn,nullptr);
 	if (!Temp)
@@ -502,11 +476,6 @@ static wchar_t *loadFile(const wchar_t *fn, DWORD maxSize, BOOL outputtofile, si
 
 	size_t SizeNativePath=FSF.ConvertPath(CPM_NATIVE, Temp, nullptr, 0);
 	wchar_t *FileName=new wchar_t[SizeNativePath+1];
-	if (!FileName)
-	{
-		delete[] Temp;
-		return nullptr;
-	}
 	FSF.ConvertPath(CPM_NATIVE, Temp, FileName, SizeNativePath);
 	delete[] Temp;
 
@@ -515,11 +484,11 @@ static wchar_t *loadFile(const wchar_t *fn, DWORD maxSize, BOOL outputtofile, si
 	if (*FileName && FileExists(FileName))
 	{
 		foundFile = true;
-		HANDLE Handle = CreateFile(FileName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+		HANDLE Handle = CreateFile(FileName, GENERIC_READ, FILE_SHARE_READ, {}, OPEN_EXISTING, 0, {});
 
 		if (Handle != INVALID_HANDLE_VALUE)
 		{
-			DWORD sizeFile=GetFileSize(Handle, NULL);
+			DWORD sizeFile=GetFileSize(Handle, {});
 			DWORD size = (sizeFile+(sizeof(wchar_t)/2)) / sizeof(wchar_t);
 
 			if (size >= maxSize)
@@ -531,22 +500,19 @@ static wchar_t *loadFile(const wchar_t *fn, DWORD maxSize, BOOL outputtofile, si
 			{
 				wchar_t *buff = new wchar_t[size+1];
 
-				if (buff)
+				if (ReadFile(Handle, buff, size, &read, {}) && (read >= sizeof(wchar_t) || (read == 1 && sizeFile == 1)))
 				{
-					if (ReadFile(Handle, buff, size, &read, NULL) && (read >= sizeof(wchar_t) || (read == 1 && sizeFile == 1)))
+					if (read&1)
 					{
-						if (read&1)
-						{
-							buff[read/sizeof(wchar_t)]=buff[read/sizeof(wchar_t)]&0xff;
-							read++;
-						}
-
-						buff[read/sizeof(wchar_t)] = 0;
-						Ptr = buff;
+						buff[read/sizeof(wchar_t)]=buff[read/sizeof(wchar_t)]&0xff;
+						read++;
 					}
-					else
-						delete[] buff;
+
+					buff[read/sizeof(wchar_t)] = 0;
+					Ptr = buff;
 				}
+				else
+					delete[] buff;
 			}
 
 			CloseHandle(Handle);
@@ -624,30 +590,23 @@ static wchar_t* __getContent(int outputtofile,wchar_t *pCmd)
 		if (Ptr)
 		{
 			wchar_t *DestPath=new wchar_t[lstrlen(Ptr+shift)+1];
-			if (DestPath)
-			{
-				lstrcpy(DestPath, Ptr+shift);
-				delete[] Ptr;
 
-				if (!(Ptr=wcschr(DestPath,L'\r')))
-					Ptr=wcschr(DestPath,L'\n');
+			lstrcpy(DestPath, Ptr+shift);
+			delete[] Ptr;
 
-				if (Ptr)
-					*Ptr=0;
-				Ptr=DestPath;
-			}
-			else
-			{
-				delete[] Ptr;
-				Ptr=nullptr;
-			}
+			Ptr = wcschr(DestPath, L'\r');
+			if (!Ptr)
+				Ptr=wcschr(DestPath,L'\n');
+
+			if (Ptr)
+				*Ptr=0;
+			Ptr=DestPath;
 		}
 	}
 	else
 	{
 		Ptr=new wchar_t[lstrlen(pCmd)+1];
-		if (Ptr)
-			lstrcpy(Ptr,pCmd);
+		lstrcpy(Ptr,pCmd);
 	}
 
 	return Ptr;
@@ -667,7 +626,7 @@ wchar_t* __proc_Load(int outputtofile,wchar_t *pCmd)
 		wchar_t *temp=ExpandEnv(Ptr,nullptr);
 		if (temp)
 		{
-			Info.PluginsControl(INVALID_HANDLE_VALUE,PCTL_LOADPLUGIN,PLT_PATH,temp);
+			PsInfo.PluginsControl(INVALID_HANDLE_VALUE,PCTL_LOADPLUGIN,PLT_PATH,temp);
 			delete[] temp;
 		}
 
@@ -702,11 +661,11 @@ wchar_t* __proc_Unload(int outputtofile,wchar_t *pCmd)
 
 		if (guidMode)
 		{
-			HANDLE hPlugin = reinterpret_cast<HANDLE>(Info.PluginsControl(INVALID_HANDLE_VALUE,PCTL_FINDPLUGIN,PFM_GUID,&FindGuid));
+			HANDLE hPlugin = reinterpret_cast<HANDLE>(PsInfo.PluginsControl(INVALID_HANDLE_VALUE,PCTL_FINDPLUGIN,PFM_GUID,&FindGuid));
 
 			if(hPlugin)
 			{
-				Info.PluginsControl(hPlugin,PCTL_UNLOADPLUGIN,0,nullptr);
+				PsInfo.PluginsControl(hPlugin,PCTL_UNLOADPLUGIN,0,nullptr);
 			}
 		}
 		else
@@ -715,9 +674,9 @@ wchar_t* __proc_Unload(int outputtofile,wchar_t *pCmd)
 			wchar_t *temp=ExpandEnv(Ptr,nullptr);
 			if (temp)
 			{
-				HANDLE hPlugin = reinterpret_cast<HANDLE>(Info.PluginsControl(INVALID_HANDLE_VALUE,PCTL_FINDPLUGIN,PFM_MODULENAME,temp));
+				HANDLE hPlugin = reinterpret_cast<HANDLE>(PsInfo.PluginsControl(INVALID_HANDLE_VALUE,PCTL_FINDPLUGIN,PFM_MODULENAME,temp));
 				if(hPlugin)
-					Info.PluginsControl(hPlugin,PCTL_UNLOADPLUGIN,0,nullptr);
+					PsInfo.PluginsControl(hPlugin,PCTL_UNLOADPLUGIN,0,nullptr);
 
 				delete[] temp;
 			}
@@ -769,205 +728,163 @@ wchar_t* __proc_WhereIs(int outputtofile,wchar_t *pCmd,bool Dir)
 	wchar_t *DestPath=nullptr;
 	wchar_t *Ptr=__getContent(outputtofile,pCmd);
 
-	if (Ptr)
+	if (!Ptr)
+		return Ptr;
+
+	FSF.Unquote(Ptr);
+
+	wchar_t *temp=ExpandEnv(Ptr,nullptr);
+
+	wchar_t *Path = nullptr, *FARHOMEPath = nullptr;
+
+	size_t CurDirLength=FSF.GetCurrentDirectory(0,nullptr);
+	int    FARHOMELength=GetEnvironmentVariable(L"FARHOME", FARHOMEPath, 0);
+	int    PathLength=GetEnvironmentVariable(L"PATH", Path, 0);
+
+	int PathExtLength=GetEnvironmentVariable(L"PATHEXT", nullptr, 0);
+	const auto PathExt=new wchar_t[PathExtLength+1];
+
+	GetEnvironmentVariable(L"PATHEXT", PathExt, PathExtLength);
+
+	for (wchar_t* i = PathExt; *i; ++i)
 	{
-		FSF.Unquote(Ptr);
-
-		wchar_t *temp=ExpandEnv(Ptr,nullptr);
-		if (temp)
-		{
-			wchar_t *Path = nullptr, *FARHOMEPath = nullptr;
-
-			size_t CurDirLength=FSF.GetCurrentDirectory(0,nullptr);
-			int    FARHOMELength=GetEnvironmentVariable(L"FARHOME", FARHOMEPath, 0);
-			int    PathLength=GetEnvironmentVariable(L"PATH", Path, 0);
-
-			wchar_t *PathExt = nullptr;
-			int PathExtLength=GetEnvironmentVariable(L"PATHEXT", PathExt, 0);
-			PathExt=new wchar_t[PathExtLength+1];
-			if (PathExt)
-			{
-				GetEnvironmentVariable(L"PATHEXT", PathExt, PathExtLength);
-				wchar_t *pPathExt=PathExt;
-				while(*pPathExt)
-				{
-					if (*pPathExt == L';')
-						*pPathExt=0;
-					pPathExt++;
-				}
-				PathExt[PathExtLength]=0;
-			}
-
-			wchar_t *AllPath=new wchar_t[CurDirLength+FARHOMELength+PathLength+8];
-			if (AllPath)
-			{
-				wchar_t *ptrAllPath=AllPath;
-
-				// 1. Current folder
-				FSF.GetCurrentDirectory(CurDirLength,ptrAllPath);
-				lstrcat(ptrAllPath,L";");
-				ptrAllPath+=lstrlen(ptrAllPath);
-
-				// 2. The directory pointed to by the environment variable %FARHOME%
-				GetEnvironmentVariable(L"FARHOME", ptrAllPath, FARHOMELength);
-				lstrcat(ptrAllPath,L";");
-				ptrAllPath+=lstrlen(ptrAllPath);
-
-				// 3. Folders in the system environment variable #PATH#
-				GetEnvironmentVariable(L"PATH", ptrAllPath, PathLength);
-
-
-				wchar_t *pPathExt=PathExt;
-				wchar_t *ptempFind=nullptr;
-				wchar_t *tempFind=new wchar_t[lstrlen(temp)+(pPathExt?PathExtLength:0)+1];
-
-				if (tempFind)
-				{
-					lstrcpy(tempFind,temp);
-					ptempFind=tempFind+lstrlen(tempFind);
-				}
-
-				for (;;)
-				{
-					DWORD DestPathSize = SearchPath(AllPath,(tempFind?tempFind:temp),nullptr,0,nullptr,nullptr);
-					DestPath=new wchar_t[DestPathSize+1];
-					if (DestPath)
-					{
-						*DestPath=0;
-
-						wchar_t *pFile;
-						SearchPath(AllPath, (tempFind?tempFind:temp), NULL, DestPathSize, DestPath, &pFile);
-
-						if (*DestPath==0) // 4..6
-							SearchPath(NULL, (tempFind?tempFind:temp), NULL, DestPathSize, DestPath, &pFile);
-
-						if (*DestPath)
-						{
-							DWORD FTAttr=GetFileAttributes(DestPath);
-							if (FTAttr != 0xFFFFFFFF)
-							{
-								if ((FTAttr&FILE_ATTRIBUTE_DIRECTORY))
-								{
-									if (Dir)
-										break;
-								}
-								else
-								{
-									break;
-								}
-							}
-						}
-					}
-
-					if (pPathExt)
-					{
-						pPathExt+=lstrlen(pPathExt)+1;
-						if (!*pPathExt)
-							break;
-						if (ptempFind)
-							lstrcpy(ptempFind,pPathExt);
-					}
-					else
-						break;
-				}
-
-				if (tempFind)
-					delete[] tempFind;
-
-				delete[] AllPath;
-			}
-
-			// 7..8 Contents of the registry key
-			if (!DestPath || !*DestPath)
-			{
-				if (DestPath)
-					delete[] DestPath;
-				DestPath=nullptr;
-
-				wchar_t *pPathExt=PathExt;
-				wchar_t *ptempFind=nullptr;
-				wchar_t *tempFind=new wchar_t[lstrlen(Ptr)+(pPathExt?PathExtLength:0)+1];
-
-				if (tempFind)
-				{
-					lstrcpy(tempFind,Ptr);
-					ptempFind=tempFind+lstrlen(tempFind);
-				}
-
-				const wchar_t RegPath[]=L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\";
-
-				bool found=false;
-				while (!found)
-				{
-					wchar_t *FullKeyName=new wchar_t[lstrlen(RegPath)+lstrlen(tempFind?tempFind:Ptr)+1];
-					if (FullKeyName)
-					{
-						lstrcpy(FullKeyName,RegPath);
-						lstrcat(FullKeyName,(tempFind?tempFind:Ptr));
-
-						HKEY RootFindKey[2]={HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE},hKey;
-						for (size_t I=0; I < ARRAYSIZE(RootFindKey); ++I)
-						{
-							if (RegOpenKeyEx(RootFindKey[I], FullKeyName, 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
-							{
-								DWORD Type, DestPathSize=0;
-								if (RegQueryValueEx(hKey,L"", nullptr, nullptr, nullptr, &DestPathSize) == ERROR_SUCCESS)
-								{
-									DestPath=new wchar_t[DestPathSize+1];
-									if (DestPath)
-									{
-										RegQueryValueEx(hKey,L"", 0, &Type, (LPBYTE) DestPath, &DestPathSize);
-										delete[] Ptr;
-										Ptr=ExpandEnv(DestPath,nullptr);
-										delete[] DestPath;
-										found=true;
-									}
-								}
-								RegCloseKey(hKey);
-								break;
-							}
-						}
-
-						delete[] FullKeyName;
-					}
-					else
-					{
-						delete[] Ptr;
-						Ptr=nullptr;
-					}
-
-					if (pPathExt)
-					{
-						pPathExt+=lstrlen(pPathExt)+1;
-						if (!*pPathExt)
-							break;
-						if (ptempFind)
-							lstrcpy(ptempFind,pPathExt);
-					}
-					else
-						break;
-				}
-				if (tempFind)
-					delete[] tempFind;
-			}
-			else
-			{
-				delete[] Ptr;
-				Ptr=DestPath;
-			}
-
-			if (PathExt)
-				delete[] PathExt;
-
-			delete[] temp;
-		}
-		else
-		{
-			delete[] Ptr;
-			Ptr=nullptr;
-		}
+		if (*i == L';')
+			*i = 0;
 	}
 
+	PathExt[PathExtLength]=0;
+
+	wchar_t *AllPath=new wchar_t[CurDirLength+FARHOMELength+PathLength+8];
+
+	wchar_t *ptrAllPath=AllPath;
+
+	// 1. Current folder
+	FSF.GetCurrentDirectory(CurDirLength,ptrAllPath);
+	lstrcat(ptrAllPath,L";");
+	ptrAllPath+=lstrlen(ptrAllPath);
+
+	// 2. The directory pointed to by the environment variable %FARHOME%
+	GetEnvironmentVariable(L"FARHOME", ptrAllPath, FARHOMELength);
+	lstrcat(ptrAllPath,L";");
+	ptrAllPath+=lstrlen(ptrAllPath);
+
+	// 3. Folders in the system environment variable #PATH#
+	{
+	GetEnvironmentVariable(L"PATH", ptrAllPath, PathLength);
+
+	wchar_t *pPathExt=PathExt;
+	wchar_t* tempFind = new wchar_t[lstrlen(temp) + PathExtLength + 1];
+
+	lstrcpy(tempFind,temp);
+	const auto ptempFind=tempFind+lstrlen(tempFind);
+
+	for (;;)
+	{
+		DWORD DestPathSize = SearchPath(AllPath, tempFind, nullptr, 0, nullptr, nullptr);
+		DestPath=new wchar_t[DestPathSize+1];
+
+		*DestPath=0;
+
+		wchar_t *pFile;
+		SearchPath(AllPath, tempFind, {}, DestPathSize, DestPath, &pFile);
+
+		if (*DestPath==0) // 4..6
+			SearchPath({}, tempFind, {}, DestPathSize, DestPath, &pFile);
+
+		if (*DestPath)
+		{
+			DWORD FTAttr=GetFileAttributes(DestPath);
+			if (FTAttr != 0xFFFFFFFF)
+			{
+				if ((FTAttr&FILE_ATTRIBUTE_DIRECTORY))
+				{
+					if (Dir)
+						break;
+				}
+				else
+				{
+					break;
+				}
+			}
+		}
+
+		pPathExt+=lstrlen(pPathExt)+1;
+		if (!*pPathExt)
+			break;
+		lstrcpy(ptempFind,pPathExt);
+	}
+
+	delete[] tempFind;
+	delete[] AllPath;
+	}
+
+	// 7..8 Contents of the registry key
+	if (!DestPath || !*DestPath)
+	{
+		delete[] DestPath;
+		DestPath=nullptr;
+
+		wchar_t *pPathExt=PathExt;
+		wchar_t* tempFind = new wchar_t[lstrlen(Ptr) + PathExtLength + 1];
+
+		lstrcpy(tempFind,Ptr);
+		const auto ptempFind=tempFind+lstrlen(tempFind);
+
+		const wchar_t RegPath[]=L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\";
+		const auto RegPathLength = lstrlen(RegPath);
+
+		bool found=false;
+		while (!found)
+		{
+			wchar_t *FullKeyName = new wchar_t[RegPathLength + lstrlen(tempFind) + 1];
+
+			lstrcpy(FullKeyName,RegPath);
+			lstrcat(FullKeyName, tempFind);
+
+			HKEY RootFindKey[2]={HKEY_CURRENT_USER,HKEY_LOCAL_MACHINE},hKey;
+			for (size_t I=0; I < ARRAYSIZE(RootFindKey); ++I)
+			{
+				if (RegOpenKeyEx(RootFindKey[I], FullKeyName, 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
+				{
+					DWORD Type, DestPathSize=0;
+					if (RegQueryValueEx(hKey,L"", nullptr, nullptr, nullptr, &DestPathSize) == ERROR_SUCCESS)
+					{
+						DestPath=new wchar_t[DestPathSize+1];
+
+						RegQueryValueEx(hKey, L"", {}, & Type, (LPBYTE)DestPath, & DestPathSize);
+						delete[] Ptr;
+						Ptr=ExpandEnv(DestPath,nullptr);
+						delete[] DestPath;
+						found=true;
+					}
+					RegCloseKey(hKey);
+					break;
+				}
+			}
+
+			delete[] FullKeyName;
+
+			if (pPathExt)
+			{
+				pPathExt+=lstrlen(pPathExt)+1;
+				if (!*pPathExt)
+					break;
+				lstrcpy(ptempFind,pPathExt);
+			}
+			else
+				break;
+		}
+
+		delete[] tempFind;
+	}
+	else
+	{
+		delete[] Ptr;
+		Ptr=DestPath;
+	}
+
+	delete[] PathExt;
+	delete[] temp;
 
 	return Ptr;
 }
@@ -977,7 +894,7 @@ bool __proc_Link(int /*outputtofile*/,wchar_t *pCmd)
 	bool Ret=false;
 	bool NeedSymLink=false;
 	MKLINK_FLAGS LinkFlags=MLF_NONE;
-	wchar_t *Arg2=NULL;
+	wchar_t *Arg2{};
 
 	while (*pCmd && *pCmd == L'/')
 	{
@@ -1050,12 +967,9 @@ bool __proc_Link(int /*outputtofile*/,wchar_t *pCmd)
 	{
 		size_t tempSize=FSF.ConvertPath(CPM_FULL, pCmd, nullptr, 0);
 		wchar_t *temp=new wchar_t[tempSize+1];
-		if (temp)
-		{
-			FSF.ConvertPath(CPM_FULL, pCmd, temp, tempSize);
-			FTAttr=GetFileAttributes(temp);
-			delete[] temp;
-		}
+		FSF.ConvertPath(CPM_FULL, pCmd, temp, tempSize);
+		FTAttr=GetFileAttributes(temp);
+		delete[] temp;
 	}
 
 	if (Arg2)
@@ -1100,7 +1014,7 @@ static wchar_t *GetEditParam(wchar_t *farcmd, int &StartLine, int &StartChar, bo
 		wchar_t *oBracket=farcmd;
 		wchar_t *cBracket=wcschr(oBracket,L']');
 		wchar_t *ptrSep=wcsstr(oBracket,Opt.Separator);
-		if (cBracket && (!ptrSep || (ptrSep && cBracket<ptrSep)))
+		if (cBracket && (!ptrSep || cBracket < ptrSep))
 		{
 			wchar_t *comma=wcschr(oBracket,L',');
 			if (comma)
@@ -1141,10 +1055,10 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 	const wchar_t *PrefHlp=L"Contents";
 	BOOL showhelp=TRUE;
 
-	static wchar_t farcmdbuf[MAX_PATH*10]; // BUGBUG!!!
+	static wchar_t farcmdbuf[8192 - MAX_PATH];
 
 	wchar_t *farcmd=farcmdbuf;
-	lstrcpy(farcmdbuf, _farcmd);
+	lstrcpyn(farcmdbuf, _farcmd, ARRAYSIZE(farcmdbuf));
 	FSF.RTrim(farcmdbuf);
 
 	if (lstrlen(farcmd) > 3)
@@ -1155,7 +1069,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 		int StartLine=-1, StartChar=-1;
 		int outputtofile=0;
 		BOOL allOK=TRUE;
-		wchar_t *pCmd=NULL;
+		wchar_t *pCmd{};
 
 		enum PrefType {
 			prefNone,
@@ -1234,11 +1148,9 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 					//     ^pCmd
 					*pCmd = 0;
 					runFile=new wchar_t[lstrlen(farcmd)+1];
-					if (runFile)
-					{
-						lstrcpy(runFile, farcmd);
-						FSF.Trim(runFile);
-					}
+
+					lstrcpy(runFile, farcmd);
+					FSF.Trim(runFile);
 					*pCmd = L'<';
 					farcmd = pCmd;
 					// <command
@@ -1332,13 +1244,12 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 						case prefLink: //link [/msg] [/n] источник назначение
 						{
 							if (!__proc_Link(outputtofile,pCmd))
-								Info.ShowHelp(Info.ModuleName,PrefHlp,0);
+								PsInfo.ShowHelp(PsInfo.ModuleName,PrefHlp,0);
 							return nullptr;
 						}
 						default:
 						{
 							//HANDLE hScreen = INVALID_HANDLE_VALUE;
-							wchar_t *cmd=nullptr;
 
 							if (outputtofile)
 							{
@@ -1369,23 +1280,20 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 								}
 							}
 
+							wchar_t* cmd = nullptr;
+
 							wchar_t *temp=new wchar_t[lstrlen(pCmd)+1];
-							if (temp)
+
+							lstrcpy(temp,pCmd);
+
+							if (!outputtofile)
+								FSF.Unquote(temp);
+
+							wchar_t *EpxTemp=ExpandEnv(temp,nullptr);
+							if (EpxTemp)
 							{
-								lstrcpy(temp,pCmd);
-
-								if (!outputtofile)
-									FSF.Unquote(temp);
-
-								if (temp)
-								{
-									wchar_t *EpxTemp=ExpandEnv(temp,nullptr);
-									if (EpxTemp)
-									{
-										delete[] temp;
-										temp=EpxTemp;
-									}
-								}
+								delete[] temp;
+								temp=EpxTemp;
 							}
 
 							const wchar_t *titleOut=L"", *titleErr=L"";
@@ -1394,12 +1302,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 							{
 								size_t SizeFullPath=FSF.ConvertPath(CPM_FULL, temp, nullptr, 0);
 								pTempFileNameOut=new wchar_t[SizeFullPath+1];
-								if (pTempFileNameOut)
-								{
-									FSF.ConvertPath(CPM_FULL, temp, pTempFileNameOut, SizeFullPath);
-								}
-								else
-									allOK = FALSE;
+								FSF.ConvertPath(CPM_FULL, temp, pTempFileNameOut, SizeFullPath);
 							}
 							else // <Start process>
 							{
@@ -1431,17 +1334,14 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 											size_t sizeRunFile=FSF.ConvertPath(CPM_FULL,pTempFileNameErrExp,nullptr,0);
 
 											pTempFileNameErr=new wchar_t[sizeRunFile+1];
-											if (pTempFileNameErr)
-											{
-												FSF.ConvertPath(CPM_FULL,pTempFileNameErrExp,pTempFileNameErr,sizeRunFile);
 
-												pTempFileNameOut=new wchar_t[lstrlen(pTempFileNameErr)+1];
-												if (pTempFileNameOut)
-												{
-													lstrcpy(pTempFileNameOut,pTempFileNameErr);
-													allOK = TRUE;
-												}
-											}
+											FSF.ConvertPath(CPM_FULL,pTempFileNameErrExp,pTempFileNameErr,sizeRunFile);
+
+											pTempFileNameOut=new wchar_t[lstrlen(pTempFileNameErr)+1];
+
+											lstrcpy(pTempFileNameOut,pTempFileNameErr);
+											allOK = TRUE;
+
 											delete[] pTempFileNameErrExp;
 
 										}
@@ -1462,7 +1362,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 									allOK = FALSE;
 
-									wchar_t *cmd=temp;
+									cmd=temp;
 									const wchar_t* fullcmd=MakeExecuteString(cmd);
 
 									if (catchStdOutput && catchStdError)
@@ -1506,16 +1406,16 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 										TThreadData *td = nullptr;
 
-										//if (ShowCmdOutput == scoHide) hScreen = Info.SaveScreen(0, 0, -1, -1);
+										//if (ShowCmdOutput == scoHide) hScreen = PsInfo.SaveScreen(0, 0, -1, -1);
 
 										if (ShowCmdOutput)
-											Info.PanelControl(INVALID_HANDLE_VALUE, FCTL_GETUSERSCREEN,0,0);
+											PsInfo.PanelControl(INVALID_HANDLE_VALUE, FCTL_GETUSERSCREEN,0,{});
 
 										//if (ShowCmdOutput) clearScreen(StdOutput,StdInput,csbi); // ??? CHECK
 
 										if (ShowCmdOutput) // <+ || <<
 										{
-											Info.Text(0, 0, 0, NULL);
+											PsInfo.Text(0, 0, {}, {});
 
 											COORD C;
 											C.X = 0;
@@ -1529,22 +1429,19 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 											// данные для нитки параллельного вывода
 											td = new TThreadData;
 
-											if (td)
+											td->type = enThreadShowOutput;
+
+											for (int i = 0 ; i < enStreamMAX ; i++)
 											{
-												td->type = enThreadShowOutput;
-
-												for (int i = 0 ; i < enStreamMAX ; i++)
-												{
-													TShowOutputStreamData *sd = &(td->stream[i]);
-													sd->hRead = sd->hWrite = sd->hConsole = INVALID_HANDLE_VALUE;
-												}
-
-												if (catchStdError && pTempFileNameErr)
-													createFileStream(pTempFileNameErr,FileHandleErr,&(td->stream[enStreamErr]),StdOutput);
-
-												if (catchStdOutput && pTempFileNameOut)
-													createFileStream(pTempFileNameOut,FileHandleOut,&(td->stream[enStreamOut]),StdOutput);
+												TShowOutputStreamData *sd = &(td->stream[i]);
+												sd->hRead = sd->hWrite = sd->hConsole = INVALID_HANDLE_VALUE;
 											}
+
+											if (catchStdError && pTempFileNameErr)
+												createFileStream(pTempFileNameErr,FileHandleErr,&(td->stream[enStreamErr]),StdOutput);
+
+											if (catchStdOutput && pTempFileNameOut)
+												createFileStream(pTempFileNameOut,FileHandleOut,&(td->stream[enStreamOut]),StdOutput);
 										}
 
 										wchar_t *SaveDir=nullptr;
@@ -1566,10 +1463,9 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 										wchar_t* CurDir=getCurrDir(tempDir?true:false);
 
-										BOOL Created=CreateProcess(NULL,(LPWSTR)fullcmd,NULL,NULL,TRUE,0,NULL,CurDir,&si,&pi);
+										BOOL Created=CreateProcess({},const_cast<LPWSTR>(fullcmd),{},{},TRUE,0,{},CurDir,&si,&pi);
 
-										if (CurDir)
-											delete[] CurDir;
+										delete[] CurDir;
 
 										if (Created)
 										{
@@ -1604,7 +1500,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 												{
 													td->type = enThreadHideOutput;
 													lstrcpyn(td->title, GetMsg(MConfig), ARRAYSIZE(td->title)-1);
-													lstrcpyn(td->cmd, cmd?cmd:L"", ARRAYSIZE(td->cmd)-1);
+													lstrcpyn(td->cmd, cmd, ARRAYSIZE(td->cmd)-1);
 													td->stream[enStreamOut].hWrite = FileHandleOut;
 													td->stream[enStreamErr].hWrite = FileHandleErr;
 
@@ -1645,17 +1541,16 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 										if (ShowCmdOutput)// == scoShowAll)
 										{
-											Info.PanelControl(INVALID_HANDLE_VALUE, FCTL_SETUSERSCREEN,0,0);
-											Info.AdvControl(&MainGuid,ACTL_REDRAWALL, 0, nullptr);
+											PsInfo.PanelControl(INVALID_HANDLE_VALUE, FCTL_SETUSERSCREEN,0,{});
+											PsInfo.AdvControl(&MainGuid,ACTL_REDRAWALL, 0, nullptr);
 										}
 
 
-										//if (ShowCmdOutput == scoHide && hScreen != INVALID_HANDLE_VALUE) Info.RestoreScreen(hScreen);
+										//if (ShowCmdOutput == scoHide && hScreen != INVALID_HANDLE_VALUE) PsInfo.RestoreScreen(hScreen);
 
 									}
 
-									if (fullcmd)
-										delete[] fullcmd;
+									delete[] fullcmd;
 
 									SetConsoleMode(GetStdHandle(STD_OUTPUT_HANDLE), OutMode);
 									SetConsoleMode(GetStdHandle(STD_ERROR_HANDLE), ErrMode);
@@ -1664,7 +1559,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 								if (PrefIdx == prefView || PrefIdx == prefEdit)
 								{
-									if (catchStdError && ((catchStdOutput && catchSeparate) || !catchStdOutput))
+									if (catchStdError && (!catchStdOutput || catchSeparate))
 										titleErr = GetMsg(MStdErr);
 
 									if (catchStdError && catchStdOutput && catchSeparate)
@@ -1690,7 +1585,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 											if (validForView(pTempFileNameErr, outputtofile?Opt.ViewZeroFiles!=0:true, false))
 											{
 												MakeVETitle te(titleErr, cmd);
-												Info.Viewer(pTempFileNameErr,outputtofile?te.Get():NULL,0,0,-1,-1,Flags,CP_DEFAULT);
+												PsInfo.Viewer(pTempFileNameErr,outputtofile?te.Get():nullptr,0,0,-1,-1,Flags,CP_DEFAULT);
 											}
 											else if (outputtofile)
 												killTemp(pTempFileNameErr);
@@ -1699,7 +1594,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 										if (validForView(pTempFileNameOut, outputtofile?Opt.ViewZeroFiles!=0:true, false))
 										{
 											MakeVETitle to(titleOut, cmd);
-											Info.Viewer(pTempFileNameOut,outputtofile?to.Get():NULL,0,0,-1,-1,Flags,CP_DEFAULT);
+											PsInfo.Viewer(pTempFileNameOut,outputtofile?to.Get():nullptr,0,0,-1,-1,Flags,CP_DEFAULT);
 										}
 										else if (outputtofile)
 											killTemp(pTempFileNameOut);
@@ -1721,7 +1616,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 											if (validForView(pTempFileNameErr, outputtofile?Opt.ViewZeroFiles!=0:true, Opt.EditNewFiles!=0))
 											{
 												MakeVETitle te(titleErr, cmd);
-												Info.Editor(pTempFileNameErr,outputtofile?te.Get():NULL,0,0,-1,-1,Flags,StartLine,StartChar,CP_DEFAULT);
+												PsInfo.Editor(pTempFileNameErr,outputtofile?te.Get():nullptr,0,0,-1,-1,Flags,StartLine,StartChar,CP_DEFAULT);
 											}
 											else if (outputtofile)
 												killTemp(pTempFileNameErr);
@@ -1730,7 +1625,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 										if (validForView(pTempFileNameOut, outputtofile?Opt.ViewZeroFiles!=0:true, Opt.EditNewFiles!=0))
 										{
 											MakeVETitle to(titleOut, cmd);
-											Info.Editor(pTempFileNameOut,outputtofile?to.Get():NULL,0,0,-1,-1,Flags,StartLine,StartChar,CP_DEFAULT);
+											PsInfo.Editor(pTempFileNameOut,outputtofile?to.Get():nullptr,0,0,-1,-1,Flags,StartLine,StartChar,CP_DEFAULT);
 										}
 										else if (outputtofile)
 											killTemp(pTempFileNameOut);
@@ -1754,8 +1649,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 										wchar_t *Ptr = loadFile(pTempFileNameOut, Opt.MaxDataSize/sizeof(wchar_t), outputtofile, shift, foundFile);
 
 										FSF.CopyToClipboard(FCT_STREAM,Ptr?Ptr+shift:nullptr);
-										if (Ptr)
-											delete[] Ptr;
+										delete[] Ptr;
 
 										break;
 									}
@@ -1766,12 +1660,12 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 								/*if (ShowCmdOutput == scoShowAll)
 								{
-									Info.PanelControl(INVALID_HANDLE_VALUE, FCTL_SETUSERSCREEN,0,0);
-									Info.AdvControl(&MainGuid,ACTL_REDRAWALL, 0, nullptr);
+									PsInfo.PanelControl(INVALID_HANDLE_VALUE, FCTL_SETUSERSCREEN,0,{});
+									PsInfo.AdvControl(&MainGuid,ACTL_REDRAWALL, 0, nullptr);
 								}*/
 
 								//if (ShowCmdOutput == scoShow && hScreen != INVALID_HANDLE_VALUE)
-								//	Info.RestoreScreen(hScreen);
+								//	PsInfo.RestoreScreen(hScreen);
 
 							} // </"Show" result>
 
@@ -1791,8 +1685,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 								delete[] pTempFileNameErr;
 							}
 
-							if (temp)
-								delete[] temp;
+							delete[] temp;
 						} // default:
 
 					} // </switch (PrefIdx)>
@@ -1807,7 +1700,7 @@ wchar_t* OpenFromCommandLine(const wchar_t *_farcmd)
 
 	if (showhelp)
 	{
-		Info.ShowHelp(Info.ModuleName,PrefHlp,0);
+		PsInfo.ShowHelp(PsInfo.ModuleName,PrefHlp,0);
 		return nullptr;
 	}
 

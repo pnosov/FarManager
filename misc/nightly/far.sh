@@ -22,7 +22,7 @@ mkdir -p $OUTDIR/obj
 mkdir -p $OUTDIR/cod
 mkdir -p ${BOOTSTRAPDIR}
 
-ls *.cpp *.hpp *.c *.rc | gawk -f ./scripts/mkdep.awk - | unix2dos > ${BOOTSTRAPDIR}far.vc.dep
+ls *.cpp *.hpp *.c *.rc | gawk -f ./scripts/mkdep.awk - | unix2dos > ${BOOTSTRAPDIR}far.dep
 
 M4CMDP="$M4CMD -DFARBIT=$DIRBIT"
 
@@ -41,12 +41,18 @@ dos2unix FarHun.hlf.m4
 dos2unix FarPol.hlf.m4
 dos2unix FarGer.hlf.m4
 dos2unix FarUkr.hlf.m4
+dos2unix FarCze.hlf.m4
+dos2unix FarSky.hlf.m4
 gawk -f ./scripts/mkhlf.awk FarEng.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarEng.hlf
 gawk -f ./scripts/mkhlf.awk FarRus.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarRus.hlf
 gawk -f ./scripts/mkhlf.awk FarHun.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarHun.hlf
 gawk -f ./scripts/mkhlf.awk FarPol.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarPol.hlf
 gawk -f ./scripts/mkhlf.awk FarGer.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarGer.hlf
 gawk -f ./scripts/mkhlf.awk FarUkr.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarUkr.hlf
+gawk -f ./scripts/mkhlf.awk FarCze.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarCze.hlf
+gawk -f ./scripts/mkhlf.awk FarSky.hlf.m4 | $M4CMDP | unix2dos -m > $OUTDIR/FarSky.hlf
+
+gawk -f ./scripts/sqlite_version.awk -v target=${BOOTSTRAPDIR}sqlite_version.h thirdparty/sqlite/sqlite3.h
 
 wine tools/lng.generator.exe -nc -oh ${BOOTSTRAPDIR} -ol $OUTDIR ${BOOTSTRAPDIR}farlang.templ
 
@@ -56,11 +62,11 @@ cd ..
 
 ( \
 cp $2/$OUTDIR/File_id.diz $2/$OUTDIR/Far.exe $2/$OUTDIR/*.hlf $2/$OUTDIR/Far.map $2/$OUTDIR/Far.pdb $2/$OUTDIR/*.lng $BINDIR/ && \
+cp $2/$OUTDIR/sqlite3.dll $2/$OUTDIR/sqlite3.map $2/$OUTDIR/sqlite3.pdb $BINDIR/ && \
 cp $2/Include/*.hpp $BINDIR/PluginSDK/Headers.c/ && \
 cp $2/../far.git/plugins/common/unicode/DlgBuilder.hpp $BINDIR/PluginSDK/Headers.c/ && \
 cp $2/Include/*.pas $BINDIR/PluginSDK/Headers.pas/ && \
 cp -f $2/changelog $BINDIR/ && \
-cp -f $2/changelog_eng $BINDIR/ && \
 cp -f $2/Far.exe.example.ini $BINDIR/ \
 ) || return 1
 
@@ -81,19 +87,20 @@ $M4CMD -DINPUT=PluginW.pas headers.m4 | unix2dos > Include/PluginW.pas
 $M4CMD -DINPUT=FarColorW.pas headers.m4 | unix2dos > Include/FarColorW.pas
 
 unix2dos -m changelog
-unix2dos -m changelog_eng
 unix2dos Far.exe.example.ini
 
 cd ..
 
-(buildfar2 32 $1 && buildfar2 64 $1) || return 1
+(buildfar2 32 $1 && buildfar2 64 $1 && buildfar2 ARM64 $1) || return 1
 
 return 0
 }
 
 rm -fR far
+rm -fR _build
 ( \
 	cp -R far.git/far ./ && \
+	cp -R far.git/_build ./ && \
 	buildfar far \
 ) || exit 1
 

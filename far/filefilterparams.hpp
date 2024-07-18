@@ -56,17 +56,17 @@ enum
 	DEFAULT_SORT_GROUP = 10000,
 };
 
-enum enumFileFilterFlagsType: int
+enum class filter_area: int
 {
 	// Keep the order
-	FFFT_LEFTPANEL,
-	FFFT_RIGHTPANEL,
-	FFFT_FINDFILE,
-	FFFT_COPY,
-	FFFT_SELECT,
-	FFFT_CUSTOM,
+	panel_left,
+	panel_right,
+	find_file,
+	copy,
+	select,
+	custom,
 
-	FFFT_COUNT
+	count
 };
 
 enum enumFileFilterFlags
@@ -96,8 +96,7 @@ public:
 
 	explicit operator bool() const;
 
-	template<typename callable>
-	decltype(auto) visit(const callable& Callable) const
+	decltype(auto) visit(const auto& Callable) const
 	{
 		return m_Relative?
 			Callable(m_After, m_Before) :
@@ -129,7 +128,7 @@ public:
 	void SetColors(const highlight::element& Colors);
 	void SetSortGroup(int SortGroup) { FHighlight.SortGroup = SortGroup; }
 	void SetContinueProcessing(bool bContinueProcessing) { FHighlight.bContinueProcessing = bContinueProcessing; }
-	void SetFlags(enumFileFilterFlagsType FType, DWORD Flags) { FFlags[FType] = Flags; }
+	void SetFlags(filter_area FType, DWORD Flags) { FFlags[static_cast<size_t>(FType)] = Flags; }
 	void ClearAllFlags() { FFlags.fill(0); }
 
 	const string& GetTitle() const;
@@ -142,10 +141,10 @@ public:
 	bool  GetHardLinks(DWORD *HardLinksAbove, DWORD *HardLinksBelow) const;
 	bool  GetAttr(os::fs::attributes* AttrSet, os::fs::attributes* AttrClear) const;
 	highlight::element GetColors() const;
-	wchar_t GetMarkChar() const;
+	const string& GetMark() const;
 	int   GetSortGroup() const { return FHighlight.SortGroup; }
 	bool  GetContinueProcessing() const { return FHighlight.bContinueProcessing; }
-	DWORD GetFlags(enumFileFilterFlagsType FType) const { return FFlags[FType]; }
+	DWORD GetFlags(filter_area FType) const { return FFlags[static_cast<size_t>(FType)]; }
 	void RefreshMask() {if(FMask.Used) FMask.FilterMask.assign(FMask.strMask, FMF_SILENT);}
 
 
@@ -204,14 +203,14 @@ private:
 	struct
 	{
 		highlight::element Colors;
-		int SortGroup{};
+		int SortGroup{ DEFAULT_SORT_GROUP };
 		bool bContinueProcessing{};
 	} FHighlight;
 
-	std::array<DWORD, FFFT_COUNT> FFlags{};
+	std::array<DWORD, static_cast<size_t>(filter_area::count)> FFlags{};
 };
 
-bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig=false);
+bool FileFilterConfig(FileFilterParams& Filter, bool ColorConfig = false);
 
 //Централизованная функция для создания строк меню различных фильтров.
 string MenuString(const FileFilterParams* FF, bool bHighlightType = false, wchar_t Hotkey = 0, bool bPanelType = false, string_view FMask = {}, string_view Title = {});

@@ -4,32 +4,9 @@ SRCS = \
 	auto_sz.cpp \
 	EMenu.cpp \
 	FarMenu.cpp \
-	MenuDlg.cpp \
 	OleThread.cpp \
 	Pidl.cpp \
 	Plugin.cpp
 
-DOCS = \
-	EMenuEng.hlf \
-	EMenuRus.hlf \
-	EMenuPol.hlf \
-	EMenuEng.lng \
-	EMenuRus.lng \
-	EMenuSky.lng \
-	EMenuSpa.lng \
-	EMenuIta.lng \
-	EMenuPol.lng \
-	EMenuBel.lng \
-	Hotkey.lua \
-	HotkeyClipboard.lua \
-	HotkeyProperties.lua \
-	Hotkey.farconfig \
-	changelog
-
-USERLIBS= -luuid
-
-include ../../far/makefile_gcc_common
-
 include ../makefile_gcc_def_inc
-
 include ../makefile_gcc_target_inc

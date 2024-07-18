@@ -1,13 +1,14 @@
-![Logo](https://raw.githubusercontent.com/FarGroup/FarManager/master/far/Far.ico)
+|[Polski](README-PL.md)|[Русский](README-RU.md)|
+|-|-|
+
+[![Header][logo-img]][logo-url]
 
 ### Far Manager
-https://www.farmanager.com
-
-| | AppVeyor | Travis | Azure |
-|-|-|-|-|
-| VS | [![AppVeyor](https://ci.appveyor.com/api/projects/status/6pca73evwo3oxvr9?svg=true)](https://ci.appveyor.com/project/FarGroup/farmanager/history) | [![Travis CI](https://img.shields.io/travis/FarGroup/FarManager.svg?logo=travis)](https://travis-ci.com/FarGroup/FarManager/builds) | [![Azure Pipelines](https://img.shields.io/azure-devops/build/FarGroup/66d0ddcf-a098-4b98-9470-1c90632c4ba3/1.svg?logo=azuredevops)](https://dev.azure.com/FarGroup/FarManager/_build?definitionId=1) |
-| GCC | [![AppVeyor](https://ci.appveyor.com/api/projects/status/k7ln3edp8nt5aoay?svg=true)](https://ci.appveyor.com/project/FarGroup/farmanager-5lhsj/history) | [![Travis CI](https://img.shields.io/travis/FarGroup/FarManager.svg?logo=travis)](https://travis-ci.com/FarGroup/FarManager/builds) | TBD |
-| Clang | [![AppVeyor](https://ci.appveyor.com/api/projects/status/pvwnc6gc5tjlpmti?svg=true)](https://ci.appveyor.com/project/FarGroup/farmanager-tgu1s/history) | [![Travis CI](https://img.shields.io/travis/FarGroup/FarManager.svg?logo=travis)](https://travis-ci.com/FarGroup/FarManager/builds) | TBD |
+| | AppVeyor | Azure |
+|-|-|-|
+| VS | [![AppVeyor][VS-AppVeyor-img]][VS-AppVeyor-url] | [![Azure Pipelines][VS-Azure-img]][VS-Azure-url] |
+| GCC | [![AppVeyor][GCC-AppVeyor-img]][GCC-AppVeyor-url] | TBD |
+| Clang | [![AppVeyor][Clang-AppVeyor-img]][Clang-AppVeyor-url] | TBD |
 
 
 ### Far Manager — what is it?
@@ -24,23 +25,34 @@ The functionality of Far Manager is greatly extended by external DLL modules —
 
 
 #### Support forum
-https://enforum.farmanager.com/  
+https://enforum.farmanager.com/<br/>
 https://forum.farmanager.com/
 
 #### Bug tracker
 https://bugs.farmanager.com/
 
 #### Developers mailing list (english)
-https://groups.google.com/group/fardeven  
+https://groups.google.com/group/fardeven<br/>
 <fardeven@googlegroups.com>
 
 #### Developers mailing list (russian)
-https://groups.google.com/group/fardev  
+https://groups.google.com/group/fardev<br/>
 <fardev@googlegroups.com>
 
 #### Commits mailing list
-https://groups.google.com/group/farcommits  
+https://groups.google.com/group/farcommits<br/>
 <farcommits@googlegroups.com>
 
 #### Source code
 https://github.com/FarGroup/FarManager
+
+[logo-img]: ./logo.svg
+[logo-url]: https://www.farmanager.com
+[VS-AppVeyor-img]: https://ci.appveyor.com/api/projects/status/6pca73evwo3oxvr9?svg=true
+[VS-AppVeyor-url]: https://ci.appveyor.com/project/FarGroup/farmanager/history
+[GCC-AppVeyor-img]: https://ci.appveyor.com/api/projects/status/k7ln3edp8nt5aoay?svg=true
+[GCC-AppVeyor-url]: https://ci.appveyor.com/project/FarGroup/farmanager-5lhsj/history
+[Clang-AppVeyor-img]: https://ci.appveyor.com/api/projects/status/pvwnc6gc5tjlpmti?svg=true
+[Clang-AppVeyor-url]: https://ci.appveyor.com/project/FarGroup/farmanager-tgu1s/history
+[VS-Azure-img]: https://img.shields.io/azure-devops/build/FarGroup/66d0ddcf-a098-4b98-9470-1c90632c4ba3/1.svg?logo=azuredevops
+[VS-Azure-url]: https://dev.azure.com/FarGroup/FarManager/_build?definitionId=1

@@ -51,11 +51,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 struct execute_info
 {
 	enum class wait_mode { no_wait, if_needed, wait_finish };
-	enum class source_mode { unknown, known };
+	enum class source_mode { unknown, known, known_executable, known_external };
 	enum class echo { disabled, enabled, ignored };
 
 	string Command;
 	string DisplayCommand;
+	string Directory;
 	wait_mode WaitMode{ wait_mode::if_needed };
 	source_mode SourceMode{ source_mode::unknown };
 	bool RunAs{};
@@ -63,7 +64,7 @@ struct execute_info
 	bool UseAssociations{ true };
 };
 
-class CommandLine:public SimpleScreenObject
+class CommandLine final: public SimpleScreenObject
 {
 public:
 	explicit CommandLine(window_ptr Owner);
@@ -72,6 +73,7 @@ public:
 	bool ProcessKey(const Manager::Key& Key) override;
 	bool ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent) override;
 	long long VMProcess(int OpCode, void* vParam = nullptr, long long iParam=0) override;
+	void ResizeConsole() override;
 
 	const string& GetCurDir() const { return m_CurDir; }
 	void SetCurDir(string_view CurDir);

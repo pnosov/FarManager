@@ -8,271 +8,209 @@ Temporary panel miscellaneous utility functions
 #include "plugin.hpp"
 
 #include "TmpPanel.hpp"
-#include <initguid.h>
 #include "guid.hpp"
 
-const wchar_t *GetMsg(int MsgId)
+#include <enum_tokens.hpp>
+#include <scope_exit.hpp>
+#include <smart_ptr.hpp>
+#include <string_utils.hpp>
+
+const wchar_t* GetMsg(int MsgId)
 {
-	return(Info.GetMsg(&MainGuid,MsgId));
+	return(PsInfo.GetMsg(&MainGuid, MsgId));
 }
 
-void FreePanelItems(PluginPanelItem *Items, size_t Total)
+std::pair<string_view, string_view> ParseParam(string_view Str)
 {
-	if (Items)
-	{
-		for (size_t I=0; I<Total; I++)
-		{
-			if (Items[I].Owner)
-				free((void*)Items[I].Owner);
+	if (!Str.starts_with(L'|'))
+		return {};
 
-			if (Items[I].FileName)
-				free((void*)Items[I].FileName);
-		}
+	auto Param = Str.substr(1);
+	const auto ParamEnd = Param.find(L'|');
+	if (ParamEnd == Param.npos)
+		return {};
 
-		free(Items);
-	}
+	const auto Tail = trim_left(Param.substr(ParamEnd + 1));
+	Param.remove_suffix(Param.size() - ParamEnd);
+
+	return { Param, Tail };
 }
 
-wchar_t *ParseParam(wchar_t *& str)
+void GoToFile(const string& Target, bool AnotherPanel)
 {
-	wchar_t* p=str;
-	wchar_t* parm=NULL;
+	const auto CleanTarget = unquote(trim(string_view(Target)));
+	const string Name = FSF.PointToName(CleanTarget.c_str());
+	const string Dir = CleanTarget.substr(0, CleanTarget.size() - Name.size());
 
-	if (*p==L'|')
+	const auto PanelHandle = AnotherPanel? PANEL_PASSIVE : PANEL_ACTIVE;
+
+	if (!Dir.empty())
 	{
-		parm=++p;
-		p=wcschr(p,L'|');
-
-		if (p)
-		{
-			*p=L'\0';
-			str=p+1;
-			FSF.LTrim(str);
-			return parm;
-		}
+		FarPanelDirectory dirInfo = { sizeof(dirInfo), Dir.c_str() };
+		PsInfo.PanelControl(PanelHandle, FCTL_SETPANELDIRECTORY, 0, &dirInfo);
 	}
 
-	return NULL;
-}
+	PanelInfo PInfo{ sizeof(PanelInfo) };
+	PsInfo.PanelControl(PanelHandle, FCTL_GETPANELINFO, 0, &PInfo);
 
-void GoToFile(const wchar_t *Target, BOOL AnotherPanel)
-{
-	HANDLE  _PANEL_HANDLE = AnotherPanel?PANEL_PASSIVE:PANEL_ACTIVE;
-	PanelRedrawInfo PRI = {sizeof(PanelRedrawInfo)};
-	PanelInfo PInfo = {sizeof(PanelInfo)};
-	int pathlen;
-	const wchar_t *p = FSF.PointToName(const_cast<wchar_t*>(Target));
-	StrBuf Name(lstrlen(p)+1);
-	lstrcpy(Name,p);
-	pathlen=(int)(p-Target);
-	StrBuf Dir(pathlen+1);
+	PanelRedrawInfo PRI{ sizeof(PanelRedrawInfo) };
+	PRI.CurrentItem = PInfo.CurrentItem;
+	PRI.TopPanelItem = PInfo.TopPanelItem;
 
-	if (pathlen)
-		memcpy(Dir.Ptr(),Target,pathlen*sizeof(wchar_t));
-
-	Dir[pathlen]=L'\0';
-	FSF.Trim(Name);
-	FSF.Trim(Dir);
-	FSF.Unquote(Name);
-	FSF.Unquote(Dir);
-
-	if (*Dir.Ptr())
+	for (size_t J = 0; J < PInfo.ItemsNumber; J++)
 	{
-		FarPanelDirectory dirInfo = {sizeof(dirInfo), Dir, nullptr, {}, nullptr};
-		Info.PanelControl(_PANEL_HANDLE, FCTL_SETPANELDIRECTORY, 0, &dirInfo);
-	}
+		const size_t Size = PsInfo.PanelControl(PanelHandle, FCTL_GETPANELITEM, J, {});
+		const block_ptr<PluginPanelItem> ppi(Size);
+		FarGetPluginPanelItem gpi{ sizeof(gpi), Size, ppi.data() };
+		PsInfo.PanelControl(PanelHandle, FCTL_GETPANELITEM, J, &gpi);
 
-	Info.PanelControl(_PANEL_HANDLE,FCTL_GETPANELINFO,0,&PInfo);
-	PRI.CurrentItem=PInfo.CurrentItem;
-	PRI.TopPanelItem=PInfo.TopPanelItem;
-
-	for (size_t J=0; J < PInfo.ItemsNumber; J++)
-	{
-		size_t Size=Info.PanelControl(_PANEL_HANDLE,FCTL_GETPANELITEM,J,0);
-		PluginPanelItem* PPI=(PluginPanelItem*)malloc(Size);
-
-		if (PPI)
+		if (!FSF.LStricmp(Name.c_str(), FSF.PointToName(ppi->FileName)))
 		{
-			FarGetPluginPanelItem gpi={sizeof(FarGetPluginPanelItem), Size, PPI};
-			Info.PanelControl(_PANEL_HANDLE,FCTL_GETPANELITEM,J,&gpi);
-		}
-
-
-		if (!FSF.LStricmp(Name,FSF.PointToName((PPI?PPI->FileName:NULL))))
-		{
-			PRI.CurrentItem=J;
-			PRI.TopPanelItem=J;
-			free(PPI);
+			PRI.CurrentItem = J;
+			PRI.TopPanelItem = J;
 			break;
 		}
-		free(PPI);
 	}
 
-	Info.PanelControl(_PANEL_HANDLE,FCTL_REDRAWPANEL,0,&PRI);
+	PsInfo.PanelControl(PanelHandle, FCTL_REDRAWPANEL, 0, &PRI);
 }
 
-void WFD2FFD(WIN32_FIND_DATA &wfd, PluginPanelItem &ffd)
+void WFD2FFD(const WIN32_FIND_DATA& wfd, PluginPanelItem& ffd, string* NameData)
 {
-	ffd.FileAttributes=wfd.dwFileAttributes;
-	ffd.CreationTime=wfd.ftCreationTime;
-	ffd.LastAccessTime=wfd.ftLastAccessTime;
-	ffd.LastWriteTime=wfd.ftLastWriteTime;
-	ffd.FileSize = wfd.nFileSizeHigh;
-	ffd.FileSize <<= 32;
-	ffd.FileSize |= wfd.nFileSizeLow;
+	ffd.FileAttributes = wfd.dwFileAttributes;
+	ffd.CreationTime = wfd.ftCreationTime;
+	ffd.LastAccessTime = wfd.ftLastAccessTime;
+	ffd.LastWriteTime = wfd.ftLastWriteTime;
+	ffd.FileSize = make_integer<unsigned long long>(wfd.nFileSizeLow, wfd.nFileSizeHigh);
 	ffd.AllocationSize = 0;
-	ffd.FileName = wcsdup(wfd.cFileName);
-	ffd.AlternateFileName = NULL;
+	ffd.Reserved[0] = wfd.dwReserved0;
+	ffd.Reserved[1] = wfd.dwReserved1;
+	ffd.AlternateFileName = {};
+
+	if (NameData)
+	{
+		*NameData = wfd.cFileName;
+		ffd.FileName = NameData->c_str();
+	}
 }
 
-wchar_t* FormNtPath(const wchar_t* path, StrBuf& buf)
+static void ReplaceSlashToBackslash(string& Str)
 {
-	int l = lstrlen(path);
-
-	if (l > 4 && path[0] == L'\\' && path[1] == L'\\')
-	{
-		if ((path[2] == L'?' || path[2] == L'.') && path[3] == L'\\')
-		{
-			buf.Grow(l + 1);
-			lstrcpy(buf, path);
-		}
-		else
-		{
-			buf.Grow(6 + l + 1);
-			lstrcpy(buf, L"\\\\?\\UNC\\");
-			lstrcat(buf, path + 2);
-		}
-	}
-	else
-	{
-		buf.Grow(4 + l + 1);
-		lstrcpy(buf, L"\\\\?\\");
-		lstrcat(buf, path);
-	}
-
-	// slash -> backslash
-	for (wchar_t* ch = buf; *ch; ch++)
-		if (*ch == L'/')
-			*ch = L'\\';
-
-	return buf;
+	std::replace(ALL_RANGE(Str), L'/', L'\\');
 }
 
-wchar_t* ExpandEnvStrs(const wchar_t* input, StrBuf& output)
+string FormNtPath(string_view Path)
 {
-	output.Grow(NT_MAX_PATH);
-	size_t size = ExpandEnvironmentStrings(input, output, (DWORD)output.Size());
-
-	if (size > output.Size())
+	if (Path.size() > 4 && Path[0] == L'\\' && Path[1] == L'\\')
 	{
-		output.Grow(size);
-		size = ExpandEnvironmentStrings(input, output, (DWORD)output.Size());
+		if ((Path[2] == L'?' || Path[2] == L'.') && Path[3] == L'\\')
+			return string(Path);
+
+		string Str(Path.substr(2));
+		ReplaceSlashToBackslash(Str);
+		return L"\\\\?\\UNC\\"sv + Str;
 	}
 
-	if ((size == 0) || (size > output.Size()))
-	{
-		output.Grow(lstrlen(input) + 1);
-		lstrcpy(output, input);
-	}
-
-	return output;
+	string Str(Path);
+	ReplaceSlashToBackslash(Str);
+	return L"\\\\?\\"sv + Str;
 }
 
-bool FindListFile(const wchar_t *FileName, StrBuf &output)
+string ExpandEnvStrs(const string_view Input)
 {
-	StrBuf Path;
-	DWORD dwSize;
-	StrBuf FullPath;
-	GetFullPath(FileName, FullPath);
-	StrBuf NtPath;
-	FormNtPath(FullPath, NtPath);
-	const wchar_t *final=NULL;
+	string Result(MAX_PATH, 0);
+	const null_terminated_t C_Input(Input);
 
-	if (GetFileAttributes(NtPath) != INVALID_FILE_ATTRIBUTES)
+	for (;;)
 	{
-		output.Grow(FullPath.Size());
-		lstrcpy(output, FullPath);
-		return true;
+		const size_t Size = ExpandEnvironmentStrings(C_Input.c_str(), Result.data(), static_cast<DWORD>(Result.size()));
+		if (!Size)
+			return {};
+
+		const auto CurrentSize = Result.size();
+		Result.resize(Size - 1);
+		if (Size - 1 <= CurrentSize)
+			return Result;
 	}
-
-	{
-		const wchar_t *tmp = FSF.PointToName(Info.ModuleName);
-		Path.Grow(tmp-Info.ModuleName+1);
-		lstrcpyn(Path,Info.ModuleName,(int)(tmp-Info.ModuleName+1));
-		dwSize=SearchPath(Path,FileName,NULL,0,NULL,NULL);
-
-		if (dwSize)
-		{
-			final = Path;
-			goto success;
-		}
-	}
-
-	ExpandEnvStrs(L"%FARHOME%;%PATH%",Path);
-
-	for (wchar_t *str=Path, *p=wcschr(Path,L';'); *str; p=wcschr(str,L';'))
-	{
-		if (p)
-			*p = 0;
-
-		FSF.Unquote(str);
-		FSF.Trim(str);
-
-		if (*str)
-		{
-			dwSize=SearchPath(str,FileName,NULL,0,NULL,NULL);
-
-			if (dwSize)
-			{
-				final = str;
-				goto success;
-			}
-		}
-
-		if (p)
-			str = p+1;
-		else
-			break;
-	}
-
-	return false;
-success:
-	output.Grow(dwSize);
-	SearchPath(final,FileName,NULL,dwSize,output,NULL);
-	return true;
 }
 
-wchar_t* GetFullPath(const wchar_t* input, StrBuf& output)
+static string search_path(const string& Path, const string& Filename)
 {
-	output.Grow(MAX_PATH);
-	size_t size = FSF.ConvertPath(CPM_FULL, input, output, output.Size());
-
-	if (size > output.Size())
+	for (string Result(MAX_PATH, 0);;)
 	{
-		output.Grow(size);
-		FSF.ConvertPath(CPM_FULL, input, output, output.Size());
-	}
+		const auto Size = SearchPath(Path.c_str(), Filename.c_str(), {}, static_cast<DWORD>(Result.size()), Result.data(), {});
+		if (!Size)
+			return {};
 
-	return output;
+		const auto CurrentSize = Result.size();
+		Result.resize(Size);
+		if (Size <= CurrentSize)
+			return Result;
+	}
 }
 
-bool IsTextUTF8(const char* Buffer,size_t Length)
+string FindListFile(const string& Filename)
 {
-	bool Ascii=true;
-	size_t Octets=0;
+	const auto FullPath = GetFullPath(Filename);
+	const auto NtPath = FormNtPath(FullPath);
+
+	if (GetFileAttributes(NtPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+		return FullPath;
+
+	{
+		const auto NamePtr = FSF.PointToName(PsInfo.ModuleName);
+		const string Path(PsInfo.ModuleName, NamePtr - PsInfo.ModuleName);
+
+		if (auto Result = search_path(Path, Filename); !Result.empty())
+			return Result;
+	}
+
+	for (const auto& Path: enum_tokens_with_quotes(ExpandEnvStrs(L"%FARHOME%;%PATH%"sv), L";"sv))
+	{
+		if (Path.empty())
+			continue;
+
+		if (auto Result = search_path(string(Path), Filename); !Result.empty())
+			return Result;
+	}
+
+	return {};
+}
+
+string GetFullPath(string_view Input)
+{
+	string Result(MAX_PATH, 0);
+
+	for (const null_terminated_t C_Input(Input);;)
+	{
+		const size_t Size = FSF.ConvertPath(CPM_FULL, C_Input.c_str(), Result.data(), Result.size());
+		if (!Size)
+			return {};
+
+		const auto CurrentSize = Result.size();
+		Result.resize(Size);
+		if (Size <= CurrentSize)
+			return Result;
+	}
+}
+
+bool IsTextUTF8(const char* Buffer, size_t Length)
+{
+	bool Ascii = true;
+	size_t Octets = 0;
 	size_t LastOctetsPos = 0;
 	const size_t MaxCharSize = 4;
 
-	for (size_t i=0; i<Length; i++)
+	for (size_t i = 0; i < Length; i++)
 	{
-		BYTE c=Buffer[i];
+		BYTE c = Buffer[i];
 
-		if (c&0x80)
-			Ascii=false;
+		if (c & 0x80)
+			Ascii = false;
 
 		if (Octets)
 		{
-			if ((c&0xC0)!=0x80)
+			if ((c & 0xC0) != 0x80)
 				return false;
 
 			Octets--;
@@ -281,9 +219,9 @@ bool IsTextUTF8(const char* Buffer,size_t Length)
 		{
 			LastOctetsPos = i;
 
-			if (c&0x80)
+			if (c & 0x80)
 			{
-				while (c&0x80)
+				while (c & 0x80)
 				{
 					c <<= 1;
 					Octets++;
@@ -298,4 +236,86 @@ bool IsTextUTF8(const char* Buffer,size_t Length)
 	}
 
 	return (!Octets || Length - LastOctetsPos < MaxCharSize) && !Ascii;
+}
+
+static bool isDevice(const string_view Filename, const string_view DevicePrefix)
+{
+	if (Filename.size() <= DevicePrefix.size())
+		return false;
+
+	if (FSF.LStrnicmp(Filename.data(), DevicePrefix.data(), DevicePrefix.size()))
+		return false;
+
+	const auto Tail = Filename.substr(DevicePrefix.size());
+	return std::ranges::all_of(Tail, std::iswdigit);
+}
+
+bool GetFileInfoAndValidate(const string_view FilePath, PluginPanelItem& FindData, string& NameData, const bool Any)
+{
+	const auto ExpFilePath = ExpandEnvStrs(FilePath);
+	const auto [ParamPart, FileNamePart] = ParseParam(ExpFilePath);
+	const auto FileName = FileNamePart.empty()? ExpFilePath : FileNamePart;
+
+	if (FileName.empty())
+		return false;
+
+	const auto FullPath = GetFullPath(FileName);
+	const auto NtPath = FormNtPath(FullPath);
+
+	if (FileName.starts_with(L"\\\\.\\") && FSF.LIsAlpha(FileName[4]) && FileName[5] == L':' && FileName[6] == 0)
+	{
+		FindData.FileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+		NameData = FileName;
+		FindData.FileName = NameData.c_str();
+		return true;
+	}
+
+	if (isDevice(FileName, L"\\\\.\\PhysicalDrive"sv) || isDevice(FileName, L"\\\\.\\cdrom"sv))
+	{
+		FindData.FileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+		NameData = FileName;
+		FindData.FileName = NameData.c_str();
+		return true;
+	}
+
+	const auto Attr = GetFileAttributes(NtPath.c_str());
+
+	if (Attr == INVALID_FILE_ATTRIBUTES)
+	{
+		if (!Any)
+			return false;
+
+		FindData.FileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+		NameData = FileName;
+		FindData.FileName = NameData.c_str();
+		return true;
+	}
+
+	WIN32_FIND_DATA wfd{};
+	const auto Find = FindFirstFile(NtPath.c_str(), &wfd);
+
+	if (Find != INVALID_HANDLE_VALUE)
+	{
+		SCOPE_EXIT{ FindClose(Find); };
+
+		WFD2FFD(wfd, FindData, {});
+		NameData = FullPath;
+		FindData.FileName = NameData.c_str();
+		return true;
+	}
+
+	wfd.dwFileAttributes = Attr;
+	const auto File = CreateFile(NtPath.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, {}, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_POSIX_SEMANTICS, {});
+	if (File != INVALID_HANDLE_VALUE)
+	{
+		SCOPE_EXIT{ CloseHandle(File); };
+
+		GetFileTime(File, &wfd.ftCreationTime, &wfd.ftLastAccessTime, &wfd.ftLastWriteTime);
+		wfd.nFileSizeLow = GetFileSize(File, &wfd.nFileSizeHigh);
+	}
+
+	WFD2FFD(wfd, FindData, {});
+	NameData = FullPath;
+	FindData.FileName = NameData.c_str();
+	return true;
 }

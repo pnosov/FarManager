@@ -42,7 +42,6 @@ private:
 	mutable str_view saved;
 
 public:
-	~View() noexcept {}
 	View(const char *_Beg, const char *_End) noexcept : str_view(_Beg, _End), saved(_Beg) {}
 
 	void save_start(const int offset = 0) const noexcept { saved.ps = ps + offset; }
@@ -132,7 +131,7 @@ parseRet parse(const char *xml, size_t size, const IParseCallback* cb)
 					do { c = s.get_next(); } while (c != '>' && c != '\n' && c != '\r');
 					if (c != '>') {
 						for (;;) {
-							do { c = s.get_next(); } while (c == '\n' && c == '\r');
+							do { c = s.get_next(); } while (c == '\n' || c == '\r');
 							if (c == ']' && s.look_next() == '>') {
 								s.move(+1); break;
 							}

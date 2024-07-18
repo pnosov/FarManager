@@ -61,9 +61,8 @@ public:
 	void SaveArea();
 	void RestoreArea(int RestoreCursor = TRUE);
 	void Discard();
-	void AppendArea(const SaveScreen *NewArea);
+	void AppendArea(const SaveScreen& NewArea);
 	void Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsole);
-	void DumpBuffer(const wchar_t *Title);
 
 private:
 	friend class Grabber;
@@ -72,10 +71,10 @@ private:
 	int height() const { return m_Where.height(); }
 
 	matrix<FAR_CHAR_INFO> ScreenBuf;
-	point m_Cursor;
-	bool CurVisible;
-	size_t CurSize;
-	rectangle m_Where;
+	point m_Cursor{};
+	bool CurVisible{};
+	size_t CurSize{};
+	rectangle m_Where{};
 };
 
 #endif // SAVESCR_HPP_778D9931_B748_4300_B9AF_330A1B2C80B9

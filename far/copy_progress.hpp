@@ -36,12 +36,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "taskbar.hpp"
 #include "wakeful.hpp"
 #include "datetime.hpp"
-#include "plugin.hpp"
+#include "stddlg.hpp"
 
 // Platform:
 
 // Common:
-#include "common/2d/rectangle.hpp"
 
 // External:
 
@@ -49,7 +48,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 enum class lng;
 
-class copy_progress: noncopyable
+class copy_progress: progress_impl
 {
 public:
 	copy_progress(bool Move, bool Total, bool Time);
@@ -59,7 +58,7 @@ public:
 
 	// These functions shall not draw anything directly,
 	// only update internal variables and call Flush().
-	void SetNames(const string& Src, const string& Dst);
+	void SetNames(string_view Src, string_view Dst);
 	void reset_current();
 	void set_current_total(unsigned long long Value);
 	void set_current_copied(unsigned long long Value);
@@ -67,7 +66,7 @@ public:
 	void set_total_bytes(unsigned long long Value);
 	void add_total_bytes(unsigned long long Value);
 
-	void skip();
+	void skip(unsigned long long Size);
 	void next();
 	void undo();
 
@@ -80,29 +79,23 @@ public:
 private:
 	bool CheckEsc();
 	void Flush();
-	void CreateBackground();
 	void SetCurrentProgress(unsigned long long CompletedSize, unsigned long long TotalSize);
 	void SetTotalProgress(unsigned long long CompletedSize, unsigned long long TotalSize);
 	void UpdateTime(unsigned long long SizeDone, unsigned long long SizeToGo);
+	size_t GetWidth(intptr_t Index);
 
 	std::chrono::steady_clock::time_point m_CopyStartTime;
 	taskbar::indeterminate m_TB;
 	wakeful m_Wakeful;
-	small_rectangle m_Rect{};
 
-	size_t m_CurrentBarSize;
 	int m_CurrentPercent{};
-	string m_CurrentBar;
 
-	size_t m_TotalBarSize;
 	int m_TotalPercent{};
-	string m_TotalBar;
 
 	bool m_Move;
 	bool m_Total;
 	bool m_ShowTime;
 	bool m_IsCancelled{};
-	FarColor m_Color;
 	time_check m_TimeCheck;
 	time_check m_SpeedUpdateCheck;
 	string m_Src, m_Dst;
@@ -113,17 +106,14 @@ private:
 	string m_FilesCopied;
 	std::chrono::steady_clock::duration m_CalcTime{};
 
-	// BUGBUG
-public:
-	time_check m_SecurityTimeCheck;
-
-private:
-	struct
+	struct files
 	{
 		size_t Copied{};
 		size_t Total{};
+
+		bool operator==(files const&) const = default;
 	}
-	m_Files;
+	m_Files, m_FilesLastRendered;
 
 	struct
 	{

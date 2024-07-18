@@ -39,7 +39,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Internal:
 #include "farcolor.hpp"
-#include "syslog.hpp"
 #include "interf.hpp"
 #include "console.hpp"
 #include "colormix.hpp"
@@ -55,27 +54,24 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 static void CleanupBuffer(FAR_CHAR_INFO* Buffer, size_t BufSize)
 {
-	const FAR_CHAR_INFO Value = { L' ', colors::PaletteColorToFarColor(COL_COMMANDLINEUSERSCREEN) };
+	const FAR_CHAR_INFO Value{ L' ', {}, {}, colors::PaletteColorToFarColor(COL_COMMANDLINEUSERSCREEN) };
 	std::fill_n(Buffer, BufSize, Value);
 }
 
 SaveScreen::SaveScreen()
 {
-	_OT(SysLog(L"[%p] SaveScreen::SaveScreen()", this));
 	SaveArea({ 0, 0, ScrX, ScrY });
 }
 
 SaveScreen::SaveScreen(rectangle Where)
 {
 	fix_coordinates(Where);
-	_OT(SysLog(L"[%p] SaveScreen::SaveScreen(X1=%i,Y1=%i,X2=%i,Y2=%i)",this,X1,Y1,X2,Y2));
 	SaveArea(Where);
 }
 
 
 SaveScreen::~SaveScreen()
 {
-	_OT(SysLog(L"[%p] SaveScreen::~SaveScreen()", this));
 	RestoreArea();
 }
 
@@ -122,18 +118,26 @@ void SaveScreen::SaveArea()
 	GetCursorType(CurVisible,CurSize);
 }
 
-void SaveScreen::AppendArea(const SaveScreen *NewArea)
+void SaveScreen::AppendArea(const SaveScreen& NewArea)
 {
-	const auto Offset = [](const SaveScreen* Ptr, int X, int Y)
+	const auto Offset = [](const SaveScreen& Scr, int X, int Y)
 	{
-		return X - Ptr->m_Where.left + Ptr->width() * (Y - Ptr->m_Where.top);
+		return X - Scr.m_Where.left + Scr.width() * (Y - Scr.m_Where.top);
 	};
 
-	for (int X = m_Where.left; X <= m_Where.right; ++X)
-		if (X >= NewArea->m_Where.left && X <= NewArea->m_Where.right)
-			for (int Y = m_Where.top; Y <= m_Where.bottom; ++Y)
-				if (Y >= NewArea->m_Where.top && Y <= NewArea->m_Where.bottom)
-					ScreenBuf.vector()[Offset(this, X, Y)] = NewArea->ScreenBuf.vector()[Offset(NewArea, X, Y)];
+	for (const auto X: std::views::iota(m_Where.left, m_Where.right + 1))
+	{
+		if (!in_closed_range(NewArea.m_Where.left, X, NewArea.m_Where.right))
+			continue;
+
+		for (const auto Y: std::views::iota(m_Where.top, m_Where.bottom + 1))
+		{
+			if(!in_closed_range(NewArea.m_Where.top, Y, NewArea.m_Where.bottom))
+				continue;
+
+			ScreenBuf.vector()[Offset(*this, X, Y)] = NewArea.ScreenBuf.vector()[Offset(NewArea, X, Y)];
+		}
+	}
 }
 
 void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsole)
@@ -149,15 +153,15 @@ void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsol
 	matrix<FAR_CHAR_INFO> NewBuf(DesiredHeight, DesiredWidth);
 	CleanupBuffer(NewBuf.data(), NewBuf.size());
 
-	const rectangle NewWhere = { m_Where.left, m_Where.top, m_Where.left + DesiredWidth - 1, m_Where.top + DesiredHeight - 1 };
+	const rectangle NewWhere{ m_Where.left, m_Where.top, m_Where.left + DesiredWidth - 1, m_Where.top + DesiredHeight - 1 };
 
-	const auto DeltaY = abs(DesiredHeight - OriginalHeight);
+	const auto DeltaY = std::abs(DesiredHeight - OriginalHeight);
 	const size_t CopyWidth = std::min(OriginalWidth, DesiredWidth);
 	const size_t CopyHeight = std::min(OriginalHeight, DesiredHeight);
 
 	if (DesiredHeight > OriginalHeight)
 	{
-		for (size_t i = 0; i != CopyHeight; ++i)
+		for (const auto i: std::views::iota(0uz, CopyHeight))
 		{
 			const auto FromIndex = i * OriginalWidth;
 			const auto ToIndex = (i + DeltaY) * DesiredWidth;
@@ -166,7 +170,7 @@ void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsol
 	}
 	else
 	{
-		for (size_t i = 0; i != CopyHeight; ++i)
+		for (const auto i: std::views::iota(0uz, CopyHeight))
 		{
 			const auto FromIndex = (i + DeltaY) * OriginalWidth;
 			const auto ToIndex = i * DesiredWidth;
@@ -184,25 +188,25 @@ void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsol
 
 		if (DesiredHeight != OriginalHeight)
 		{
-			matrix<FAR_CHAR_INFO> Tmp(abs(OriginalHeight - DesiredHeight), std::max(DesiredWidth, OriginalWidth));
 			if (DesiredHeight > OriginalHeight)
 			{
 				if (IsExtraTop)
 				{
 					rectangle const ReadRegion{ 0, 0, DesiredWidth - 1, DesiredHeight - OriginalHeight - 1 };
+					matrix<FAR_CHAR_INFO> Tmp(DesiredHeight - OriginalHeight, std::max(DesiredWidth, OriginalWidth));
 					if (console.ReadOutput(Tmp, ReadRegion))
 					{
-						for (size_t i = 0; i != Tmp.height(); ++i)
+						for (const auto i: std::views::iota(0uz, Tmp.height()))
 						{
 							std::copy_n(Tmp[i].data(), Tmp.width(), NewBuf[i].data());
 						}
 					}
 				}
 			}
-			else
+			else if (rectangle const WriteRegion{ 0, DesiredHeight - OriginalHeight, OriginalWidth - 1, -1 }; WriteRegion.left < ScrX && WindowRect.first.top && WriteRegion.top < ScrY)
 			{
-				rectangle const WriteRegion{ 0, DesiredHeight - OriginalHeight, DesiredWidth - 1, -1 };
-				for (size_t i = 0; i != Tmp.height(); ++i)
+				matrix<FAR_CHAR_INFO> Tmp(OriginalHeight - DesiredHeight, std::max(DesiredWidth, OriginalWidth));
+				for (const auto i: std::views::iota(0uz, Tmp.height()))
 				{
 					std::copy_n(ScreenBuf[i].data(), Tmp.width(), Tmp[i].data());
 				}
@@ -213,28 +217,29 @@ void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsol
 
 		if (DesiredWidth != OriginalWidth)
 		{
-			matrix<FAR_CHAR_INFO> Tmp(std::max(DesiredHeight, OriginalHeight), abs(DesiredWidth - OriginalWidth));
 			if (DesiredWidth > OriginalWidth)
 			{
 				if (IsExtraRight)
 				{
 					rectangle const ReadRegion{ OriginalWidth, 0, DesiredWidth - 1, DesiredHeight - 1 };
+					matrix<FAR_CHAR_INFO> Tmp(ReadRegion.height(), ReadRegion.width());
 					console.ReadOutput(Tmp, ReadRegion);
-					for (size_t i = 0; i != NewBuf.height(); ++i)
+					for (const auto i: std::views::iota(0uz, NewBuf.height()))
 					{
 						std::copy_n(Tmp[i].data(), Tmp.width(), &NewBuf[i][OriginalWidth]);
 					}
 				}
 			}
-			else
+			else if (rectangle WriteRegion{ DesiredWidth, 0, OriginalWidth - 1, std::min(DesiredHeight, OriginalHeight) - 1 }; WriteRegion.top < ScrY)
 			{
-				rectangle const WriteRegion{ DesiredWidth, DesiredHeight - OriginalHeight, OriginalWidth - 1, DesiredHeight - 1 };
-				for (size_t i = 0; i != Tmp.height(); ++i)
+				// VT can only move the cursor within the viewport. What a bloody joke.
+				const auto VtFixup = 1;
+				WriteRegion.left -= VtFixup;
+				matrix<FAR_CHAR_INFO> Tmp(WriteRegion.height(), WriteRegion.width());
+				const auto StartY = OriginalHeight - Tmp.height();
+				for (const auto i: std::views::iota(0uz, Tmp.height()))
 				{
-					if (static_cast<int>(i) < OriginalHeight)
-						std::copy_n(&ScreenBuf[i][DesiredWidth], Tmp.width(), Tmp[i].data());
-					else
-						CleanupBuffer(Tmp[i].data(), Tmp.width());
+					std::copy_n(&ScreenBuf[i + StartY][DesiredWidth - VtFixup], Tmp.width(), Tmp[i].data());
 				}
 				console.WriteOutput(Tmp, WriteRegion);
 				console.Commit();
@@ -242,12 +247,6 @@ void SaveScreen::Resize(int DesiredWidth, int DesiredHeight, bool SyncWithConsol
 		}
 	}
 
-	using std::swap;
-	swap(ScreenBuf, NewBuf);
+	std::ranges::swap(ScreenBuf, NewBuf);
 	m_Where = NewWhere;
-}
-
-void SaveScreen::DumpBuffer(const wchar_t *Title)
-{
-	SaveScreenDumpBuffer(Title, ScreenBuf.data(), m_Where.left, m_Where.top, m_Where.right, m_Where.bottom, nullptr);
 }

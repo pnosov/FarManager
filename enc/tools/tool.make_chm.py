@@ -1,13 +1,11 @@
-﻿"""
+﻿#!/usr/bin/env python3
+
+"""
 Make projects files for building Far Manager Encyclopedia in .CHM format
 """
 
 # pythonized by techtonik // gmail.com
 # modifications by Far Group
-
-#
-# IMPORTANT: must be albe to run under python 2.4
-#
 
 # keywords for HHK are generated from "<a name=>" and "<h1>"
 
@@ -17,7 +15,7 @@ Make projects files for building Far Manager Encyclopedia in .CHM format
 # also,  for "<h3>",  text for the title is taken upto to the first comma
 
 
-execfile("config.inc.py")
+from config import *
 
 from os import makedirs, walk, listdir
 from os.path import isdir, join, exists
@@ -32,7 +30,7 @@ logging.addLevelName("WARN", 30)
 
 #: just a shortcut
 log = logging.info
-warn = logging.warn
+warn = logging.warning
 
 def copytree(src, dst, symlinks=False, ignore=None):
   if not exists(dst):
@@ -67,29 +65,23 @@ def make_chm_lang(lang):
       makedirs(join(root.replace(chm_meta_dir, chm_html_dir), d))
 
   log("-- translating meta into html")
-  # filter files and replace "win32/.." links with calls to MSDN
-  link_match = re.compile(r'href[\s"\'=\/\.]*?win32\/(?P<funcname>[^"\']*?)(\.html)?[\'"].*?>(?P<linkend>.*?<\/a>)', re.I)
-  link_replace = Template(
-'''href="JavaScript:link$id.Click()">\g<linkend>
-<object id="link$id" type="application/x-oleobject" classid="clsid:adb880a6-d8ff-11cf-9377-00aa003b7a11">
-<param name="Command" value="KLink">
-<param name="DefaultTopic" value="">
-<param name="Item1" value="">
-<param name="Item2" value="\g<funcname>">
-</object>''')
-  id = 0
+
+  header_match = '<meta http-equiv="Content-Type" Content="text/html; charset=utf-8">'
+  header_replace = '<meta http-equiv="Content-Type" Content="text/html; charset=Windows-1251">'
+
   for root, dirs, files in walk(chm_meta_dir):
     for f in files:
-      infile  = open(join(root, f))
-      outfile = open(join(root.replace(chm_meta_dir, chm_html_dir), f), "w")
+      infile  = open(join(root, f), encoding="utf-8-sig")
+      outfile = open(join(root.replace(chm_meta_dir, chm_html_dir), f), "w", encoding="windows-1251")
+      header_replaced = False
       for line in infile:
-        while link_match.search(line):
-          line = link_match.sub(link_replace.substitute(id=id), line)
-          id += 1
+        if not header_replaced and header_match in line:
+          line = line.replace(header_match, header_replace)
+          header_replaced = True
+
         outfile.write(line)
       infile.close()
       outfile.close()
-  log("total %d win32 links" % id)
 
   log("-- cleaning meta")
   shutil.rmtree(chm_meta_dir)
@@ -100,7 +92,7 @@ def make_chm_lang(lang):
   match_link_no_h3 = re.compile(r'<a.+?href\s*=\s*(?P<quote>[\'\"])(.+?)(?P=quote).*?>(.+?)</a>', re.I)
   match_link_after_h3 = re.compile(r'.?width\=\"40\%\".?<a.+?href\s*=\s*(?P<quote>[\'\"])(.+?)(?P=quote).*?>(.+?)</a>', re.I)
 
-  cntnts = open(contents_filename, "w")
+  cntnts = open(contents_filename, "w", encoding="windows-1251")
   cntnts.write(
 """<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
 <HTML>
@@ -118,7 +110,7 @@ def make_chm_lang(lang):
 
 """)
   in_hhc1 = 0
-  f1 = open(join(chm_html_dir, "index.html"))
+  f1 = open(join(chm_html_dir, "index.html"), encoding="windows-1251")
   log("Scanning %s" % f1.name)
   for l1 in f1:
     if (l1.find("HHC") != -1):
@@ -141,7 +133,7 @@ def make_chm_lang(lang):
       in_hhc2 = 0
       in_h3 = 0
       in_link = 0
-      f2 = open(join(chm_html_dir, rl[1]))
+      f2 = open(join(chm_html_dir, rl[1]), encoding="windows-1251")
       log("Scanning %s" % f2.name)
       for l2 in f2:
         if (l2.find("HHC") != -1):
@@ -213,11 +205,10 @@ def make_chm_lang(lang):
       continue
     macro_flag = "macro" in root
     for fn in files:
-      if not fn.endswith(".html") or fn in ["faq.html", "msdn.html"]:
+      if not fn.endswith(".html") or fn in ["faq.html"]:
         continue
       relflink = join(root[root.find("html"):], fn).replace('\\', '/')
-      f = open(join(root, fn))
-      print chr(8)+".",
+      f = open(join(root, fn), encoding="windows-1251")
       for line in f:
         if not macro_flag:
           target_list = title_list
@@ -262,7 +253,7 @@ def make_chm_lang(lang):
   # fcreep: mark all macros with (Macros) explicitly
   # fcreep: add distinguished meta labels to macros
 
-  idx = open(index_filename, "w")
+  idx = open(index_filename, "w", encoding="windows-1251")
   idx.write(
 """<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
 <HTML>
@@ -292,14 +283,14 @@ log("preparing CHM build")
 log("-- cleaning build dir")
 if isdir(DEST): shutil.rmtree(DEST)
 makedirs(DEST)
-logfile = logging.FileHandler(BUILD_CHM_LOG, "w")
+logfile = logging.FileHandler(BUILD_CHM_LOG, "w", encoding="utf-8")
 logging.getLogger().addHandler(logfile)
 
 
 log("-- making directory tree")
 makedirs(DEST_CHM)
 
-make_chm_lang("rus3.work")
+make_chm_lang("rus")
 #make_chm_lang("eng")
 
 log("-- done. check build log at %s" % BUILD_CHM_LOG)

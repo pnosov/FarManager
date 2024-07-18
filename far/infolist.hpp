@@ -50,9 +50,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 enum class lng : int;
 class DizViewer;
 
-class InfoList:public Panel
+class InfoList final: public Panel
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static info_panel_ptr create(window_ptr Owner);
@@ -89,7 +89,14 @@ private:
 	string strDizFileName;
 	struct InfoListSectionState;
 	std::vector<InfoListSectionState> SectionState;
-	listener PowerListener;
+
+	class power_listener: listener
+	{
+	public:
+		explicit power_listener(std::function<void()> EventHandler);
+		~power_listener();
+	}
+	PowerListener;
 };
 
 #endif // INFOLIST_HPP_938248E2_BB38_43DF_BDD3_D582C383A102

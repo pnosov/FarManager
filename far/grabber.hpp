@@ -47,9 +47,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-class Grabber: public SimpleModal
+class Grabber final: public Modal
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static grabber_ptr create();
@@ -60,7 +60,7 @@ public:
 	void ResizeConsole() override;
 
 private:
-	struct grabber_tag {};
+	struct grabber_tag { explicit grabber_tag() = default; };
 
 	void DisplayObject() override;
 	bool ProcessKey(const Manager::Key& Key) override;
@@ -70,8 +70,12 @@ private:
 	void init();
 	// (begin, end)
 	std::tuple<point&, point&> GetSelection();
+	std::tuple<point&, point&> GetSelectionXWise();
 	void CopyGrabbedArea(bool Append, bool VerticalBlock);
 	void Reset();
+
+	bool empty() const;
+	void clear();
 
 	struct
 	{
@@ -80,8 +84,8 @@ private:
 		point Current;
 	}
 	GArea;
-	bool ResetArea;
-	bool m_VerticalBlock;
+	bool ResetArea{true};
+	bool m_VerticalBlock{};
 	static inline monitored<bool> m_StreamSelection;
 };
 

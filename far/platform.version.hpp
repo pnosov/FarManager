@@ -52,6 +52,9 @@ namespace os::version
 		wchar_t const* get_string(string_view Value) const;
 		VS_FIXEDFILEINFO const* get_fixed_info() const;
 
+		string version() const;
+		string_view description() const;
+
 	private:
 		string m_BlockPath;
 		std::vector<std::byte> m_Buffer;
@@ -60,16 +63,12 @@ namespace os::version
 	bool is_win10_build_or_later(DWORD Build);
 
 	// This versioning scheme is mental
+	bool is_win10_1607_or_later();
+	bool is_win10_1703_or_later();
 
-	inline bool is_win10_1607_or_later()
-	{
-		return is_win10_build_or_later(14393);
-	}
+	string get_file_version(string_view Name);
 
-	inline bool is_win10_1703_or_later()
-	{
-		return is_win10_build_or_later(15063);
-	}
+	string os_version();
 }
 
 #endif // PLATFORM_VERSION_HPP_CC7E1536_485F_4A75_862F_E15DEF06C5C5

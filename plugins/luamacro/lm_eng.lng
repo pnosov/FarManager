@@ -13,7 +13,7 @@
 "F1          show this help window"
 "F3          show info about macro/event handler"
 "F4          open file in editor"
-"Alt+F4      open file in modal editor"
+"Shift+F4    open file in modal editor"
 "Ctrl+PgUp   locate file in active panel"
 "Ctrl+F1     sort macros by area"
 "Ctrl+F2     sort macros by key"
@@ -26,6 +26,12 @@
 "Macros"
 "Active macros"
 "Event handlers"
+"Items of Plugins menu"
+"Active items of Plugins menu"
+"Prefixes"
+"Panel modules"
+"Content columns"
+"Custom sort modes"
 
 // macro browser messages
 "No file name available"
@@ -34,6 +40,11 @@
 // macro browser F3 titles
 "Macro"
 "Event handler"
+"Plugins menu item"
+"Prefix"
+"Panel module"
+"Content column"
+"Custom sort mode"
 
 // custom panel sort
 "Sort mode "

@@ -3,6 +3,7 @@
 #include <typeinfo>
 
 #include <windows.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <msiquery.h>
 #include <rpc.h>
@@ -57,7 +58,7 @@ struct Error {
 #define CHECK_SYS(code) { if (!(code)) FAIL(HRESULT_FROM_WIN32(GetLastError())); }
 #define CHECK_ADVSYS(code) { DWORD __ret = (code); if (__ret != ERROR_SUCCESS) FAIL(HRESULT_FROM_WIN32(__ret)); }
 #define CHECK_COM(code) { HRESULT __ret = (code); if (FAILED(__ret)) FAIL(__ret); }
-#define CHECK(code) { if (!(code)) FAIL_MSG(L#code); }
+#define CHECK(code) { if (!(code)) FAIL_MSG(L ## #code); }
 
 class NonCopyable {
 protected:
@@ -97,8 +98,8 @@ public:
 
 template<class CharType>
 static basic_string<CharType> strip(const basic_string<CharType>& str) {
-  basic_string<CharType>::size_type hp = 0;
-  basic_string<CharType>::size_type tp = str.size();
+  typename basic_string<CharType>::size_type hp = 0;
+  typename basic_string<CharType>::size_type tp = str.size();
   while ((hp < str.size()) && ((static_cast<unsigned>(str[hp]) <= 0x20) || (str[hp] == 0x7F)))
     hp++;
   if (hp < str.size())

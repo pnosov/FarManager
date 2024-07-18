@@ -46,7 +46,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "filefilterparams.hpp"
 #include "panel.hpp"
 #include "filepanels.hpp"
-#include "syslog.hpp"
 #include "interf.hpp"
 #include "config.hpp"
 #include "dirmix.hpp"
@@ -67,34 +66,22 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ControlObject::ControlObject()
 {
-	_OT(SysLog(L"[%p] ControlObject::ControlObject()", this));
-
-	SetColor(COL_COMMANDLINEUSERSCREEN);
-	GotoXY(0, ScrY - 3);
-	ShowVersion(false);
-	GotoXY(0, ScrY - 2);
-	MoveCursor({ 0, ScrY - 1 });
-
 	Global->WindowManager->InitDesktop();
+
+	filters::InitFilters();
 
 	HiFiles = std::make_unique<highlight::configuration>();
 	Plugins = std::make_unique<PluginManager>();
 
-	CmdHistory = std::make_unique<History>(HISTORYTYPE_CMD, string{}, Global->Opt->SaveHistory);
-
-	FolderHistory = std::make_unique<History>(HISTORYTYPE_FOLDER, string{}, Global->Opt->SaveFoldersHistory);
-	FolderHistory->SetAddMode(true, 2, true);
-
-	ViewHistory = std::make_unique<History>(HISTORYTYPE_VIEW, string{}, Global->Opt->SaveViewHistory);
-	ViewHistory->SetAddMode(true,Global->Opt->FlagPosixSemantics?1:2,true);
-
-	FileFilter::InitFilter();
+	CmdHistory = std::make_unique<History>(HISTORYTYPE_CMD, string_view{}, Global->Opt->SaveHistory, false);
+	FolderHistory = std::make_unique<History>(HISTORYTYPE_FOLDER, string_view{}, Global->Opt->SaveFoldersHistory, true);
+	ViewHistory = std::make_unique<History>(HISTORYTYPE_VIEW, string_view{}, Global->Opt->SaveViewHistory, true);
 }
 
 
-void ControlObject::Init(int DirCount)
+void ControlObject::Init()
 {
-	FPanels = FilePanels::create(true, DirCount);
+	FPanels = FilePanels::create(true);
 
 	Global->WindowManager->InsertWindow(FPanels); // before PluginCommit()
 
@@ -112,15 +99,15 @@ void ControlObject::Init(int DirCount)
 	FarChDir(FPanels->ActivePanel()->GetCurDir());
 
 	// BUGBUG
-	FPanels->LeftPanel()->SetCustomSortMode(panel_sort(Global->Opt->LeftPanel.SortMode.Get()), sort_order::keep, false);
-	FPanels->RightPanel()->SetCustomSortMode(panel_sort(Global->Opt->RightPanel.SortMode.Get()), sort_order::keep, false);
+	FPanels->LeftPanel()->SetCustomSortMode(static_cast<panel_sort>(Global->Opt->LeftPanel.SortMode.Get()), sort_order::keep, false);
+	FPanels->RightPanel()->SetCustomSortMode(static_cast<panel_sort>(Global->Opt->RightPanel.SortMode.Get()), sort_order::keep, false);
 
 	Global->WindowManager->SwitchToPanels();  // otherwise panels are empty
 }
 
 void ControlObject::CreateDummyFilePanels()
 {
-	FPanels = FilePanels::create(false, 0);
+	FPanels = FilePanels::create(false);
 }
 
 ControlObject::~ControlObject() = default;
@@ -133,8 +120,6 @@ void ControlObject::close()
 		return;
 	}
 
-	_OT(SysLog(L"[%p] ControlObject::~ControlObject()", this));
-
 	// dummy_panel indicates /v or /e mode
 	if (FPanels && FPanels->ActivePanel() && !std::dynamic_pointer_cast<dummy_panel>(FPanels->ActivePanel()))
 	{
@@ -142,42 +127,15 @@ void ControlObject::close()
 			Global->Opt->Save(false);
 
 		if (FPanels->ActivePanel()->GetMode() != panel_mode::PLUGIN_PANEL)
-		{
 			FolderHistory->AddToHistory(FPanels->ActivePanel()->GetCurDir());
-		}
 	}
 
 	Global->WindowManager->CloseAll();
-	FileFilter::CloseFilter();
 	History::CompactHistory();
 	FilePositionCache::CompactHistory();
 
 	FPanels.reset();
 	Plugins->UnloadPlugins();
-}
-
-
-void ControlObject::ShowVersion(bool const Direct)
-{
-	if (Direct)
-	{
-		std::wcout << build::version_string() << L'\n' << build::copyright() << L'\n' << std::endl;
-		return;
-	}
-
-	point Size;
-	console.GetSize(Size);
-	point CursorPosition;
-	console.GetCursorPosition(CursorPosition);
-	const auto FreeSpace = Size.y - CursorPosition.y - 1;
-
-	if (FreeSpace < 5 && DoWeReallyHaveToScroll(5))
-		ScrollScreen(5-FreeSpace);
-
-	GotoXY(0,ScrY-4);
-	Text(build::version_string());
-	GotoXY(0,ScrY-3);
-	Text(build::copyright());
 }
 
 FilePanels* ControlObject::Cp() const

@@ -32,12 +32,20 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+
+#include <rpc.h>
+
 //----------------------------------------------------------------------------
 
 namespace uuid
 {
 	namespace detail
 	{
+		using namespace std::literals;
+
 		constexpr auto uuid_length = "00000000-0000-0000-0000-000000000000"sv.size();
 
 		[[noreturn]]
@@ -47,7 +55,7 @@ namespace uuid
 		}
 
 		[[nodiscard]]
-		constexpr inline auto hex_to_int(wchar_t const c)
+		constexpr auto hex_to_int(wchar_t const c)
 		{
 			if (L'0' <= c && c <= L'9')
 				return c - '0';
@@ -58,38 +66,36 @@ namespace uuid
 			if (L'A' <= c && c <= L'F')
 				return c - L'A' + 10;
 
-			else // GCC 8.1 don't understand this without an explicit 'else'
 			fail("Invalid character");
 		}
 
-		template<typename char_type, size_t... I>
+		template<size_t... I>
 		[[nodiscard]]
-		constexpr auto parse_impl(char_type const* const Str, std::index_sequence<I...> const Sequence)
+		constexpr auto parse_impl(std::random_access_iterator auto const Iterator, std::index_sequence<I...> const Sequence)
 		{
 			constexpr auto N = Sequence.size();
 			static_assert(N <= 4);
 			using int_type = std::conditional_t<N == 1, uint8_t, std::conditional_t<N == 2, uint16_t, uint32_t>>;
 
 			return int_type((... | (
-				hex_to_int(Str[(N - 1 - I) * 2 + 0]) << (I * 8 + 4) |
-				hex_to_int(Str[(N - 1 - I) * 2 + 1]) << (I * 8 + 0)
+				hex_to_int(Iterator[(N - 1 - I) * 2 + 0]) << (I * 8 + 4) |
+				hex_to_int(Iterator[(N - 1 - I) * 2 + 1]) << (I * 8 + 0)
 				)));
 		}
 
-		template<size_t Bytes, typename char_type>
+		template<size_t Bytes>
 		[[nodiscard]]
-		constexpr auto parse(char_type const*& Iterator)
+		constexpr auto parse(std::random_access_iterator auto& Iterator)
 		{
 			auto Value = parse_impl(Iterator, std::make_index_sequence<Bytes>{});
 			Iterator += Bytes * 2;
 			return Value;
 		}
 
-		constexpr class [[nodiscard]] separator_t{} Separator;
+		constexpr class separator_t{} Separator;
 
-		template<typename char_type>
 		[[nodiscard]]
-		constexpr auto& operator+=(char_type const*& Iterator, separator_t)
+		constexpr auto& operator+=(std::random_access_iterator auto& Iterator, separator_t)
 		{
 			if (*Iterator != L'-')
 				fail("Invalid character");
@@ -97,9 +103,8 @@ namespace uuid
 			return ++Iterator;
 		}
 
-		template<typename char_type>
 		[[nodiscard]]
-		constexpr UUID parse(char_type const* Iterator)
+		constexpr UUID parse(std::random_access_iterator auto Iterator)
 		{
 			return
 			{
@@ -127,8 +132,8 @@ namespace uuid
 			return i < 10? i + '0' : i - 10 + 'A';
 		}
 
-		template<typename int_type, typename handler, size_t... I>
-		constexpr void serialise_impl(int_type Value, handler const& Handler, std::index_sequence<I...> const Sequence)
+		template<size_t... I>
+		constexpr void serialise_impl(std::integral auto Value, auto const& Handler, std::index_sequence<I...> const Sequence)
 		{
 			constexpr auto N = Sequence.size() * 2;
 
@@ -138,45 +143,61 @@ namespace uuid
 			));
 		}
 
-		template<typename int_type, typename handler>
-		constexpr void serialise(int_type Value, handler const& Handler)
+		constexpr void serialise(std::integral auto Value, auto const& Handler)
 		{
 			serialise_impl(Value, Handler, std::make_index_sequence<sizeof(Value)>{});
 		}
-	}
 
-	template<typename char_type>
-	[[nodiscard]]
-	constexpr auto parse(char_type const* const Str, size_t const Size)
-	{
-		if (!(Size == detail::uuid_length || (Size == detail::uuid_length + 2 && Str[0] == L'{' && Str[Size - 1] == L'}')))
-			detail::fail("Incorrect format");
-
-		return detail::parse(Str + (Size != detail::uuid_length));
-	}
-
-	template<typename string_type>
-	[[nodiscard]]
-	auto parse(string_type const& Str)
-	{
-		return parse(Str.data(), Str.size());
-	}
-
-	template<typename string_type>
-	[[nodiscard]]
-	std::optional<UUID> try_parse(string_type const& Str)
-	{
-		if (Str.empty())
-			return {};
-
-		try
+		template<typename char_type>
+		[[nodiscard]]
+		constexpr auto parse(std::basic_string_view<char_type> const Str)
 		{
-			return parse(Str.data(), Str.size());
+			if (!(Str.size() == uuid_length || (Str.size() == uuid_length + 2 && Str.front() == L'{' && Str.back() == L'}')))
+				fail("Incorrect format");
+
+			return detail::parse(Str.data() + (Str.size() != uuid_length));
 		}
-		catch (...)
+
+		template<typename char_type>
+		[[nodiscard]]
+		constexpr std::optional<UUID> try_parse(std::basic_string_view<char_type> const Str)
 		{
-			return {};
+			if (Str.empty())
+				return {};
+
+			try
+			{
+				return parse(Str);
+			}
+			catch (...)
+			{
+				return {};
+			}
 		}
+	}
+
+	[[nodiscard]]
+	constexpr auto parse(std::string_view const Str)
+	{
+		return detail::parse(Str);
+	}
+
+	[[nodiscard]]
+	constexpr auto parse(std::wstring_view const Str)
+	{
+		return detail::parse(Str);
+	}
+
+	[[nodiscard]]
+	constexpr auto try_parse(std::string_view const Str)
+	{
+		return detail::try_parse(Str);
+	}
+
+	[[nodiscard]]
+	constexpr auto try_parse(std::wstring_view const Str)
+	{
+		return detail::try_parse(Str);
 	}
 
 	[[nodiscard]]
@@ -190,7 +211,7 @@ namespace uuid
 			Result.push_back(c);
 		};
 
-		const auto serialise = [&](auto const i)
+		const auto serialise = [&](std::integral auto const i)
 		{
 			detail::serialise(i, put);
 		};
@@ -219,9 +240,9 @@ namespace uuid
 	namespace literals
 	{
 		[[nodiscard]]
-		constexpr inline auto operator ""_uuid(const char* const Str, size_t const Size)
+		consteval auto operator""_uuid(const char* const Str, size_t const Size)
 		{
-			return parse(Str, Size);
+			return parse(std::string_view{ Str, Size });
 		}
 	}
 }

@@ -58,11 +58,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "keyboard.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.env.hpp"
 #include "platform.fs.hpp"
 
 // Common:
-#include "common/rel_ops.hpp"
 #include "common/string_utils.hpp"
 #include "common/uuid.hpp"
 #include "common/view/enumerate.hpp"
@@ -83,7 +83,7 @@ static const auto
 	HelpFolderShortcuts = L"FolderShortcuts"sv,
 	SeparatorToken = L"--"sv;
 
-class Shortcuts::shortcut: public data, public rel_ops<shortcut>
+class Shortcuts::shortcut: public data
 {
 public:
 	shortcut() = default;
@@ -97,14 +97,11 @@ public:
 		this->PluginUuid = PluginUuid;
 	}
 
-	bool operator==(const shortcut& rhs) const
-	{
-		const auto tie = [](const shortcut& s)
-		{
-			return std::tie(s.Name, s.Folder, s.PluginUuid, s.PluginFile, s.PluginData);
-		};
+	bool operator==(const shortcut&) const = default;
 
-		return tie(*this) == tie(rhs);
+	bool is_service() const
+	{
+		return PluginUuid == FarUuid && Folder.empty();
 	}
 
 	string Name;
@@ -199,7 +196,7 @@ static string MakeName(const Shortcuts::shortcut& Item)
 
 	if (Item.PluginUuid == FarUuid)
 	{
-		return !Item.Folder.empty()? escape_ampersands(os::env::expand(Item.Folder)) : msg(lng::MShortcutNone);
+		return !Item.Folder.empty()? escape_ampersands(os::env::expand(Item.Folder)) : L""s;
 	}
 
 	const auto plugin = Global->CtrlObject->Plugins->FindPlugin(Item.PluginUuid);
@@ -216,7 +213,7 @@ static string MakeName(const Shortcuts::shortcut& Item)
 
 	if (!Item.PluginData.empty())
 	{
-		const string PrintablePluginData(Item.PluginData.cbegin(), std::find_if(ALL_CONST_RANGE(Item.PluginData), [](const auto i) { return i < L' '; }));
+		const string PrintablePluginData(Item.PluginData.cbegin(), std::ranges::find_if(Item.PluginData, [](const auto i) { return i < L' '; }));
 		if (!PrintablePluginData.empty())
 			append(TechInfo, msg(lng::MFSShortcutPluginData), L' ', PrintablePluginData, L", "sv);
 	}
@@ -237,7 +234,7 @@ static void FillMenu(VMenu2& Menu, std::list<Shortcuts::shortcut>& List, bool co
 			continue;
 
 		ListItem.ComplexUserData = i;
-		if (!raw_mode && i->PluginUuid == FarUuid && i->Folder.empty())
+		if (!raw_mode && i->is_service())
 		{
 			if (ListItem.Name != SeparatorToken)
 			{
@@ -295,7 +292,7 @@ static bool EditItemImpl(Shortcuts::shortcut& Item, bool raw)
 	if (Item.PluginUuid != FarUuid)
 	{
 		const auto plugin = Global->CtrlObject->Plugins->FindPlugin(Item.PluginUuid);
-		Builder.AddSeparator(plugin? plugin->Title().c_str() : uuid::str(Item.PluginUuid).c_str());
+		Builder.AddSeparator(plugin? plugin->Title() : uuid::str(Item.PluginUuid));
 		Builder.AddText(lng::MFSShortcutPluginFile);
 		Builder.AddEditField(NewItem.PluginFile, 50, L"FS_PluginFile"sv, DIF_EDITPATH);
 		Builder.AddText(lng::MFSShortcutPluginData);
@@ -321,7 +318,7 @@ static bool EditItemImpl(Shortcuts::shortcut& Item, bool raw)
 		{
 			if (!os::fs::exists(os::env::expand(NewItem.Folder)))
 			{
-				const auto ErrorState = error_state::fetch();
+				const auto ErrorState = os::last_error();
 
 				if (Message(MSG_WARNING, ErrorState,
 					msg(lng::MError),
@@ -329,7 +326,7 @@ static bool EditItemImpl(Shortcuts::shortcut& Item, bool raw)
 						NewItem.Folder,
 						msg(lng::MSaveThisShortcut)
 					},
-					{ lng::MYes, lng::MNo }) != Message::first_button)
+					{ lng::MYes, lng::MNo }) != message_result::first_button)
 				{
 					return false;
 				}
@@ -352,18 +349,19 @@ static bool EditItem(VMenu2& Menu, Shortcuts::shortcut& Item, bool raw)
 	return true;
 }
 
-bool Shortcuts::Get(data& Data)
+std::variant<bool, size_t> Shortcuts::GetImpl(data& Data, size_t const Index, bool const CanSkipMenu)
 {
-	if (m_Items.empty())
-		return false;
-
-	if (m_Items.size() == 1)
+	if (CanSkipMenu && m_Items.size() == 1 && !m_Items.front().is_service())
 	{
 		Data = static_cast<const data&>(m_Items.front());
 		return true;
 	}
 
-	const auto Iterator = Select(false);
+	const auto Result = Select(false, Index);
+	if (std::holds_alternative<size_t>(Result))
+		return std::get<size_t>(Result);
+
+	const auto Iterator = std::get<0>(Result);
 	if (Iterator == m_Items.cend())
 		return false;
 
@@ -371,20 +369,22 @@ bool Shortcuts::Get(data& Data)
 	return true;
 }
 
-std::list<Shortcuts::shortcut>::const_iterator Shortcuts::Select(bool Raw)
+std::variant<std::list<Shortcuts::shortcut>::const_iterator, size_t> Shortcuts::Select(bool Raw, size_t const Index)
 {
-	const auto FolderList = VMenu2::create(msg(lng::MFolderShortcutsTitle), {}, ScrY - 4);
+	const auto FolderList = VMenu2::create(far::format(L"{} ({})"sv, msg(lng::MFolderShortcutsTitle), Index), {}, ScrY - 4);
 	FolderList->SetMenuFlags(VMENU_WRAPMODE | VMENU_AUTOHIGHLIGHT);
 	FolderList->SetHelp(HelpFolderShortcuts);
 	FolderList->SetBottomTitle(KeysToLocalizedText(KEY_INS, KEY_DEL, KEY_F4, KEY_CTRLUP, KEY_CTRLDOWN));
 	FolderList->SetId(FolderShortcutsMoreId);
 	FillMenu(*FolderList, m_Items, Raw);
 
+	std::optional<size_t> OtherShortcutIndex;
+
 	const auto ExitCode = FolderList->Run([&](const Manager::Key& RawKey)
 	{
 		const auto Key = RawKey();
 		const auto ItemPos = FolderList->GetSelectPos();
-		const auto Iterator = FolderList->GetComplexUserDataPtr<ITERATOR(m_Items)>(ItemPos);
+		const auto Iterator = FolderList->GetComplexUserDataPtr<std::ranges::iterator_t<decltype(m_Items)>>(ItemPos);
 
 		switch (Key)
 		{
@@ -443,11 +443,27 @@ std::list<Shortcuts::shortcut>::const_iterator Shortcuts::Select(bool Raw)
 			return true;
 
 		default:
+			if (Key == KEY_RCTRL0 + Index)
+			{
+				FolderList->ProcessKey(Manager::Key(KEY_DOWN));
+				return true;
+			}
+
+			if (in_closed_range(KEY_RCTRL0, Key, KEY_RCTRL9))
+			{
+				OtherShortcutIndex = Key - KEY_RCTRL0;
+				FolderList->Close();
+				return true;
+			}
+
 			return false;
 		}
 	});
 
-	return ExitCode < 0? m_Items.end() : *FolderList->GetComplexUserDataPtr<ITERATOR(m_Items)>(ExitCode);
+	if (OtherShortcutIndex)
+		return *OtherShortcutIndex;
+
+	return ExitCode < 0? m_Items.end() : *FolderList->GetComplexUserDataPtr<std::ranges::iterator_t<decltype(m_Items)>>(ExitCode);
 }
 
 bool Shortcuts::GetOne(size_t Index, data& Data) const
@@ -465,10 +481,28 @@ void Shortcuts::Add(string_view const Folder, const UUID& PluginUuid, string_vie
 	m_Changed = true;
 }
 
+bool Shortcuts::Get(size_t Index, data& Data)
+{
+	bool CanSkipMenu = true;
+
+	for (;;)
+	{
+		if (const auto Result = Shortcuts(Index).GetImpl(Data, Index, CanSkipMenu); std::holds_alternative<bool>(Result))
+		{
+			return std::get<bool>(Result);
+		}
+		else
+		{
+			Index = std::get<size_t>(Result);
+			CanSkipMenu = false;
+		}
+	}
+}
+
 static void MakeListName(const std::list<Shortcuts::shortcut>& List, string_view const Key, MenuItemEx& MenuItem)
 {
 	const auto ItemName = List.empty()? msg(lng::MShortcutNone) : MakeName(List.front());
-	MenuItem.Name = concat(KeyToLocalizedText(KEY_RCTRL), L"+&"sv, Key, L" \x2502 "sv, ItemName);
+	MenuItem.Name = far::format(L"{}+&{} {} {}"sv, KeyToLocalizedText(KEY_RCTRL), Key, BoxSymbols[BS_V1], ItemName);
 	if (List.size() > 1)
 	{
 		MenuItem.Flags |= MIF_SUBMENU;
@@ -492,9 +526,7 @@ static bool EditListItem(const std::list<Shortcuts::shortcut>& List, VMenu2& Men
 template<size_t... I>
 static auto make_shortcuts(std::index_sequence<I...>)
 {
-	// Q: Why not just use CTAD?
-	// A: To make Coverity and its compiler happy: 'Internal error #2688: assertion failed at: "edg/src/overload.c", line 27123'
-	return std::array<Shortcuts, sizeof...(I)>{ Shortcuts(I)... };
+	return std::array{ Shortcuts(I)... };
 }
 
 int Shortcuts::Configure()
@@ -528,7 +560,7 @@ int Shortcuts::Configure()
 		const auto EditSubmenu = [&]
 		{
 			// We don't care about the result here, just letting the user to edit the submenu
-			AllShortcuts[Pos].Select(true);
+			AllShortcuts[Pos].Select(true, Pos);
 			UpdateItem();
 		};
 

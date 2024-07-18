@@ -69,9 +69,9 @@ enum FFILEEDIT_FLAGS
 	FFILEEDIT_DISABLEHISTORY        = 19_bit,  // Запретить запись в историю?
 	FFILEEDIT_ENABLEF6              = 20_bit,  // Переключаться во вьювер можно?
 	FFILEEDIT_SAVETOSAVEAS          = 21_bit,  // $ 17.08.2001 KM  Добавлено для поиска по AltF7.
+	FFILEEDIT_WAS_SAVED             = 22_bit,  // The file was saved by the user at least once. Sometimes we need to know, e.g. if it's from a plugin panel.
 	//   При редактировании найденного файла из архива для
 	//   клавиши F2 сделать вызов ShiftF2.
-	FFILEEDIT_SAVEWQUESTIONS        = 22_bit,  // сохранить без вопросов
 	FFILEEDIT_LOCKED                = 23_bit,  // заблокировать?
 	FFILEEDIT_OPENFAILED            = 24_bit,  // файл открыть не удалось
 	FFILEEDIT_DELETEONCLOSE         = 25_bit,  // удалить в деструкторе файл вместе с каталогом (если тот пуст)
@@ -81,18 +81,18 @@ enum FFILEEDIT_FLAGS
 	FFILEEDIT_SERVICEREGION         = 29_bit,  // используется сервисная область
 };
 
-class FileEditor: public window,public EditorContainer
+class FileEditor final: public window,public EditorContainer
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static fileeditor_ptr create(string_view Name, uintptr_t codepage, DWORD InitFlags, int StartLine = -1, int StartChar = -1, const string* PluginData = nullptr, EDITOR_FLAGS OpenModeExstFile = EF_OPENMODE_QUERY);
 	static fileeditor_ptr create(string_view Name, uintptr_t codepage, DWORD InitFlags, int StartLine, int StartChar, const string* Title, rectangle Position, int DeleteOnClose = 0, const window_ptr& Update = nullptr, EDITOR_FLAGS OpenModeExstFile = EF_OPENMODE_QUERY);
 
-	explicit FileEditor(private_tag) {}
+	explicit FileEditor(private_tag);
 	~FileEditor() override;
 
-	bool IsFileModified() const override { return m_editor->IsFileModified(); }
+	bool IsFileModified() const override { return m_editor->IsModified(); }
 	int GetTypeAndName(string &strType, string &strName) override;
 	long long VMProcess(int OpCode, void* vParam = nullptr, long long iParam = 0) override;
 	void Show() override;
@@ -107,9 +107,10 @@ public:
 	// архива для клавиши F2 сделать вызов ShiftF2.
 	void SetSaveToSaveAs(bool ToSaveAs) { m_Flags.Change(FFILEEDIT_SAVETOSAVEAS, ToSaveAs); InitKeyBar(); }
 	intptr_t EditorControl(int Command, intptr_t Param1, void *Param2);
+	uintptr_t GetCodePage() const;
 	bool SetCodePage(uintptr_t codepage);  //BUGBUG
 	bool SetCodePageEx(uintptr_t cp);
-	bool IsFileChanged() const { return m_editor->IsFileChanged(); }
+	bool WasFileSaved() const { return m_Flags.Check(FFILEEDIT_WAS_SAVED); }
 	void GetEditorOptions(Options::EditorOptions& EdOpt) const;
 	void SetEditorOptions(const Options::EditorOptions& EdOpt) const;
 	void SetPluginTitle(const string* PluginTitle);
@@ -140,14 +141,15 @@ private:
 	*/
 	void SetDeleteOnClose(int NewMode);
 	bool ReProcessKey(const Manager::Key& Key, bool CalledFromControl = true);
-	bool AskOverwrite(const string& FileName);
+	bool AskOverwrite(string_view FileName);
 	void Init(string_view Name, uintptr_t codepage, const string* Title, int StartLine, int StartChar, const string* PluginData, int DeleteOnClose, const window_ptr& Update, EDITOR_FLAGS OpenModeExstFile);
-	bool LoadFile(const string& Name, int &UserBreak, error_state_ex& ErrorState);
+	bool LoadFile(string_view Name, int &UserBreak, error_state_ex& ErrorState);
 	bool ReloadFile(uintptr_t codepage);
 	//TextFormat, Codepage и AddSignature используются ТОЛЬКО, если bSaveAs = true!
-	int SaveFile(const string& Name, int Ask, bool bSaveAs, error_state_ex& ErrorState, eol Eol = eol::none, uintptr_t Codepage = CP_UNICODE, bool AddSignature = false);
+	int SaveFile(string_view Name, bool bSaveAs, error_state_ex& ErrorState, eol Eol = eol::none, uintptr_t Codepage = CP_UTF16LE, bool AddSignature = false);
+	bool SaveAction(bool SaveAsIntention);
 	void SetTitle(const string* Title);
-	bool SetFileName(string_view NewFileName);
+	void SetFileName(string_view NewFileName);
 	int ProcessEditorInput(const INPUT_RECORD& Rec);
 	os::fs::attributes EditorGetFileAttributes(string_view Name);
 	void SetPluginData(const string* PluginData);
@@ -155,14 +157,13 @@ private:
 	bool LoadFromCache(EditorPosCache &pc) const;
 	void SaveToCache() const;
 	void ReadEvent();
-	bool ProcessQuitKey(int FirstSave, bool NeedQuestion = true, bool DeleteWindow = true);
+	bool ProcessQuitKey(bool NeedSave, bool ConfirmSave, bool DeleteWindow);
 	bool UpdateFileList() const;
 
 	static uintptr_t GetDefaultCodePage();
 
 	std::unique_ptr<Editor> m_editor;
 	NamesList EditNamesList;
-	bool F4KeyOnly{};
 	string strFileName;
 	string strFullFileName;
 	string strStartDir;
@@ -177,9 +178,13 @@ private:
 	bool bLoaded{};
 	bool m_bAddSignature{};
 	bool BadConversion{};
-	uintptr_t m_codepage{CP_DEFAULT}; //BUGBUG
+	uintptr_t m_codepage{CP_DEFAULT};
+	eol m_SaveEol{ eol::none };
 
 	F8CP f8cps;
+
+	class f4_key_timer;
+	std::unique_ptr<f4_key_timer> m_F4Timer;
 };
 
 bool dlgOpenEditor(string &strFileName, uintptr_t &codepage);

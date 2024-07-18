@@ -40,8 +40,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "exception.hpp"
 #include "imports.hpp"
 #include "pathmix.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 
 // Common:
 #include "common.hpp"
@@ -50,13 +52,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // External:
 #include "format.hpp"
 
+#include <process.h>
+
 //----------------------------------------------------------------------------
 
 namespace os::concurrency
 {
 	string detail::make_name(string_view const Namespace, string_view const HashPart, string_view const TextPart)
 	{
-		auto Str = concat(Namespace, str(hash_range(ALL_CONST_RANGE(HashPart))), L'_', TextPart);
+		auto Str = concat(Namespace, str(hash_range(HashPart)), L'_', TextPart);
 		ReplaceBackslashToSlash(Str);
 		return Str;
 	}
@@ -84,22 +88,25 @@ namespace os::concurrency
 
 	thread::~thread()
 	{
-		if (!joinable())
-			return;
+		finalise();
+	}
 
-		switch (m_Mode)
-		{
-		case mode::join:
+	void thread::finalise()
+	{
+		if (joinable())
 			join();
-			return;
+	}
 
-		case mode::detach:
-			detach();
-			return;
+	thread& thread::operator=(thread&& rhs) noexcept
+	{
+		finalise();
 
-		default:
-			UNREACHABLE;
-		}
+		handle::operator=(std::move(rhs));
+
+		m_ThreadId = rhs.m_ThreadId;
+		rhs.m_ThreadId = {};
+
+		return *this;
 	}
 
 	unsigned thread::get_id() const
@@ -130,15 +137,15 @@ namespace os::concurrency
 	void thread::check_joinable() const
 	{
 		if (!joinable())
-			throw MAKE_FAR_FATAL_EXCEPTION(L"Thread is not joinable"sv);
+			throw far_fatal_exception(L"Thread is not joinable"sv);
 	}
 
 	void thread::starter_impl(proc_type Proc, void* Param)
 	{
-		reset(reinterpret_cast<HANDLE>(_beginthreadex(nullptr, 0, Proc, Param, 0, &m_ThreadId)));
+		reset(std::bit_cast<HANDLE>(_beginthreadex(nullptr, 0, Proc, Param, 0, &m_ThreadId)));
 
 		if (!*this)
-			throw MAKE_FAR_FATAL_EXCEPTION(L"Can't create thread"sv);
+			throw far_fatal_exception(L"Can't create thread"sv);
 	}
 
 
@@ -149,7 +156,7 @@ namespace os::concurrency
 
 	string_view mutex::get_namespace()
 	{
-		return L"Far_Manager_Mutex_"sv;
+		return L"Far_Manager_Mutex"sv;
 	}
 
 	void mutex::lock() const
@@ -160,7 +167,7 @@ namespace os::concurrency
 	void mutex::unlock() const
 	{
 		if (!ReleaseMutex(native_handle()))
-			throw MAKE_FAR_FATAL_EXCEPTION(L"ReleaseMutex failed"sv);
+			throw far_fatal_exception(L"ReleaseMutex failed"sv);
 	}
 
 
@@ -250,21 +257,21 @@ namespace os::concurrency
 
 	string_view event::get_namespace()
 	{
-		return L"Far_Manager_Event_"sv;
+		return L"Far_Manager_Event"sv;
 	}
 
 	void event::set() const
 	{
 		check_valid();
 		if (!SetEvent(get()))
-			throw MAKE_FAR_FATAL_EXCEPTION(L"SetEvent failed"sv);
+			throw far_fatal_exception(L"SetEvent failed"sv);
 	}
 
 	void event::reset() const
 	{
 		check_valid();
 		if (!ResetEvent(get()))
-			throw MAKE_FAR_FATAL_EXCEPTION(L"ResetEvent failed"sv);
+			throw far_fatal_exception(L"ResetEvent failed"sv);
 	}
 
 	void event::associate(OVERLAPPED& o) const
@@ -277,8 +284,26 @@ namespace os::concurrency
 	{
 		if (!*this)
 		{
-			throw MAKE_FAR_FATAL_EXCEPTION(L"Event is not initialized properly"sv);
+			throw far_fatal_exception(L"Event is not initialized properly"sv);
 		}
+	}
+
+	static void CALLBACK wrapper(void* const Parameter, BOOLEAN)
+	{
+		const auto& Callable = view_as<std::function<void()>>(Parameter);
+		Callable();
+	}
+
+	void timer::initialise_impl(std::chrono::milliseconds const DueTime, std::chrono::milliseconds Period)
+	{
+		if (!CreateTimerQueueTimer(&ptr_setter(m_Timer), {}, &wrapper, m_Callable.get(), DueTime / 1ms, Period / 1ms, WT_EXECUTEDEFAULT))
+			throw far_fatal_exception(L"CreateTimerQueueTimer failed"sv);
+	}
+
+	void timer::timer_closer::operator()(HANDLE const Handle) const
+	{
+		while (!(DeleteTimerQueueTimer({}, Handle, INVALID_HANDLE_VALUE) || GetLastError() == ERROR_IO_PENDING))
+			LOGWARNING(L"DeleteTimerQueueTimer(): {}"sv, last_error());
 	}
 }
 
@@ -286,11 +311,121 @@ namespace os::concurrency
 
 #include "testing.hpp"
 
-TEST_CASE("platform.thread.forwarding")
+TEST_CASE("platform.concurrency.make_name")
+{
+	struct s
+	{
+		static auto get_namespace()
+		{
+			return L"banana"sv;
+		}
+	};
+
+	const auto Suffix = L"peel"sv;
+	const auto Name = os::make_name<s>(L"random"sv, Suffix);
+
+	REQUIRE(Name.starts_with(s::get_namespace()));
+	REQUIRE(Name.ends_with(Suffix));
+}
+
+TEMPLATE_TEST_CASE("platform.concurrency.locking", "", os::critical_section, os::mutex, os::shared_mutex)
+{
+	std::atomic_int Cookie;
+	TestType Lock1, Lock2;
+
+	os::event const Event(os::event::type::automatic, os::event::state::nonsignaled);
+	os::thread const Thread(
+		[&]
+		{
+			SCOPED_ACTION(std::scoped_lock)(Lock2);
+			Event.set();
+
+			{
+				SCOPED_ACTION(std::scoped_lock)(Lock1);
+				REQUIRE(Cookie == 1);
+				Cookie = 2;
+			}
+		}
+	);
+
+	{
+		SCOPED_ACTION(std::scoped_lock)(Lock1);
+		Event.wait();
+
+		Cookie = 1;
+	}
+
+	{
+		SCOPED_ACTION(std::scoped_lock)(Lock2);
+		REQUIRE(Cookie == 2);
+	}
+}
+
+TEST_CASE("platform.concurrency.thread.forwarding")
 {
 	{
-		os::thread Thread(os::thread::mode::join, [Ptr = std::make_unique<int>(33)](auto&&){}, std::make_unique<int>(42));
+		const auto Magic = 42;
+		os::thread Thread(
+			[Ptr = std::make_unique<int>(Magic)](auto&& Param)
+			{
+				REQUIRE(*Ptr * 2 == *Param);
+			},
+			std::make_unique<int>(Magic * 2)
+		);
 	}
-	REQUIRE(true);
+	SUCCEED();
+}
+
+TEST_CASE("platform.concurrency.event")
+{
+	{
+		os::event const Event(os::event::type::manual, os::event::state::nonsignaled);
+		REQUIRE(!Event.is_signaled());
+
+		Event.set();
+		REQUIRE(Event.is_signaled());
+
+		Event.reset();
+		REQUIRE(!Event.is_signaled());
+	}
+
+	{
+		os::event const Event(os::event::type::automatic, os::event::state::signaled);
+		REQUIRE(Event.is_signaled());
+		REQUIRE(!Event.is_signaled());
+
+		Event.set();
+		REQUIRE(Event.is_signaled());
+		REQUIRE(!Event.is_signaled());
+
+		Event.reset();
+		REQUIRE(!Event.is_signaled());
+	}
+
+	{
+		os::event const Event;
+		OVERLAPPED o;
+		REQUIRE_THROWS_AS(Event.associate(o), far_fatal_exception);
+		REQUIRE_THROWS_AS(Event.set(), far_fatal_exception);
+		REQUIRE_THROWS_AS(Event.reset(), far_fatal_exception);
+	}
+}
+
+TEST_CASE("platform.concurrency.timer")
+{
+	size_t Count{};
+	size_t const Max = 3;
+	os::event const Event(os::event::type::manual, os::event::state::nonsignaled);
+
+	os::concurrency::timer const Timer({}, 1ms, [&]
+	{
+		if (Count != Max)
+			++Count;
+		else
+			Event.set();
+	});
+
+	Event.wait();
+	REQUIRE(Max == Count);
 }
 #endif

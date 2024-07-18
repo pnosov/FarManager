@@ -36,11 +36,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 
 // Platform:
+#include "platform.concurrency.hpp"
 
 // Common:
 #include "common/function_ref.hpp"
 #include "common/function_traits.hpp"
 #include "common/preprocessor.hpp"
+#include "common/source_location.hpp"
 
 // External:
 
@@ -48,25 +50,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 void disable_exception_handling();
 
+bool exception_handling_in_progress();
+
 void force_stderr_exception_ui(bool Force);
 
 class Plugin;
 
-bool handle_std_exception(const std::exception& e, std::string_view Function, const Plugin* Module = nullptr);
-bool handle_unknown_exception(std::string_view Function, const Plugin* Module = nullptr);
+bool handle_std_exception(const std::exception& e, const Plugin* Module = nullptr, source_location const& Location = source_location::current());
+bool handle_unknown_exception(const Plugin* Module = nullptr, source_location const& Location = source_location::current());
 bool use_terminate_handler();
-
-class seh_terminate_handler
-{
-public:
-	NONCOPYABLE(seh_terminate_handler);
-
-	seh_terminate_handler();
-	~seh_terminate_handler();
-
-private:
-	std::terminate_handler m_PreviousHandler;
-};
 
 class unhandled_exception_filter
 {
@@ -79,42 +71,89 @@ private:
 	PTOP_LEVEL_EXCEPTION_FILTER m_PreviousFilter;
 };
 
+class signal_handler
+{
+public:
+	NONCOPYABLE(signal_handler);
+
+	signal_handler();
+	~signal_handler();
+
+private:
+	using signal_handler_t = void(*)(int);
+	signal_handler_t m_PreviousHandler;
+};
+
+class invalid_parameter_handler
+{
+public:
+	NONCOPYABLE(invalid_parameter_handler);
+
+	invalid_parameter_handler();
+	~invalid_parameter_handler();
+
+private:
+	_invalid_parameter_handler m_PreviousHandler;
+};
+
+class vectored_exception_handler
+{
+public:
+	NONCOPYABLE(vectored_exception_handler);
+
+	vectored_exception_handler();
+	~vectored_exception_handler();
+
+private:
+	void* m_Handler;
+};
+
 void restore_system_exception_handler();
+
+class seh_exception: public os::event
+{
+public:
+	seh_exception();
+	~seh_exception();
+
+	void set(EXCEPTION_POINTERS const& Pointers);
+	void raise();
+	void dismiss();
+	class seh_exception_impl;
+	seh_exception_impl const& get() const;
+
+private:
+	std::unique_ptr<seh_exception_impl> m_Impl;
+};
 
 namespace detail
 {
+	template<typename callable>
+	concept unknown_handler = std::invocable<callable, source_location const&>;
+
 	struct no_handler
 	{
-		template<typename T>
-		void operator()(T const&) const {}
+		void operator()(auto const&, auto const&) const {}
 	};
 
-	void cpp_try(function_ref<void()> Callable, function_ref<void()> UnknownHandler, function_ref<void(std::exception const&)> StdHandler);
-	void seh_try(function_ref<void()> Callable, function_ref<DWORD(EXCEPTION_POINTERS*)> Filter, function_ref<void()> Handler);
-	int seh_filter(EXCEPTION_POINTERS const* Info, std::string_view Function, Plugin const* Module);
-	int seh_thread_filter(std::exception_ptr& Ptr, EXCEPTION_POINTERS* Info);
-	void seh_thread_handler();
+	void cpp_try(function_ref<void()> Callable, function_ref<void(source_location const&)> UnknownHandler, function_ref<void(std::exception const&, source_location const&)> StdHandler, source_location const& Location);
+	void seh_try(function_ref<void()> Callable, function_ref<DWORD(EXCEPTION_POINTERS*)> Filter, function_ref<void(DWORD)> Handler);
+	int seh_filter(EXCEPTION_POINTERS const* Info, Plugin const* Module, source_location const& Location = source_location::current());
+	int seh_thread_filter(seh_exception& Exception, EXCEPTION_POINTERS const* Info);
+	void seh_thread_handler(DWORD ExceptionCode);
 	void set_fp_exceptions(bool Enable);
-
-	// A workaround for 2017
-	// TODO: remove once we drop support for VS2017.
-	template<typename result_type, typename std_handler>
-	void assign(result_type& Result, std_handler const& StdHandler, std::exception const& e)
-	{
-		Result = StdHandler(e);
-	}
 }
 
-template<typename callable, typename unknown_handler, typename std_handler = ::detail::no_handler>
-auto cpp_try(callable const& Callable, unknown_handler const& UnknownHandler, std_handler const& StdHandler = {})
+template<typename callable, typename std_handler = ::detail::no_handler>
+auto cpp_try(callable const& Callable, ::detail::unknown_handler auto const& UnknownHandler, std_handler const& StdHandler = {}, source_location const& Location = source_location::current())
 {
 	using result_type = typename function_traits<callable>::result_type;
-	using std_handler_ref = function_ref<void(std::exception const&)>;
+	using std_handler_ref = function_ref<void(std::exception const&, source_location const&)>;
 
 	enum
 	{
-		HasStdHandler = !std::is_same_v<std_handler, ::detail::no_handler>,
-		IsVoid = std::is_same_v<result_type, void>,
+		HasStdHandler = !std::same_as<std_handler, ::detail::no_handler>,
+		IsVoid = std::same_as<result_type, void>,
 	};
 
 	std_handler_ref StdHandlerRef = nullptr;
@@ -124,19 +163,20 @@ auto cpp_try(callable const& Callable, unknown_handler const& UnknownHandler, st
 		if constexpr (HasStdHandler)
 			StdHandlerRef = StdHandler;
 
-		::detail::cpp_try(Callable, UnknownHandler, StdHandlerRef);
+		::detail::cpp_try(Callable, UnknownHandler, StdHandlerRef, Location);
 	}
 	else
 	{
 		result_type Result;
 
+WARNING_PUSH()
+WARNING_DISABLE_MSC(4702) // unreachable code
+
 		[[maybe_unused]]
-		const auto StdHandlerEx = [&](std::exception const& e)
+		const auto StdHandlerEx = [&](std::exception const& e, source_location const&)
 		{
-			// IsVoid is a workaround for 2017
-			// TODO: remove once we drop support for VS2017.
-			if constexpr (HasStdHandler && !IsVoid)
-				::detail::assign(Result, StdHandler, e);
+			if constexpr (HasStdHandler)
+				Result = StdHandler(e, Location);
 		};
 
 		if constexpr (HasStdHandler)
@@ -147,32 +187,61 @@ auto cpp_try(callable const& Callable, unknown_handler const& UnknownHandler, st
 		{
 			Result = Callable();
 		},
-		[&]
+		[&](source_location const&)
 		{
-WARNING_PUSH()
-WARNING_DISABLE_MSC(4702) // unreachable code
-			Result = UnknownHandler();
+			Result = UnknownHandler(Location);
 		},
-		StdHandlerRef);
+		StdHandlerRef,
+		Location);
+
 WARNING_POP()
 
 		return Result;
 	}
 }
 
-std::exception_ptr wrap_current_exception(const char* Function, string_view File, int Line);
+std::exception_ptr wrap_current_exception(source_location const& Location);
 
-#define SAVE_EXCEPTION_TO(ExceptionPtr) \
-	ExceptionPtr = wrap_current_exception(__FUNCTION__, WIDE_SV(__FILE__), __LINE__)
+class save_exception_to
+{
+public:
+	explicit save_exception_to(std::exception_ptr& Ptr):
+		m_Ptr(&Ptr)
+	{
+	}
+
+	void operator()(source_location const& Location) const
+	{
+		*m_Ptr = wrap_current_exception(Location);
+	}
+
+private:
+	std::exception_ptr* m_Ptr;
+};
+
+template<auto Fallback>
+class save_exception_and_return: save_exception_to
+{
+public:
+	explicit save_exception_and_return(std::exception_ptr& Ptr):
+		save_exception_to(Ptr)
+	{}
+
+	auto operator()(source_location const& Location) const
+	{
+		save_exception_to::operator()(Location);
+		return Fallback;
+	}
+};
 
 void rethrow_if(std::exception_ptr& Ptr);
 
-template<class function, class filter, class handler>
-auto seh_try(function const& Callable, filter const& Filter, handler const& Handler)
+template<typename function>
+auto seh_try(function const& Callable, auto const& Filter, auto const& Handler)
 {
 	using result_type = typename function_traits<function>::result_type;
 
-	if constexpr (std::is_same_v<result_type, void>)
+	if constexpr (std::same_as<result_type, void>)
 	{
 		::detail::seh_try(Callable, Filter, Handler);
 	}
@@ -181,38 +250,35 @@ auto seh_try(function const& Callable, filter const& Filter, handler const& Hand
 		result_type Result;
 WARNING_PUSH()
 WARNING_DISABLE_MSC(4702) // unreachable code
-		::detail::seh_try([&]{ Result = Callable(); }, Filter, [&]{ Result = Handler(); });
+		::detail::seh_try([&]{ Result = Callable(); }, Filter, [&](DWORD const ExceptionCode){ Result = Handler(ExceptionCode); });
 WARNING_POP()
 		return Result;
 	}
 }
 
-template<class function, class handler>
-auto seh_try_with_ui(function const& Callable, handler const& Handler, const std::string_view Function, const Plugin* const Module = nullptr)
+auto seh_try_with_ui(auto const& Callable, auto const& Handler, const Plugin* const Module = nullptr, source_location const& Location = source_location::current())
 {
 	return seh_try(
 		Callable,
-		[&](EXCEPTION_POINTERS* const Info){ return detail::seh_filter(Info, Function, Module); },
+		[&](EXCEPTION_POINTERS const* const Info){ return detail::seh_filter(Info, Module, Location); },
 		Handler
 	);
 }
 
-template<class function, class handler>
-auto seh_try_no_ui(function const& Callable, handler const& Handler)
+auto seh_try_no_ui(auto const& Callable, auto const& Handler)
 {
 	return seh_try(
 		Callable,
-		[](EXCEPTION_POINTERS*) { return EXCEPTION_EXECUTE_HANDLER; },
+		[](EXCEPTION_POINTERS const*) { return EXCEPTION_EXECUTE_HANDLER; },
 		Handler
 	);
 }
 
-template<class function>
-auto seh_try_thread(std::exception_ptr& ExceptionPtr, function const& Callable)
+auto seh_try_thread(seh_exception& Exception, auto const& Callable)
 {
 	return seh_try(
 		Callable,
-		[&](EXCEPTION_POINTERS* const Info){ return detail::seh_thread_filter(ExceptionPtr, Info); },
+		[&](EXCEPTION_POINTERS const* const Info){ return detail::seh_thread_filter(Exception, Info); },
 		detail::seh_thread_handler
 	);
 }

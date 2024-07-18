@@ -35,42 +35,61 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 
 // Platform:
+#include "platform.concurrency.hpp"
+#include "platform.debug.hpp"
 
 // Common:
 #include "common/function_ref.hpp"
-#include "common/noncopyable.hpp"
-#include "common/range.hpp"
+#include "common/nifty_counter.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-class tracer: noncopyable
-{
-public:
-	static std::vector<DWORD64> get(string_view Module, const EXCEPTION_POINTERS& Pointers, HANDLE ThreadHandle);
-	static void get_symbols(string_view Module, span<DWORD64 const> Trace, function_ref<void(string&& Line)> Consumer);
-	static void get_symbol(string_view Module, const void* Ptr, string& Address, string& Name, string& Source);
+class map_file;
 
-	class with_symbols
+namespace tracer_detail
+{
+	class tracer
 	{
 	public:
-		NONCOPYABLE(with_symbols);
+		NONCOPYABLE(tracer);
 
-		with_symbols(string_view const Module)
-		{
-			sym_initialise(Module);
-		}
+		tracer();
+		~tracer();
 
-		~with_symbols()
+		void get_symbols(string_view Module, std::span<os::debug::stack_frame const> Trace, function_ref<void(string&& Line)> Consumer) const;
+		void get_symbol(string_view Module, const void* Ptr, string& AddressStr, string& Name, string& Source) const;
+
+		// Same as os::debug::*, but with symbols initialized
+		std::vector<os::debug::stack_frame> current_stacktrace(string_view Module, size_t FramesToSkip = 0, size_t FramesToCapture = std::numeric_limits<size_t>::max()) const;
+		std::vector<os::debug::stack_frame> stacktrace(string_view Module, CONTEXT ContextRecord, HANDLE ThreadHandle) const;
+		std::vector<os::debug::stack_frame> exception_stacktrace(string_view Module) const;
+
+		void current_stacktrace(string_view Module, function_ref<void(string&& Line)> Consumer, size_t FramesToSkip = 0, size_t FramesToCapture = std::numeric_limits<size_t>::max()) const;
+		void stacktrace(string_view Module, function_ref<void(string&& Line)> Consumer, CONTEXT ContextRecord, HANDLE ThreadHandle) const;
+		void exception_stacktrace(string_view Module, function_ref<void(string&& Line)> Consumer) const;
+
+		class with_symbols
 		{
-			sym_cleanup();
-		}
+		public:
+			NONCOPYABLE(with_symbols);
+
+			explicit with_symbols(string_view Module);
+			~with_symbols();
+		};
+
+	private:
+		void sym_initialise(string_view Module);
+		void sym_cleanup();
+
+		os::concurrency::critical_section m_CS;
+		std::unique_ptr<std::unordered_map<uintptr_t, map_file>> m_MapFiles;
+		size_t m_SymInitializeLevel{};
+		bool m_SymInitialized{};
 	};
+}
 
-private:
-	static void sym_initialise(string_view Module);
-	static void sym_cleanup();
-};
+NIFTY_DECLARE(tracer_detail::tracer, tracer);
 
 #endif // TRACER_HPP_AD7B9307_ECFD_46FC_B001_E48C9B89DE64

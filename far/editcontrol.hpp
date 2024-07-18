@@ -51,18 +51,19 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class History;
 class VMenu2;
 
-class EditControl:public Edit
+class EditControl final: public Edit
 {
 	struct Callback;
 	using parent_processkey_t = std::function<int(const Manager::Key& Key)>;
 public:
-	EditControl(window_ptr Owner, SimpleScreenObject* Parent, parent_processkey_t&& ParentProcessKey = nullptr, Callback* aCallback = nullptr, History* iHistory = nullptr, FarList* iList = nullptr, DWORD iFlags = 0);
+	EditControl(window_ptr Owner, SimpleScreenObject* Parent, parent_processkey_t&& ParentProcessKey = nullptr, Callback const* aCallback = nullptr, History* iHistory = nullptr, VMenu* iList = nullptr, DWORD iFlags = 0);
 
 	bool ProcessKey(const Manager::Key& Key) override;
 	bool ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent) override;
 	void Show() override;
 	void Changed(bool DelBlock=false) override;
 	int GetMaxLength() const override {return MaxLength;}
+	void ResizeConsole() override;
 
 	void AutoComplete(bool Manual,bool DelBlock);
 	void SetAutocomplete(bool State) {State? ECFlags.Set(EC_ENABLEAUTOCOMPLETE) : ECFlags.Clear(EC_ENABLEAUTOCOMPLETE);}
@@ -124,25 +125,26 @@ private:
 
 	string m_Mask;
 	History* pHistory;
-	FarList* pList;
+	VMenu* pList;
+	std::weak_ptr<VMenu2> m_ComplMenu;
 
 	FarColor m_Color;
 	FarColor m_SelectedColor;
 	FarColor m_UnchangedColor;
 	parent_processkey_t m_ParentProcessKey;
 
-	int MaxLength;
-	int CursorSize;
-	int CursorPos;
-	int PrevCurPos; //Для определения направления передвижения курсора при наличии маски
-	int MacroSelectionStart;
-	int SelectionStart;
+	int MaxLength{-1};
+	int CursorSize{-1};
+	int CursorPos{};
+	int PrevCurPos{}; //Для определения направления передвижения курсора при наличии маски
+	int MacroSelectionStart{-1};
+	int SelectionStart{-1};
 	FARMACROAREA MacroAreaAC;
 	BitFlags ECFlags;
 	Callback m_Callback;
-	size_t m_CallbackSuppressionsCount;
-	bool Selection;
-	bool MenuUp;
+	std::atomic_size_t m_CallbackSuppressionsCount{};
+	bool Selection{};
+	bool MenuUp{};
 	bool ACState;
 };
 

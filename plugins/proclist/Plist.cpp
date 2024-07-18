@@ -40,7 +40,7 @@ bool GetPData(ProcessData& Data, const ProcessPerfData& pd)
 	Data.dwPrBase = pd.dwProcessPriority;
 	Data.dwParentPID = pd.dwCreatingPID;
 	Data.dwElapsedTime = pd.dwElapsedTime;
-	Data.FullPath.assign(pd.FullPath, !std::wmemcmp(pd.FullPath.data(), L"\\??\\", 4)? 4 : 0, Data.FullPath.npos); // gcc 7.3-8.1 bug: npos required. TODO: Remove after we move to 8.2 or later
+	Data.FullPath.assign(pd.FullPath, !std::wmemcmp(pd.FullPath.data(), L"\\??\\", 4)? 4 : 0);
 	Data.CommandLine = pd.CommandLine;
 	Data.Bitness = pd.Bitness;
 	return true;
@@ -63,13 +63,15 @@ bool GetList(PluginPanelItem*& pPanelItem, size_t& ItemsNumber, PerfThread& Thre
 		return false;
 
 	pPanelItem = new PluginPanelItem[pData.size()]{};
+	auto PanelItemIterator = pPanelItem;
 	ItemsNumber = pData.size();
 
-	for (size_t i = 0; i != pData.size(); ++i)
+	for (auto& i: pData)
 	{
-		auto& CurItem = pPanelItem[i];
-		auto& pd = pData[i];
-		CurItem.UserData.FreeData = FreeUserData;
+		auto& CurItem = *PanelItemIterator;
+		++PanelItemIterator;
+
+		auto& pd = i.second;
 		//delete CurItem.FileName;  // ???
 		CurItem.FileName = new wchar_t[pd.ProcessName.size() + 1];
 		*std::copy(pd.ProcessName.cbegin(), pd.ProcessName.cend(), const_cast<wchar_t*>(CurItem.FileName)) = L'\0';
@@ -81,6 +83,7 @@ bool GetList(PluginPanelItem*& pPanelItem, size_t& ItemsNumber, PerfThread& Thre
 		}
 
 		CurItem.UserData.Data = new ProcessData();
+		CurItem.UserData.FreeData = FreeUserData;
 
 		if (!pd.ftCreation.dwHighDateTime && pd.dwElapsedTime)
 		{
@@ -100,7 +103,7 @@ bool GetList(PluginPanelItem*& pPanelItem, size_t& ItemsNumber, PerfThread& Thre
 		//yjh:???      CurItem.AllocationSize = pd.dwProcessId;
 
 		CurItem.AlternateFileName = new wchar_t[16];
-		FSF.itoa(pd.dwProcessId, (wchar_t*)CurItem.AlternateFileName, 10);
+		FSF.itoa(pd.dwProcessId, const_cast<wchar_t*>(CurItem.AlternateFileName), 10);
 
 		CurItem.NumberOfLinks = pd.dwThreads;
 		GetPData(*static_cast<ProcessData*>(CurItem.UserData.Data), pd);
@@ -255,21 +258,21 @@ void PrintNTCurDirAndEnv(HANDLE InfoFile, HANDLE hProcess, BOOL bExportEnvironme
 
 	if (!CurDir.empty())
 	{
-		WriteToFile(InfoFile, format(FSTR(L"{0}:\n{1}\n"), GetMsg(MCurDir), CurDir));
+		WriteToFile(InfoFile, far::format(L"{}:\n{}\n"sv, GetMsg(MCurDir), CurDir));
 	}
 
 	if (bExportEnvironment && !EnvStrings.empty())
 	{
-		WriteToFile(InfoFile, format(FSTR(L"\n{0}:\n"), GetMsg(MEnvironment)));
+		WriteToFile(InfoFile, far::format(L"\n{}:\n"sv, GetMsg(MEnvironment)));
 
 		for (wchar_t* p = EnvStrings.data(); *p; p += std::wcslen(p) + 1)
 		{
-			WriteToFile(InfoFile, format(FSTR(L"{0}\n"), p));
+			WriteToFile(InfoFile, far::format(L"{}\n"sv, p));
 		}
 	}
 }
 
-void PrintModuleVersion(HANDLE InfoFile, const wchar_t* pVersion, const wchar_t* pDesc, size_t len)
+static void PrintModuleVersion(HANDLE InfoFile, const wchar_t* pVersion, const wchar_t* pDesc, size_t len)
 {
 	do
 	{
@@ -289,20 +292,20 @@ void PrintModuleVersion(HANDLE InfoFile, const wchar_t* pVersion, const wchar_t*
 	}
 }
 
-static void print_module_impl(HANDLE const InfoFile, const std::wstring& Module, DWORD const SizeOfImage, const options& Opt, const std::function<bool(wchar_t*, size_t)>& GetName)
+static void print_module_impl(HANDLE const InfoFile, const std::wstring& Module, DWORD const SizeOfImage, const options& LocalOpt, const std::function<bool(wchar_t*, size_t)>& GetName)
 {
-	auto len = WriteToFile(InfoFile, format(FSTR(L"{0} {1:8X}"), Module, SizeOfImage));
+	auto len = WriteToFile(InfoFile, far::format(L"{} {:8X}"sv, Module, SizeOfImage));
 
 	WCHAR wszModuleName[MAX_PATH];
 
 	if (GetName(wszModuleName, std::size(wszModuleName)))
 	{
-		len += WriteToFile(InfoFile, format(FSTR(L" {0}"), wszModuleName));
+		len += WriteToFile(InfoFile, far::format(L" {}"sv, wszModuleName));
 
 		const wchar_t* pVersion, * pDesc;
 		std::unique_ptr<char[]> Buffer;
 
-		if (Opt.ExportModuleVersion && Plist::GetVersionInfo(static_cast<wchar_t*>(wszModuleName), Buffer, pVersion, pDesc))
+		if (LocalOpt.ExportModuleVersion && Plist::GetVersionInfo(static_cast<wchar_t*>(wszModuleName), Buffer, pVersion, pDesc))
 		{
 			PrintModuleVersion(InfoFile, pVersion, pDesc, len);
 		}
@@ -312,19 +315,19 @@ static void print_module_impl(HANDLE const InfoFile, const std::wstring& Module,
 }
 
 template<typename module_type>
-static void print_module(HANDLE const InfoFile, module_type Module, DWORD const SizeOfImage, options& Opt, const std::function<bool(wchar_t*, size_t)>& GetName)
+static void print_module(HANDLE const InfoFile, module_type Module, DWORD const SizeOfImage, options& LocalOpt, const std::function<bool(wchar_t*, size_t)>& GetName)
 {
 	std::wstring ModuleStr;
 
 	if constexpr (sizeof(module_type) > sizeof(void*))
-		ModuleStr = format(FSTR(L"{0:016X}"), Module);
+		ModuleStr = far::format(L"{:016X}"sv, Module);
 	else
-		ModuleStr = format(FSTR(L"{0:0{1}X}"), reinterpret_cast<uintptr_t>(Module), sizeof(void*) * 2);
+		ModuleStr = far::format(L"{:0{}X}"sv, reinterpret_cast<uintptr_t>(Module), sizeof(void*) * 2);
 
-	print_module_impl(InfoFile, ModuleStr, SizeOfImage, Opt, GetName);
+	print_module_impl(InfoFile, ModuleStr, SizeOfImage, LocalOpt, GetName);
 }
 
-void PrintModules(HANDLE InfoFile, DWORD dwPID, options& Opt)
+void PrintModules(HANDLE InfoFile, DWORD dwPID, options& LocalOpt)
 {
 	DebugToken token;
 	const handle Process(OpenProcessForced(&token, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | READ_CONTROL, dwPID));
@@ -350,7 +353,7 @@ void PrintModules(HANDLE InfoFile, DWORD dwPID, options& Opt)
 			MODULEINFO Info{};
 			GetModuleInformation(Process.get(), Module, &Info, sizeof(Info));
 
-			print_module(InfoFile, Info.lpBaseOfDll, Info.SizeOfImage, Opt, [&](wchar_t* const Buffer, size_t const BufferSize)
+			print_module(InfoFile, Info.lpBaseOfDll, Info.SizeOfImage, LocalOpt, [&](wchar_t* const Buffer, size_t const BufferSize)
 			{
 				return GetModuleFileNameExW(Process.get(), Module, Buffer, static_cast<DWORD>(BufferSize)) != 0;
 			});
@@ -368,7 +371,7 @@ void PrintModules(HANDLE InfoFile, DWORD dwPID, options& Opt)
 		(
 			Process.get(),
 			InfoFile,
-			Opt
+			LocalOpt
 		);
 	}
 

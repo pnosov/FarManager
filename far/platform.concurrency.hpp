@@ -40,6 +40,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "platform.hpp"
 
 // Common:
+#include "common/noncopyable.hpp"
 
 // External:
 
@@ -80,26 +81,21 @@ namespace os::concurrency
 	{
 	public:
 		NONCOPYABLE(thread);
-		MOVABLE(thread);
-
-		enum class mode
-		{
-			join,
-			detach,
-		};
+		MOVE_CONSTRUCTIBLE(thread);
 
 		thread() = default;
 
-		template<typename callable, typename... args>
-		explicit thread(mode Mode, callable&& Callable, args&&... Args): m_Mode(Mode)
+		explicit thread(auto&& Callable, auto&&... Args)
 		{
-			starter([Callable = FWD(Callable), Args = std::make_tuple(FWD(Args)...)]() mutable // make_tuple for GCC 8.1
+			starter([Callable = FWD(Callable), Args = std::tuple(FWD(Args)...)]() mutable
 			{
 				std::apply(FWD(Callable), FWD(Args));
 			});
 		}
 
 		~thread();
+
+		thread& operator=(thread&& rhs) noexcept;
 
 		[[nodiscard]]
 		unsigned get_id() const;
@@ -112,6 +108,7 @@ namespace os::concurrency
 
 	private:
 		void check_joinable() const;
+		void finalise();
 
 		template<class T>
 		void starter(T&& f)
@@ -132,7 +129,6 @@ namespace os::concurrency
 			return 0;
 		}
 
-		mode m_Mode{};
 		unsigned int m_ThreadId{};
 	};
 
@@ -202,6 +198,37 @@ namespace os::concurrency
 		void check_valid() const;
 	};
 
+	class timer
+	{
+	public:
+		NONCOPYABLE(timer);
+		MOVABLE(timer);
+
+		timer() = default;
+
+		explicit timer(std::chrono::milliseconds const DueTime, std::chrono::milliseconds const Period, auto&& Callable, auto&&... Args):
+			m_Callable(std::make_unique<std::function<void()>>([Callable = FWD(Callable), Args = std::tuple(FWD(Args)...)]() mutable
+			{
+				std::apply(FWD(Callable), FWD(Args));
+			}))
+		{
+			initialise_impl(DueTime, Period);
+		}
+
+	private:
+		void initialise_impl(std::chrono::milliseconds DueTime, std::chrono::milliseconds Period);
+
+		// Indirection to have a permanent address for move
+		std::unique_ptr<std::function<void()>> m_Callable;
+
+		struct timer_closer
+		{
+			void operator()(HANDLE Handle) const;
+		};
+
+		os::detail::handle_t<timer_closer> m_Timer;
+	};
+
 	template<class T>
 	class synced_queue: noncopyable
 	{
@@ -211,33 +238,26 @@ namespace os::concurrency
 		[[nodiscard]]
 		bool empty() const
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 			return m_Queue.empty();
 		}
 
-		void push(const T& item)
+		void emplace(auto&&... Args)
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
-			m_Queue.push(item);
-		}
-
-		template<typename... args>
-		void emplace(args&&... Args)
-		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 			m_Queue.emplace(FWD(Args)...);
 		}
 
 		void push(T&& item)
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 			m_Queue.push(FWD(item));
 		}
 
 		[[nodiscard]]
 		bool try_pop(T& To)
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 
 			if (m_Queue.empty())
 				return false;
@@ -248,26 +268,31 @@ namespace os::concurrency
 		}
 
 		[[nodiscard]]
+		auto pop_all()
+		{
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
+			std::queue<T> All;
+			m_Queue.swap(All);
+			return All;
+		}
+
+		[[nodiscard]]
 		auto size() const
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 			return m_Queue.size();
 		}
 
 		void clear()
 		{
-			SCOPED_ACTION(guard_t)(m_QueueCS);
+			SCOPED_ACTION(std::scoped_lock)(m_QueueCS);
 			clear_and_shrink(m_Queue);
 		}
 
 		[[nodiscard]]
-		auto scoped_lock() { return make_raii_wrapper(this, &synced_queue::lock, &synced_queue::unlock); }
+		auto scoped_lock() { return make_raii_wrapper<&synced_queue::lock, &synced_queue::unlock>(this); }
 
 	private:
-		// Q: Why not just use CTAD?
-		// A: To make Coverity and its compiler happy: 'Internal error #2688: assertion failed at: "edg/src/overload.c", line 27123'
-		using guard_t = std::lock_guard<critical_section>;
-
 		void lock() { return m_QueueCS.lock(); }
 		void unlock() { return m_QueueCS.unlock(); }
 

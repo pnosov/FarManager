@@ -41,7 +41,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/range.hpp"
 #include "common/string_utils.hpp"
 #include "common/utility.hpp"
 
@@ -70,16 +69,16 @@ static int GetPreserveCaseStyleMask(const string_view Str)
 	std::bitset<PreserveStyleType::COUNT> Result;
 	Result.set();
 
-	for (size_t i = 0; i != Str.size(); ++i)
+	for (const auto& i: Str)
 	{
-		const auto Upper = is_upper(Str[i]);
-		const auto Lower = !Upper && is_lower(Str[i]);
+		const auto Upper = is_upper(i);
+		const auto Lower = !Upper && is_lower(i);
 
 		if (!Upper)
 		{
 			Result[UPPERCASE_ALL] = false;
 
-			if (!i)
+			if (&i == &Str.front())
 				Result[UPPERCASE_FIRST] = false;
 		}
 
@@ -87,7 +86,7 @@ static int GetPreserveCaseStyleMask(const string_view Str)
 		{
 			Result[LOWERCASE_ALL] = false;
 
-			if (i > 0)
+			if (&i != &Str.front())
 				Result[UPPERCASE_FIRST] = false;
 		}
 	}
@@ -161,7 +160,7 @@ static auto PreserveStyleTokenize(string_view const Str)
 	if (Result.size() > 1)
 	{
 		const auto PrependChar = Result[1].PrependChar;
-		for (const auto& i: span(Result).subspan(2))
+		for (const auto& i: std::span(Result).subspan(2))
 		{
 			if (PrependChar != i.PrependChar)
 			{
@@ -204,7 +203,7 @@ static auto ChoosePreserveStyleType(unsigned Mask)
 
 	for (int Style = COUNT; Style != UNKNOWN; --Style)
 		if (Mask & bit(Style))
-			return PreserveStyleType(Style);
+			return static_cast<PreserveStyleType>(Style);
 
 	return UNKNOWN;
 }
@@ -263,17 +262,15 @@ bool PreserveStyleReplaceString(
 	string_view const Str,
 	string& ReplaceStr,
 	int& CurPos,
-	bool Case,
-	bool WholeWords,
+	search_replace_string_options const options,
 	string_view const WordDiv,
-	bool Reverse,
 	int& SearchLength
 )
 {
 	int Position = CurPos;
 	SearchLength = 0;
 
-	if (Reverse)
+	if (options.Reverse)
 	{
 		Position = std::min(Position - 1, static_cast<int>(Source.size() - 1));
 
@@ -291,9 +288,9 @@ bool PreserveStyleReplaceString(
 		return std::iswblank(Ch) || contains(WordDiv, Ch);
 	};
 
-	for (int I=Position; (Reverse && I>=0) || (!Reverse && static_cast<size_t>(I) < Source.size()); Reverse? I-- : I++)
+	for (int I=Position; (options.Reverse && I>=0) || (!options.Reverse && static_cast<size_t>(I) < Source.size()); options.Reverse? I-- : I++)
 	{
-		if (WholeWords && I && !BlankOrWordDiv(Source[I - 1]))
+		if (options.WholeWords && I && !BlankOrWordDiv(Source[I - 1]))
 			continue;
 
 		bool Matched = true;
@@ -304,9 +301,9 @@ bool PreserveStyleReplaceString(
 		auto j = StrTokens.cbegin();
 		auto LastItem = StrTokens.cend();
 		--LastItem;
-		while (((j != LastItem) || (j == LastItem && T < j->Token.size())) && Source[Idx])
+		while ((j != LastItem || T < j->Token.size()) && Source[Idx])
 		{
-			bool Sep = (static_cast<size_t>(I) < Idx && static_cast<size_t>(I + 1) != Source.size() && IsPreserveStyleTokenSeparator(Source[Idx])
+			bool Sep = (static_cast<size_t>(I) < Idx && static_cast<size_t>(I) + 1 != Source.size() && IsPreserveStyleTokenSeparator(Source[Idx])
 					&& !IsPreserveStyleTokenSeparator(Source[Idx-1])
 					&& !IsPreserveStyleTokenSeparator(Source[Idx+1]));
 
@@ -351,13 +348,13 @@ bool PreserveStyleReplaceString(
 				break;
 			}
 
-			if (Case && Source[Idx] != j->Token[T])
+			if (options.CaseSensitive && Source[Idx] != j->Token[T])
 			{
 				Matched = false;
 				break;
 			}
 
-			if (!Case && upper(Source[Idx]) != upper(j->Token[T]))
+			if (!options.CaseSensitive && upper(Source[Idx]) != upper(j->Token[T]))
 			{
 				Matched = false;
 				break;
@@ -367,7 +364,7 @@ bool PreserveStyleReplaceString(
 			Idx++;
 		}
 
-		if (WholeWords && Idx < Source.size() && !BlankOrWordDiv(Source[Idx]))
+		if (options.WholeWords && Idx < Source.size() && !BlankOrWordDiv(Source[Idx]))
 			continue;
 
 		if (!Matched || T != j->Token.size() || j != LastItem)
@@ -375,10 +372,8 @@ bool PreserveStyleReplaceString(
 
 		const auto SourceTokens = PreserveStyleTokenize(Source.substr(I, Idx - I));
 
-		if (!std::equal(ALL_CONST_RANGE(SourceTokens), ALL_CONST_RANGE(StrTokens), [](const auto& a, const auto& b)
-		{
-			return a.Token.size() == b.Token.size();
-		}))
+		const auto by_token_size = [](const auto& i){ return i.Token.size(); };
+		if (!std::ranges::equal(SourceTokens, StrTokens, {}, by_token_size, by_token_size))
 			continue;
 
 		auto ReplaceStrTokens = PreserveStyleTokenize(ReplaceStr);
@@ -418,7 +413,7 @@ bool PreserveStyleReplaceString(
 				int AfterFirstCommonTypeMask = -1;
 				wchar_t PrependChar = SourceTokens.back().PrependChar;
 
-				for (const auto& SourceI: span(SourceTokens).subspan(1))
+				for (const auto& SourceI: std::span(SourceTokens).subspan(1))
 				{
 					if (AfterFirstCommonTypeMask == -1)
 						AfterFirstCommonTypeMask = SourceI.TypeMask;
@@ -435,7 +430,7 @@ bool PreserveStyleReplaceString(
 					PrependChar = ReplaceStrTokens.back().PrependChar;
 				}
 
-				for (auto& ReplaceI: span(ReplaceStrTokens).subspan(1))
+				for (auto& ReplaceI: std::span(ReplaceStrTokens).subspan(1))
 				{
 					ToPreserveStyleType(ReplaceI.Token, ChoosePreserveStyleType(AfterFirstCommonTypeMask));
 					ReplaceI.PrependChar = PrependChar;
@@ -544,7 +539,7 @@ TEST_CASE("PreserveStyleReplaceString")
 		int Position = 0;
 		int Size;
 		ResultStr = Patterns[i.PatternIndex].Replace;
-		REQUIRE(i.Result == PreserveStyleReplaceString(i.Src, Patterns[i.PatternIndex].Find, ResultStr, Position, false, false, {}, false, Size));
+		REQUIRE(i.Result == PreserveStyleReplaceString(i.Src, Patterns[i.PatternIndex].Find, ResultStr, Position, {}, {}, Size));
 		if (i.Result)
 		{
 			REQUIRE(i.ResultStr == ResultStr);

@@ -50,56 +50,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace os::memory
 {
-	namespace global
-	{
-		namespace detail
-		{
-			void deleter::operator()(HGLOBAL MemoryBlock) const noexcept
-			{
-				GlobalFree(MemoryBlock);
-			}
-
-			void unlocker::operator()(const void* MemoryBlock) const noexcept
-			{
-				GlobalUnlock(const_cast<HGLOBAL>(MemoryBlock));
-			}
-		}
-
-		ptr alloc(unsigned const Flags, size_t const Size)
-		{
-			return ptr(GlobalAlloc(Flags, Size));
-		}
-
-		ptr copy(HGLOBAL const Ptr)
-		{
-			const auto Size = GlobalSize(Ptr);
-			auto Memory = alloc(GMEM_MOVEABLE, Size);
-			if (!Memory)
-				return nullptr;
-
-			const auto From = lock<std::byte const*>(Ptr);
-			const auto To = lock<std::byte*>(Memory);
-			std::copy(From.get(), From.get() + Size, To.get());
-
-			return Memory;
-		}
-
-		ptr copy(string_view const Str)
-		{
-			auto Memory = alloc(GMEM_MOVEABLE, (Str.size() + 1) * sizeof(wchar_t));
-			if (!Memory)
-				return nullptr;
-
-			const auto Copy = lock<wchar_t*>(Memory);
-			if (!Copy)
-				return nullptr;
-
-			*copy_string(Str, Copy.get()) = {};
-			return Memory;
-		}
-
-	}
-
 	namespace local
 	{
 		namespace detail
@@ -121,9 +71,9 @@ namespace os::memory
 		}();
 
 		return in_closed_range(
-			reinterpret_cast<uintptr_t>(info.lpMinimumApplicationAddress),
-			reinterpret_cast<uintptr_t>(Address),
-			reinterpret_cast<uintptr_t>(info.lpMaximumApplicationAddress)
+			std::bit_cast<uintptr_t>(info.lpMinimumApplicationAddress),
+			std::bit_cast<uintptr_t>(Address),
+			std::bit_cast<uintptr_t>(info.lpMaximumApplicationAddress)
 		);
 	}
 
@@ -140,7 +90,7 @@ namespace os::memory
 		std::vector<HANDLE> Heaps(10);
 		for (;;)
 		{
-			const auto NumberOfHeaps = ::GetProcessHeaps(static_cast<DWORD>(Heaps.size()), Heaps.data());
+			const auto NumberOfHeaps = GetProcessHeaps(static_cast<DWORD>(Heaps.size()), Heaps.data());
 			const auto Received = NumberOfHeaps <= Heaps.size();
 			Heaps.resize(NumberOfHeaps);
 			if (Received)
@@ -162,7 +112,7 @@ namespace os::memory
 TEST_CASE("os.memory.is_pointer")
 {
 	REQUIRE(!os::memory::is_pointer(nullptr));
-	REQUIRE(!os::memory::is_pointer(reinterpret_cast<void*>(42)));
+	REQUIRE(!os::memory::is_pointer(std::bit_cast<void*>(42uz)));
 	REQUIRE(os::memory::is_pointer("42"));
 }
 #endif

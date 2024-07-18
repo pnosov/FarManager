@@ -4,24 +4,20 @@
 
 #include "FARCmds.hpp"
 #include "Lang.hpp"
-#include <initguid.h>
 #include "guid.hpp"
 
 
 const wchar_t *GetMsg(int MsgId)
 {
-	return Info.GetMsg(&MainGuid,MsgId);
+	return PsInfo.GetMsg(&MainGuid,MsgId);
 }
 
 // need "delete[]"
 wchar_t *ExpandEnv(const wchar_t* Src, DWORD* Length)
 {
-	DWORD sizeExp=ExpandEnvironmentStrings(Src,NULL,0);
+	DWORD sizeExp=ExpandEnvironmentStrings(Src,{},0);
 	wchar_t *temp=new wchar_t[sizeExp+1];
-	if (temp)
-		ExpandEnvironmentStrings(Src,temp,sizeExp);
-	else
-		sizeExp=0;
+	ExpandEnvironmentStrings(Src,temp,sizeExp);
 
 	if (Length)
 		*Length=sizeExp;
@@ -44,20 +40,17 @@ int GetInt(const wchar_t *Start, wchar_t *End)
 		if (Size > 0)
 		{
 			wchar_t *Tmp=new wchar_t[Size+1];
-			if (Tmp)
-			{
-				wmemcpy(Tmp,Start,Size);
-				Tmp[Size]=0;
+			wmemcpy(Tmp,Start,Size);
+			Tmp[Size]=0;
 
-				if (wcschr(Tmp,L'%')) // Env
-				{
-					wchar_t *Tmp0=ExpandEnv(Tmp,nullptr);
-					delete[] Tmp;
-					Tmp=Tmp0;
-				}
-				Ret=FSF.atoi(Tmp);
+			if (wcschr(Tmp,L'%')) // Env
+			{
+				wchar_t *Tmp0=ExpandEnv(Tmp,nullptr);
 				delete[] Tmp;
+				Tmp=Tmp0;
 			}
+			Ret=FSF.atoi(Tmp);
+			delete[] Tmp;
 		}
 		else
 			Ret=0;
@@ -114,9 +107,9 @@ int PartCmdLine(const wchar_t *CmdStr,wchar_t **NewCmdStr,wchar_t **NewCmdPar)
 	int PipeFound = FALSE;
 
 	if (NewCmdStr)
-		*NewCmdStr=0;
+		*NewCmdStr = {};
 	if (NewCmdPar)
-		*NewCmdPar=0;
+		*NewCmdPar = {};
 
 	wchar_t *Temp=ExpandEnv(CmdStr,nullptr);
 
@@ -124,7 +117,7 @@ int PartCmdLine(const wchar_t *CmdStr,wchar_t **NewCmdStr,wchar_t **NewCmdPar)
 	{
 		FSF.Trim(Temp);
 		wchar_t *CmdPtr = Temp;
-		wchar_t *ParPtr = NULL;
+		wchar_t *ParPtr{};
 		int QuoteFound = FALSE;
 
 		// Разделим собственно команду для исполнения и параметры.
@@ -161,8 +154,7 @@ int PartCmdLine(const wchar_t *CmdStr,wchar_t **NewCmdStr,wchar_t **NewCmdPar)
 		if (NewCmdPar && ParPtr) // Мы нашли параметры и отделяем мух от котлет
 		{
 			wchar_t *ptrNewCmdPar=new wchar_t[lstrlen(ParPtr)+1];
-			if (ptrNewCmdPar)
-				lstrcpy(ptrNewCmdPar, ParPtr);
+			lstrcpy(ptrNewCmdPar, ParPtr);
 			*NewCmdPar=ptrNewCmdPar;
 			*ParPtr=0;
 		}
@@ -170,11 +162,8 @@ int PartCmdLine(const wchar_t *CmdStr,wchar_t **NewCmdStr,wchar_t **NewCmdPar)
 		if (NewCmdStr)
 		{
 			wchar_t *ptrNewCmdStr=new wchar_t[lstrlen(Temp)+1];
-			if (ptrNewCmdStr)
-			{
-				lstrcpy(ptrNewCmdStr, Temp);
-				FSF.Unquote(ptrNewCmdStr);
-			}
+			lstrcpy(ptrNewCmdStr, Temp);
+			FSF.Unquote(ptrNewCmdStr);
 			*NewCmdStr=ptrNewCmdStr;
 		}
 
@@ -188,13 +177,12 @@ static wchar_t *GetAlias(const wchar_t *ModuleName, const wchar_t *FindAlias)
 {
 	wchar_t *FoundAlias=nullptr;
 
-	int ret=GetConsoleAliasesLength((LPWSTR)ModuleName);
+	int ret=GetConsoleAliasesLength(const_cast<LPWSTR>(ModuleName));
 	if (ret)
 	{
-		wchar_t *AllAliases=new wchar_t[ret];
-		if (AllAliases)
-		{
-			ret=GetConsoleAliases(AllAliases, ret, (LPWSTR)ModuleName);
+			wchar_t *AllAliases=new wchar_t[ret];
+
+			ret=GetConsoleAliases(AllAliases, ret, const_cast<LPWSTR>(ModuleName));
 			if (ret)
 			{
 				wchar_t *ptr=AllAliases;
@@ -207,8 +195,7 @@ static wchar_t *GetAlias(const wchar_t *ModuleName, const wchar_t *FindAlias)
 						if (!FSF.LStricmp(ptr,FindAlias))
 						{
 							FoundAlias=new wchar_t[lstrlen(p+1)+1];
-							if (FoundAlias)
-								lstrcpy(FoundAlias,p+1);
+							lstrcpy(FoundAlias,p+1);
 							break;
 						}
 						*p=L'=';
@@ -217,7 +204,6 @@ static wchar_t *GetAlias(const wchar_t *ModuleName, const wchar_t *FindAlias)
 				}
 			}
 			delete[] AllAliases;
-		}
 	}
 
 	return FoundAlias;
@@ -254,7 +240,7 @@ wchar_t* ProcessOSAliases(const wchar_t *Str)
 				if (ModuleNameTemp)
 				{
 					ModuleName=ModuleNameTemp;
-					SizeModuleName = GetModuleFileName(NULL, ModuleName, BufferSize);
+					SizeModuleName = GetModuleFileName({}, ModuleName, BufferSize);
 				}
 			} while ((SizeModuleName >= BufferSize) || (!SizeModuleName && GetLastError() == ERROR_INSUFFICIENT_BUFFER));
 		}
@@ -263,8 +249,7 @@ wchar_t* ProcessOSAliases(const wchar_t *Str)
 		if (ModuleName)
 		{
 			ptrAlias=GetAlias(FSF.PointToName(ModuleName), pNewCmdStr);
-			if (ModuleName)
-				free(ModuleName);
+			free(ModuleName);
 		}
 
 		if (!ptrAlias)
@@ -281,17 +266,13 @@ wchar_t* ProcessOSAliases(const wchar_t *Str)
 
 	if (!ptrAlias)
 	{
-		if (pNewCmdStr)
-			delete[] pNewCmdStr;
-
-		if (pNewCmdPar)
-			delete[] pNewCmdPar;
+		delete[] pNewCmdStr;
+		delete[] pNewCmdPar;
 		return nullptr;
 	}
 	else
 	{
-		if (pNewCmdStr)
-			delete[] pNewCmdStr;
+		delete[] pNewCmdStr;
 	}
 
 	wchar_t *ptrCmdStr=ptrAlias;
@@ -312,30 +293,21 @@ wchar_t* ProcessOSAliases(const wchar_t *Str)
 
 	// alloc memory
 	wchar_t *tempCmdStr=new wchar_t[lstrlen(ptrAlias)+countP*(pNewCmdPar?lstrlen(pNewCmdPar):0)+1];
-	if (tempCmdStr)
-	{
-		lstrcpy(tempCmdStr,ptrAlias);
-		// replace
-		if (!ReplaceStrings(tempCmdStr,L"$*",pNewCmdPar?pNewCmdPar:L"",-1,FALSE))
-		{
-			//... or merge
-			if (pNewCmdPar)
-			{
-				lstrcat(tempCmdStr,L" ");
-				lstrcat(tempCmdStr,pNewCmdPar);
-			}
-		}
-		ptrCmdStr=tempCmdStr;
-		delete[] ptrAlias;
-	}
-	else
-	{
-		delete[] ptrAlias;
-		return nullptr;
-	}
 
-	if (pNewCmdPar)
-		delete[] pNewCmdPar;
+	lstrcpy(tempCmdStr,ptrAlias);
+	// replace
+	if (!ReplaceStrings(tempCmdStr,L"$*",pNewCmdPar?pNewCmdPar:L"",-1,FALSE))
+	{
+		//... or merge
+		if (pNewCmdPar)
+		{
+			lstrcat(tempCmdStr,L" ");
+			lstrcat(tempCmdStr,pNewCmdPar);
+		}
+	}
+	ptrCmdStr=tempCmdStr;
+	delete[] ptrAlias;
+	delete[] pNewCmdPar;
 
 	return ptrCmdStr;
 }
@@ -353,11 +325,6 @@ wchar_t *GetShellLinkPath(const wchar_t *LinkFile)
 	FSF.Unquote(Temp);
 	size_t SizeNativePath=FSF.ConvertPath(CPM_NATIVE, Temp, nullptr, 0);
 	wchar_t *FileName=new wchar_t[SizeNativePath+1];
-	if (!FileName)
-	{
-		delete[] Temp;
-		return nullptr;
-	}
 	FSF.ConvertPath(CPM_NATIVE, Temp, FileName, SizeNativePath);
 	delete[] Temp;
 
@@ -368,7 +335,7 @@ wchar_t *GetShellLinkPath(const wchar_t *LinkFile)
 	}
 
 	// <Check lnk-header>
-	HANDLE hFile = CreateFile(FileName, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL );
+	HANDLE hFile = CreateFile(FileName, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, {}, OPEN_EXISTING, 0, {});
 
 	if (hFile != INVALID_HANDLE_VALUE)
 	{
@@ -392,7 +359,7 @@ wchar_t *GetShellLinkPath(const wchar_t *LinkFile)
 
 		ShellLinkHeader slh = { 0 };
 		DWORD read = 0;
-		ReadFile( hFile, &slh, sizeof( ShellLinkHeader ), &read, NULL );
+		ReadFile(hFile, &slh, sizeof(ShellLinkHeader), &read, {});
 
 		if ( read == sizeof( ShellLinkHeader ) && slh.HeaderSize == 0x0000004C)
 		{
@@ -410,27 +377,26 @@ wchar_t *GetShellLinkPath(const wchar_t *LinkFile)
 		Result=false;
 		const auto CoInited = SUCCEEDED(CoInitialize(nullptr));
 
-		IShellLink* psl = NULL;
-		HRESULT hres = CoCreateInstance(CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID*)&psl);
+		IShellLink* psl{};
+		HRESULT hres = CoCreateInstance(CLSID_ShellLink, {}, CLSCTX_INPROC_SERVER, IID_IShellLink, (LPVOID*)&psl);
 		if (SUCCEEDED(hres))
 		{
-			IPersistFile* ppf = NULL;
+			IPersistFile* ppf{};
 			hres = psl->QueryInterface(IID_IPersistFile, (void**)&ppf);
 			if (SUCCEEDED(hres))
 			{
 				hres = ppf->Load(FileName, STGM_READ);
 				if (SUCCEEDED(hres))
 				{
-					hres = psl->Resolve(NULL, 0);
+					hres = psl->Resolve({}, 0);
 					if (SUCCEEDED(hres))
 					{
 						wchar_t TargPath[MAX_PATH] = {0};
-						hres = psl->GetPath(TargPath, ARRAYSIZE(TargPath), NULL, SLGP_RAWPATH);
+						hres = psl->GetPath(TargPath, ARRAYSIZE(TargPath), {}, SLGP_RAWPATH);
 						if (SUCCEEDED(hres))
 						{
 							Path=new wchar_t[lstrlen(TargPath)+1];
-							if (Path)
-								lstrcpy(Path, TargPath);
+							lstrcpy(Path, TargPath);
 						}
 					}
 				}
@@ -451,7 +417,7 @@ wchar_t *GetShellLinkPath(const wchar_t *LinkFile)
 
 bool StrToGuid(const wchar_t *Value,GUID *Guid)
 {
-	return UuidFromString(reinterpret_cast<unsigned short*>((void*)Value), Guid) == RPC_S_OK;
+	return UuidFromString(reinterpret_cast<unsigned short*>(const_cast<wchar_t*>(Value)), Guid) == RPC_S_OK;
 }
 
 bool IsTextUTF8(const char* Buffer,size_t Length)
@@ -507,7 +473,7 @@ UINT GetCPBuffer(const void* data, size_t size, size_t* off)
 
 	UINT cp=(UINT)-1;
 	size_t Pos = 0;
-	wchar_t* Ptr = (wchar_t *)data;
+	const auto Ptr = static_cast<const wchar_t*>(data);
 	size_t PtrSize = size;
 
 	if (Ptr)
@@ -529,7 +495,7 @@ UINT GetCPBuffer(const void* data, size_t size, size_t* off)
 		}
 		else
 		{
-			if (IsTextUTF8((char*)Ptr,PtrSize))
+			if (IsTextUTF8(reinterpret_cast<const char*>(Ptr),PtrSize))
 			{
 				cp=CP_UTF8;
 			}
@@ -596,22 +562,20 @@ wchar_t *ConvertBuffer(wchar_t* Ptr,size_t PtrSize,BOOL outputtofile, size_t& sh
 			//case CP_UTF8:
 			default:
 			{
-				size_t PtrLength=MultiByteToWideChar(cp,0,(char*)Ptr+off,-1,NULL,0);
+				size_t PtrLength=MultiByteToWideChar(cp,0,(char*)Ptr+off,-1,{},0);
 
 				if (PtrLength)
 				{
 					wchar_t* NewPtr=new wchar_t[PtrLength+1];
-					if (NewPtr)
+
+					if (MultiByteToWideChar(cp,0,(char*)Ptr+off,-1,NewPtr,(int)PtrLength))
 					{
-						if (MultiByteToWideChar(cp,0,(char*)Ptr+off,-1,NewPtr,(int)PtrLength))
-						{
-							delete[] Ptr;
-							Ptr=NewPtr;
-						}
-						else
-						{
-							delete[] NewPtr;
-						}
+						delete[] Ptr;
+						Ptr=NewPtr;
+					}
+					else
+					{
+						delete[] NewPtr;
 					}
 				}
 				break;

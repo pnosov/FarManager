@@ -44,6 +44,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
+using crt_new_handler = int(*)(size_t);
+
 class new_handler
 {
 public:
@@ -52,14 +54,16 @@ public:
 	new_handler();
 	~new_handler();
 
-	bool retry() const;
+	bool retry();
 
 private:
+	void initialize_ui();
+
 	COORD m_BufferSize;
 	os::handle m_Screen;
 	std::new_handler m_OldHandler{};
+	crt_new_handler m_OldCrtHandler{};
+	int m_OldCrtMode{};
 };
-
-void invoke_new_handler();
 
 #endif // NEW_HANDLER_HPP_2B8C1974_7EFE_41DA_A92F_545A01D34A08

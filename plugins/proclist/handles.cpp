@@ -12,6 +12,8 @@
 #include <lmcons.h>
 #include <sddl.h>
 
+#include <smart_ptr.hpp>
+
 using namespace std::literals;
 
 struct SYSTEM_HANDLE_TABLE_ENTRY_INFO
@@ -25,16 +27,11 @@ struct SYSTEM_HANDLE_TABLE_ENTRY_INFO
 	ULONG GrantedAccess;
 };
 
-struct SYSTEM_HANDLE_INFORMATION
+// Defined in GCC headers with different field names :(
+struct PROCLIST_SYSTEM_HANDLE_INFORMATION
 {
 	ULONG NumberOfHandles;
 	SYSTEM_HANDLE_TABLE_ENTRY_INFO Handles[1];
-};
-
-struct CLIENT_ID
-{
-	HANDLE UniqueProcess;
-	HANDLE UniqueThread;
 };
 
 struct THREAD_BASIC_INFORMATION
@@ -47,34 +44,15 @@ struct THREAD_BASIC_INFORMATION
 	LONG       BasePriority;
 };
 
-struct PROCESS_BASIC_INFORMATION
-{
-	PVOID Reserved1;
-	PVOID PebBaseAddress;
-	PVOID Reserved2[2];
-	ULONG_PTR UniqueProcessId;
-	PVOID Reserved3;
-};
-
-struct UNICODE_STRING
-{
-	WORD  Length;
-	WORD  MaximumLength;
-	PWSTR Buffer;
-};
-
-enum OBJECT_INFORMATION_CLASS
-{
-	ObjectBasicInformation,
-	ObjectNameInformation,
-	ObjectTypeInformation,
-};
+#ifdef _MSC_VER
+inline constexpr auto ObjectNameInformation = static_cast<OBJECT_INFORMATION_CLASS>(1);
+#endif
 
 static bool GetProcessId(HANDLE Handle, DWORD& Pid)
 {
 	PROCESS_BASIC_INFORMATION pi{};
 
-	if (pNtQueryInformationProcess(Handle, ProcessBasicInformation, &pi, sizeof(pi), {}) != STATUS_SUCCESS)
+	if (!NT_SUCCESS(pNtQueryInformationProcess(Handle, ProcessBasicInformation, &pi, sizeof(pi), {})))
 		return false;
 
 	Pid = static_cast<DWORD>(pi.UniqueProcessId);
@@ -84,7 +62,7 @@ static bool GetProcessId(HANDLE Handle, DWORD& Pid)
 static bool GetThreadId(HANDLE Handle, DWORD& Tid)
 {
 	THREAD_BASIC_INFORMATION ti;
-	if (pNtQueryInformationThread(Handle, 0, &ti, sizeof(ti), {}) != STATUS_SUCCESS)
+	if (!NT_SUCCESS(pNtQueryInformationThread(Handle, 0, &ti, sizeof(ti), {})))
 		return false;
 
 	Tid = static_cast<DWORD>(reinterpret_cast<uintptr_t>(ti.ClientId.UniqueThread));
@@ -103,33 +81,30 @@ static std::unique_ptr<char[]> query_object(HANDLE Handle, OBJECT_INFORMATION_CL
 	{
 		auto Buffer = std::make_unique<char[]>(Size);
 
-		switch (pNtQueryObject(Handle, Class, Buffer.get(), Size, &Size))
-		{
-		case STATUS_SUCCESS:
+		const auto Status = pNtQueryObject(Handle, Class, Buffer.get(), Size, &Size);
+		if (NT_SUCCESS(Status))
 			return Buffer;
 
-		case STATUS_INFO_LENGTH_MISMATCH:
+		if (Status == STATUS_INFO_LENGTH_MISMATCH)
 			continue;
 
-		default:
-			return {};
-		}
+		return {};
 	}
 }
 
 static std::wstring GetFileName(HANDLE Handle)
 {
-	if (GetFileType(Handle) == FILE_TYPE_PIPE)
+	if (const auto FileType = GetFileType(Handle); FileType != FILE_TYPE_DISK)
 	{
 		// Check if it's possible to get the file name info
 		struct test
 		{
 			static DWORD WINAPI GetFileNameThread(PVOID Param)
 			{
-				DWORD iob[2];
-				BYTE info[256];
+				IO_STATUS_BLOCK iob;
+				FILE_BASIC_INFO info;
 				const auto FileBasicInformation = 4;
-				pNtQueryInformationFile(Param, iob, info, sizeof(info), FileBasicInformation);
+				pNtQueryInformationFile(Param, &iob, &info, sizeof(info), FileBasicInformation);
 				return 0;
 			}
 		};
@@ -140,7 +115,14 @@ static std::wstring GetFileName(HANDLE Handle)
 		if (WaitForSingleObject(Thread.get(), 100) == WAIT_TIMEOUT)
 		{
 			TerminateThread(Thread.get(), 0);
-			return L"<pipe>"s;
+			switch (FileType)
+			{
+			case FILE_TYPE_PIPE:     return L"<pipe>"s;
+			case FILE_TYPE_CHAR:     return L"<char>"s;
+			case FILE_TYPE_REMOTE:   return L"<remote>"s;
+			case FILE_TYPE_UNKNOWN:  return L"<unknown>"s;
+			default:                 return far::format(L"<unknown> ({})"sv, FileType);
+			}
 		}
 	}
 
@@ -239,7 +221,7 @@ static WORD GetTypeFromTypeToken(const wchar_t* const TypeToken)
 		return !FSF.LStricmp(i, TypeToken);
 	});
 
-	return It == std::cend(constStrTypes)? OB_OTHER : static_cast<WORD>(It - std::cbegin(constStrTypes));
+	return It == std::cend(constStrTypes)? static_cast<WORD>(OB_OTHER) : static_cast<WORD>(It - std::cbegin(constStrTypes));
 }
 
 static const auto& GetUserAccountID()
@@ -287,13 +269,13 @@ static std::wstring GetNameByType(HANDLE handle, WORD type, PerfThread* pThread)
 			const std::scoped_lock l(*pThread);
 			const auto pd = pThread->GetProcessData(dwId, 0);
 			const auto pName = pd? pd->ProcessName : L"<unknown>"sv;
-			return format(FSTR(L"{0} ({1})"), pName, dwId);
+			return far::format(L"{} ({})"sv, pName, dwId);
 		}
 		return {};
 
 	case OB_TYPE_THREAD:
 		if (DWORD dwId = 0; GetThreadId(handle, dwId))
-			return format(FSTR(L"TID: {0}"), dwId);
+			return far::format(L"TID: {}"sv, dwId);
 		return {};
 
 	case OB_TYPE_FILE:
@@ -304,11 +286,11 @@ static std::wstring GetNameByType(HANDLE handle, WORD type, PerfThread* pThread)
 		if (!Data)
 			return {};
 
-		const auto& Str = *reinterpret_cast<const UNICODE_STRING*>(Data.get());
-		if (!Str.Length)
+		const auto& DataStr = *reinterpret_cast<const UNICODE_STRING*>(Data.get());
+		if (!DataStr.Length)
 			return {};
 
-		const std::wstring_view ws(Str.Buffer, Str.Length / sizeof(wchar_t));
+		const std::wstring_view ws(DataStr.Buffer, DataStr.Length / sizeof(wchar_t));
 
 		const auto
 			REGISTRY = L"\\REGISTRY\\"sv,
@@ -317,33 +299,28 @@ static std::wstring GetNameByType(HANDLE handle, WORD type, PerfThread* pThread)
 			MACHINE  = L"MACHINE"sv,
 			CLASSES_ = L"_CLASSES"sv;
 
-		const auto starts_with = [](std::wstring_view const Str, std::wstring_view const Pattern)
-		{
-			return Str.size() >= Pattern.size() && std::equal(Pattern.cbegin(), Pattern.cend(), Str.cbegin());
-		};
-
-		if (type == OB_TYPE_KEY && starts_with(ws, REGISTRY))
+		if (type == OB_TYPE_KEY && ws.starts_with(REGISTRY))
 		{
 			auto ws1 = ws.substr(REGISTRY.size());
 			std::wstring_view s0;
 
-			if (starts_with(ws1, USER))
+			if (ws1.starts_with(USER))
 			{
 				ws1.remove_prefix(USER.size());
 
-				if (starts_with(ws1, L"\\"sv))
+				if (ws1.starts_with(L"\\"sv))
 				{
 					s0 = L"HKU\\"sv;
 					ws1.remove_prefix(1);
 
 					const auto& Id = GetUserAccountID();
 
-					if (starts_with(ws1, Id))
+					if (ws1.starts_with(Id))
 					{
 						s0 = L"HKCU"sv;
 						ws1.remove_prefix(Id.size());
 
-						if (starts_with(ws1, CLASSES_))
+						if (ws1.starts_with(CLASSES_))
 						{
 							s0 = L"HKCU\\Classes"sv;
 							ws1.remove_prefix(CLASSES_.size());
@@ -355,8 +332,8 @@ static std::wstring GetNameByType(HANDLE handle, WORD type, PerfThread* pThread)
 					s0 = L"HKU"sv;
 				}
 			}
-			else if (starts_with(ws1, CLASSES)) { s0 = L"HKCR"sv; ws1.remove_prefix(CLASSES.size()); }
-			else if (starts_with(ws1, MACHINE)) { s0 = L"HKLM"sv; ws1.remove_prefix(MACHINE.size()); }
+			else if (ws1.starts_with(CLASSES)) { s0 = L"HKCR"sv; ws1.remove_prefix(CLASSES.size()); }
+			else if (ws1.starts_with(MACHINE)) { s0 = L"HKLM"sv; ws1.remove_prefix(MACHINE.size()); }
 
 			if (!s0.empty())
 			{
@@ -402,14 +379,14 @@ auto make_virtual(size_t const Size)
 bool PrintHandleInfo(DWORD dwPID, HANDLE file, bool bIncludeUnnamed, PerfThread* pThread)
 {
 	DWORD size = 0x2000;
-	auto pSysHandleInformation = make_virtual<SYSTEM_HANDLE_INFORMATION>(size);
+	auto pSysHandleInformation = make_virtual<PROCLIST_SYSTEM_HANDLE_INFORMATION>(size);
 	if (!pSysHandleInformation)
 		return false;
 
 	for (;;)
 	{
 		DWORD needed;
-		if (pNtQuerySystemInformation(16, pSysHandleInformation.get(), size, &needed) == STATUS_SUCCESS)
+		if (NT_SUCCESS(pNtQuerySystemInformation(16, pSysHandleInformation.get(), size, &needed)))
 			break;
 
 		if (needed == 0)
@@ -417,12 +394,12 @@ bool PrintHandleInfo(DWORD dwPID, HANDLE file, bool bIncludeUnnamed, PerfThread*
 
 		// The size was not enough
 		size = needed + 256;
-		pSysHandleInformation = make_virtual<SYSTEM_HANDLE_INFORMATION>(size);
+		pSysHandleInformation = make_virtual<PROCLIST_SYSTEM_HANDLE_INFORMATION>(size);
 		if (!pSysHandleInformation)
 			return false;
 	}
 
-	WriteToFile(file, format(FSTR(L"\n{0}:\n{1:6} {2:8} {3:15} {4}\n"),
+	WriteToFile(file, far::format(L"\n{}:\n{:6} {:8} {:15} {}\n"sv,
 		GetMsg(MHandles),
 		GetMsg(MHandlesHandle),
 		GetMsg(MHandlesAccess),
@@ -452,7 +429,7 @@ bool PrintHandleInfo(DWORD dwPID, HANDLE file, bool bIncludeUnnamed, PerfThread*
 		if (!bIncludeUnnamed && Name.empty())
 			continue;
 
-		WriteToFile(file, format(FSTR(L"{0:6X} {1:08X} {2:15} {3}\n"),
+		WriteToFile(file, far::format(L"{:6X} {:08X} {:15} {}\n"sv,
 			pSysHandleInformation->Handles[i].HandleValue,
 			pSysHandleInformation->Handles[i].GrantedAccess,
 			TypeToken,

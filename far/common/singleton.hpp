@@ -34,6 +34,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include "noncopyable.hpp"
 
+#include <concepts>
+
 //----------------------------------------------------------------------------
 
 template<typename type>
@@ -43,14 +45,27 @@ public:
 	[[nodiscard]]
 	static type& instance()
 	{
-		static_assert(std::is_base_of_v<singleton, type>);
+		static_assert(std::derived_from<type, singleton>);
 
 		static type Instance;
+
+		assert(!Instance.Destroyed);
+
 		return Instance;
 	}
 
 protected:
 	using singleton_type = singleton<type>;
+
+	singleton() = default;
+
+	~singleton()
+	{
+		Destroyed = true;
+	}
+
+private:
+	bool Destroyed{};
 };
 
 #define IMPLEMENTS_SINGLETON friend singleton_type

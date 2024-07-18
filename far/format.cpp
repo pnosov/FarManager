@@ -34,6 +34,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "format.hpp"
 
 // Internal:
+#include "encoding.hpp"
 #include "components.hpp"
 #include "locale.hpp"
 
@@ -51,7 +52,20 @@ WARNING_DISABLE_GCC("-Wmissing-declarations")
 
 WARNING_DISABLE_CLANG("-Weverything")
 
-#define FMT_STATIC_THOUSANDS_SEPARATOR ::locale.thousand_separator()
+struct thousands_separator
+{
+	explicit(false) operator wchar_t() const
+	{
+		return ::locale.thousand_separator();
+	}
+
+	explicit(false) operator char() const
+	{
+		return static_cast<char>(operator wchar_t());
+	}
+};
+
+#define FMT_STATIC_THOUSANDS_SEPARATOR (thousands_separator{})
 
 #include "thirdparty/fmt/format.cc"
 
@@ -61,6 +75,6 @@ namespace
 {
 	SCOPED_ACTION(components::component)([]
 	{
-		return components::info{ L"fmt"sv, format(FSTR(L"{0}.{1}.{2}"), FMT_VERSION / 10000, FMT_VERSION % 10000 / 100, FMT_VERSION % 100) };
+		return components::info{ L"fmt"sv, far::format(L"{}.{}.{}"sv, FMT_VERSION / 10000, FMT_VERSION % 10000 / 100, FMT_VERSION % 100) };
 	});
 }

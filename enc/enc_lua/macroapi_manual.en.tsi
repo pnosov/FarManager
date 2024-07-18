@@ -1,4 +1,4 @@
-<header>
+ï»¿<header>
 tag=SMZ1
 ver=2.7
 </header>
@@ -104,7 +104,7 @@ lv=2
 dt=Text
 nm=Regular macros
 ctime=3580139016
-mtime=3785248441
+mtime=3915184011
 <article>
 #_<markdown>
 #_
@@ -121,7 +121,7 @@ mtime=3785248441
 #_    sortpriority = 50;                                            -- number (optional field)
 #_    selected     = true;                                          -- boolean (optional field)
 #_    condition    = function(key,data) return Far.Height>30 end;   -- function (optional field)
-#_    action       = function(data) msgbox("","Macro example") end; -- function
+#_    action       = function(data) msgbox("","Macro example") end; -- function (optional field)
 #_    id           = "F0109446-AA63-4873-AEC3-17AEE993AA53";        -- string (optional field)
 #_  }
 #_```
@@ -166,7 +166,7 @@ mtime=3785248441
 #_   * If it returns a number then this number is used instead of `priority`.
 #_   * In other cases of return value (e.g., `true`) `priority` is used.<br><br>
 #_
-#_1. Field `action` - a function.<br>
+#_1. Optional field `action` - a function.<br>
 #_   * If the macro has passed successfully all preliminary checks (area, flags, file mask, priority)
 #_     then this function is called.
 #_   * It is called with 1 argument: a copy of the table-argument received by function Macro.
@@ -496,7 +496,7 @@ lv=2
 dt=Text
 nm=Content columns
 ctime=3774010006
-mtime=3774015625
+mtime=3833535160
 <article>
 #_<markdown>
 #_
@@ -505,6 +505,7 @@ mtime=3774015625
 #_
 #_```
 #_ContentColumns {
+#_  description      = "Content column example";                -- string (optional field)
 #_  filemask         = "*.txt";                                 -- string (optional field)
 #_  GetContentFields = function(colnames) ...... end;           -- function
 #_  GetContentData   = function(filename, colnames) ...... end; -- function
@@ -614,7 +615,7 @@ lv=2
 dt=Text
 nm=Command line operations
 ctime=3617997112
-mtime=3637689351
+mtime=3925879779
 <article>
 #_<markdown>
 #_* `macro: load [path]`<br>
@@ -626,6 +627,10 @@ mtime=3637689351
 #_   Unload macros (except those created with operation `MCTL_ADDMACRO`) and event handlers.
 #_* `macro: about`<br>
 #_   Show versions of the plugin and the libraries it is using.
+#_* `macro: browser`<br>
+#_   Run macro browser.
+#_* `macro: test`<br>
+#_   Run tests and exit Far (exit code 0 = success)
 #_* `lua: [=] <code>`
 #_* `moon: [=] <code>`<br>
 #_   Execute the code `<code>` written correspondingly in Lua or MoonScript.<br>
@@ -769,7 +774,7 @@ mtime=3720944940
 #_1. `Menu.Info.Id -> Menu.Id`
 #_1. `MsX`, `MsY`, `MsButton`, `MsCtrlState`, `MsEventFlags` -- see table [`Mouse`][Mouse]
 #_1. `RCounter` does not exist anymore.
-#_1. `Macro.Const`, `Macro.Func`, `Macro.Keyword` è `Macro.Var` do not exist anymore.
+#_1. `Macro.Const`, `Macro.Func`, `Macro.Keyword` and `Macro.Var` do not exist anymore.
 #_1. Macro specification: flag `DisableOutput` does not exist; screen redraw is disabled by default;
 #_   added flag `EnableOutput` (apply it if screen redraw is needed during macro execution).
 #_1. Macro specification: flags `Selection` and `NoSelection` are no more applicable for
@@ -855,7 +860,7 @@ mtime=3659609142
 #_
 #_**Notes:**
 #_
-#_1. Functions *band*, *bnot*, *bor*, *bxor*, *lshift* è *rshift* (bitwise operations)
+#_1. Functions *band*, *bnot*, *bor*, *bxor*, *lshift* and *rshift* (bitwise operations)
 #_   are global aliases of the same-named functions of *bit64* library.
 #_   (see LuaFAR manual).
 #_
@@ -863,7 +868,7 @@ mtime=3659609142
 #_   return *false*.
 #_
 #_3. For uniformity sake, all the above functions (except the bitwise ones)
-#_   are duplicated in table `mf`, for example: *eval* è *mf.eval* reference
+#_   are duplicated in table `mf`, for example: *eval* and *mf.eval* reference
 #_   the same function.
 #_
 #_@@@
@@ -957,44 +962,76 @@ lv=2
 dt=Text
 nm=mf
 ctime=3553243522
-mtime=3778310252
+mtime=3923469142
 <article>
-#_**Properties:** none.
+#_**Properties:**
+#_  none.
 #_
 #_**Functions:**
-#_
-#_  abs                len
-#_  `acall`              max
-#_  `AddExitHandler`     `mdelete`
-#_  akey               min
-#_  asc                `mload`
-#_  atoi               mmode
-#_  beep               mod
-#_  chr                `msave`
-#_  clip               msgbox
-#_  date               `postmacro`
-#_  `deserialize`        print           
-#_  env                `printconsole`
-#_  `eval`               prompt        
-#_  `exit`               replace         
-#_  fattr              rindex          
-#_  fexist             `serialize`
-#_  float              size2str  
-#_  flock              sleep     
-#_  fmatch             string    
-#_  fsplit             strpad    
-#_  `GetMacroCopy`       strwrap   
-#_  iif                substr  
-#_  index              testfolder
-#_  int                trim      
-#_  itoa               ucase     
-#_  key                `usermenu`
-#_  `Keys`               waitkey   
-#_  lcase              xlat    
+#_  abs
+#_  `acall`
+#_  `AddExitHandler`
+#_  akey
+#_  asc
+#_  atoi
+#_  beep
+#_  chr
+#_  clip
+#_  date
+#_  `deserialize`
+#_  `EnumScripts`
+#_  env
+#_  `eval`
+#_  `exit`
+#_  fattr
+#_  fexist
+#_  float
+#_  flock
+#_  fmatch
+#_  fsplit
+#_  `GetMacroCopy`
+#_  iif
+#_  index
+#_  int
+#_  itoa
+#_  key
+#_  `Keys`
+#_  lcase
+#_  len
+#_  `mainmenu`
+#_  max
+#_  `mdelete`
+#_  min
+#_  `mload`
+#_  mmode
+#_  mod
+#_  `msave`
+#_  msgbox
+#_  `postmacro`
+#_  print
+#_  `printconsole`
+#_  prompt
+#_  replace
+#_  rindex
+#_  `serialize`
+#_  size2str
+#_  sleep
+#_  string
+#_  strpad
+#_  strwrap
+#_  substr
+#_  testfolder
+#_  trim
+#_  ucase
+#_  `usermenu`
+#_  waitkey
+#_  xlat
 #_
 #_@@@
+#_[mainmenu]: 111.html
 #_[acall]: 91.html
 #_[deserialize]: 104.html
+#_[EnumScripts]: 106.html
 #_[eval]: 79.html
 #_[exit]: 61.html
 #_[GetMacroCopy]: 72.html
@@ -1106,7 +1143,7 @@ mtime=3770399831
 #_
 #_**Parameters:**
 #_  handler:  function
-#_  ...    :  arbitrary number of sdditional values
+#_  ...    :  arbitrary number of additional values
 #_
 #_**Returns:**
 #_  values passed in ... (if any)
@@ -1167,6 +1204,48 @@ mtime=3778310982
 </article>
 </node>
 <node>
+id=106
+lv=3
+dt=Text
+nm=EnumScripts
+ctime=3833370836
+mtime=3833370836
+<article>
+#_next_script = mf.EnumScripts (ScriptType)
+#_
+#_**Parameters:**
+#_  ScriptType:  string
+#_
+#_**Returns:**
+#_  next_script:  function
+#_
+#_**Description:**
+#_  The *EnumScripts* function returns an iterator function *next_script* that allows
+#_  to traverse over all scripts of the specified *ScriptType* type, where *ScriptType* is one of the values:
+#_  "CommandLine", "ContentColumns", "Event", "Macro", "MenuItem", "PanelModule"
+#_  (by the name of the loader function), and also "CustomSortModes".
+#_
+#_script, index = next_script()
+#_
+#_  Each subsequent call to *next_script* returns a copy of the next table
+#_  from loaded scripts, or nil if all scripts have already been traversed.
+#_  Thus, for convenient enumeration, you can use the construction:
+#_
+#_  for script,index in mf.EnumScripts(ScriptType) do *actions* end
+#_
+#_**Notes:**
+#_- The second returned value of *next_script* is script index in the corresponding internal array.
+#_- The behavior of *next_script* is undefined if further scripts are loaded while traversing.
+#_
+#_**See also:**
+#_`GetMacroCopy` - for work with "Macro" and "Event" only.
+#_
+#_@@@
+#_[GetMacroCopy]: 72.html
+#_
+</article>
+</node>
+<node>
 id=79
 lv=3
 dt=Text
@@ -1223,7 +1302,7 @@ lv=3
 dt=Text
 nm=GetMacroCopy
 ctime=3578176338
-mtime=3607090687
+mtime=3833370856
 <article>
 #_macro = mf.GetMacroCopy (index)
 #_
@@ -1244,6 +1323,38 @@ mtime=3607090687
 #_  * To distinguish between macro table from event handler table: there is the field
 #_    "area" of type string that is present only in macro tables.
 #_
+#_**See also:**
+#_`EnumScripts` - allows to work with other types of scripts
+#_
+#_@@@
+#_[EnumScripts]: 106.html
+</article>
+</node>
+<node>
+id=111
+lv=3
+dt=Text
+nm=mainmenu
+ctime=3923468674
+mtime=3924000506
+<article>
+#_mf.mainmenu (Param)
+#_
+#_**Parameters:**
+#_  Param:  string
+#_
+#_**Returns:**
+#_  nothing
+#_
+#_**Param values:**
+#_  "fileassociations" : call "File associations" menu
+#_  "filehighlighting" : call "Files highlighting and sort groups" menu
+#_  "filemaskgroups"   : call "Groups of file masks" menu
+#_  "filepanelmodes"   : call "File panel modes" menu
+#_  "foldershortcuts"  : call "Folder shortcuts" menu
+#_
+#_**Note:**
+#_  The function is asynchronous and returns immediately.
 #_
 </article>
 </node>
@@ -1723,7 +1834,7 @@ mtime=3807114389
 #_  result = Compare (Pi1, Pi2, FarOptions)
 #_
 #_  **Parameters:**
-#_    Pi1 è Pi2  - panel elements being compared, structures of `SortingPanelItem` type.
+#_    Pi1, Pi2   - panel elements being compared, structures of `SortingPanelItem` type.
 #_    FarOptions - a table containing the current Far Manager panel sort options
 #_                 (all values are boolean): *DirectoriesFirst, SelectedFirst,*
 #_                 *RevertSorting, SortGroups, NumericSort, CaseSensitiveSort*.
@@ -2486,7 +2597,7 @@ lv=2
 dt=Text
 nm=Restrictions in the use of some functions
 ctime=3557323094
-mtime=3732332374
+mtime=3926597435
 <article>
 #_<markdown>
 #_The following functions have certain restrictions on their use in macros: 
@@ -2494,6 +2605,7 @@ mtime=3732332374
 #_* [`exit`][exit]
 #_* [`mf.acall`][acall]
 #_* [`mf.AddExitHandler`][AddExitHandler]
+#_* [`mf.mainmenu`][mainmenu]
 #_* [`mf.usermenu`][usermenu] (in the "asynchronous" call mode)
 #_* [`Keys`][keys]
 #_* [`Plugin.Call`][plugincall]
@@ -2525,6 +2637,7 @@ mtime=3732332374
 #_[exit]: 61.html
 #_[keys]: 4.html
 #_[AddExitHandler]: 100.html
+#_[mainmenu]: 111.html
 #_
 #_@@@
 #_{plugin.command}: http://api.farmanager.com/ru/macro/macrocmd/prop_func/general.html#plugin.command
@@ -2850,7 +2963,7 @@ mtime=3607436842
 #_<markdown>
 #_## License
 #_
-#_Copyright © 2008 Lua.org, PUC-Rio.
+#_Copyright Â© 2008 Lua.org, PUC-Rio.
 #_
 #_Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 #_
@@ -2913,7 +3026,7 @@ mtime=3607111919
 #_<markdown>
 #_<font face="Tahoma">
 #_
-#_By **Gleb Varenov** ("Acerbic") » Tue 23 Apr, 2013 22:53<br>
+#_By **Gleb Varenov** ("Acerbic") Â» Tue 23 Apr, 2013 22:53<br>
 #_[Revision 1.1][article on forum]
 #_
 #_*Gather round, boys and girls, for I am about to tell you a story.*

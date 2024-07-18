@@ -36,7 +36,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 // Internal:
-#include "modal.hpp"
+#include "window.hpp"
 
 // Platform:
 
@@ -50,9 +50,9 @@ class TreeList;
 class EditControl;
 class SaveScreen;
 
-class FolderTree:public Modal
+class FolderTree final: public window
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static foldertree_ptr create(string &strResultFolder, int ModalMode, int IsStandalone = TRUE, bool IsFullScreen = true);

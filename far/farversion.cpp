@@ -43,8 +43,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
+#include "common/compiler.hpp"
+#include "common/library.hpp"
 
 // External:
+#include "format.hpp"
 
 //----------------------------------------------------------------------------
 
@@ -59,4 +62,32 @@ namespace build
 #include "bootstrap/farversion.inc"
 		};
 	}
+
+	string compiler()
+	{
+		const auto CompilerInfo =
+#ifdef _MSC_BUILD
+			L"." EXPAND_TO_WIDE_LITERAL(_MSC_BUILD)
+#endif
+			L""sv;
+
+		return far::format(L"{}, version {}.{}.{}{}"sv,
+			COMPILER_NAME,
+			COMPILER_VERSION_MAJOR,
+			COMPILER_VERSION_MINOR,
+			COMPILER_VERSION_PATCH,
+			CompilerInfo
+		);
+	}
+
+	string library()
+	{
+		return far::format(L"{}, version {}.{}.{}"sv,
+			STANDARD_LIBRARY_NAME,
+			STANDARD_LIBRARY_VERSION_MAJOR,
+			STANDARD_LIBRARY_VERSION_MINOR,
+			STANDARD_LIBRARY_VERSION_PATCH
+		);
+	}
+
 }

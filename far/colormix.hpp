@@ -46,15 +46,56 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //----------------------------------------------------------------------------
 
 struct FarColor;
+struct rgba;
 
 namespace colors
 {
-	COLORREF index_value(COLORREF Colour);
+	namespace index
+	{
+		constexpr inline uint8_t
+			nt_mask = 0xf,
+			nt_last = 15,
+			nt_size = nt_last + 1,
+			cube_first = nt_last + 1,
+			cube_size = 6,
+			cube_count = cube_size * cube_size * cube_size,
+			cube_last = cube_first + cube_count - 1,
+			grey_first = cube_last + 1,
+			grey_last = 255,
+			grey_count = grey_last - grey_first + 1;
+	}
+
+	struct single_color
+	{
+		COLORREF Value{};
+		bool IsIndex{};
+
+		bool operator==(single_color const&) const = default;
+
+		static single_color foreground(FarColor const& Color);
+		static single_color background(FarColor const& Color);
+		static single_color underline(FarColor const& Color);
+		static single_color default_color();
+	};
+
+	uint8_t  index_bits(COLORREF Colour);
+	COLORREF color_bits(COLORREF Colour);
+	COLORREF alpha_bits(COLORREF Colour);
+
+	uint8_t  index_value(COLORREF Colour);
 	COLORREF color_value(COLORREF Colour);
-	COLORREF alpha_value(COLORREF Colour);
+	uint8_t  alpha_value(COLORREF Colour);
 
 	bool is_opaque(COLORREF Colour);
 	bool is_transparent(COLORREF Colour);
+
+	void set_index_bits(COLORREF& Value, uint8_t Index);
+	void set_color_bits(COLORREF& Value, COLORREF Colour);
+	void set_alpha_bits(COLORREF& Value, COLORREF Alpha);
+
+	void set_index_value(COLORREF& Value, uint8_t Index);
+	void set_color_value(COLORREF& Value, COLORREF Colour);
+	void set_alpha_value(COLORREF& Value, uint8_t Alpha);
 
 	COLORREF opaque(COLORREF Colour);
 	COLORREF transparent(COLORREF Colour);
@@ -62,17 +103,86 @@ namespace colors
 	void make_opaque(COLORREF& Colour);
 	void make_transparent(COLORREF& Colour);
 
+	COLORREF invert(COLORREF Colour, bool IsIndex);
+	void make_invert(COLORREF& Colour, bool IsIndex);
+
+	rgba to_rgba(COLORREF Color);
+	COLORREF to_color(rgba Rgba);
+
+	struct index_color_256
+	{
+		uint8_t
+			ForegroundIndex,
+			BackgroundIndex;
+	};
+
 	size_t color_hash(const FarColor& Value);
 
-	FarColor merge(const FarColor& Bottom, const FarColor& Top);
+	FarColor merge(FarColor Bottom, FarColor Top);
+
+	using nt_palette_t = std::array<COLORREF, index::nt_size>;
+	nt_palette_t const& nt_palette();
+
+	// TODO: Rename these uniformly
 	WORD FarColorToConsoleColor(const FarColor& Color);
-	FarColor ConsoleColorToFarColor(WORD Color);
-	COLORREF ConsoleIndexToTrueColor(size_t Index);
+	index_color_256 FarColorToConsole256Color(const FarColor& Color);
+	FarColor NtColorToFarColor(WORD Color);
+	COLORREF ConsoleIndexToTrueColor(COLORREF Color);
+	uint8_t ConsoleIndex16to256(uint8_t Color);
 	const FarColor& PaletteColorToFarColor(PaletteColors ColorIndex);
 	const FarColor* StoreColor(const FarColor& Value);
-	COLORREF ARGB2ABGR(int Color);
+	COLORREF ARGB2ABGR(COLORREF Color);
 	// ([[T]FFFFFFFF][:[T]BBBBBBBB])
 	string_view ExtractColorInNewFormat(string_view Str, FarColor& Color, bool& Stop);
+
+	struct rgb6
+	{
+		rgb6() = default;
+
+		constexpr rgb6(uint8_t const R, uint8_t const G, uint8_t const B) noexcept:
+			r(R),
+			g(G),
+			b(B)
+		{
+			assert(R < 6);
+			assert(G < 6);
+			assert(B < 6);
+		}
+
+		explicit(false) constexpr rgb6(uint8_t const Color) noexcept:
+			r((Color - index::nt_size) / (index::cube_size * index::cube_size)),
+			g((Color - index::nt_size - r * index::cube_size * index::cube_size) / index::cube_size),
+			b(Color - index::nt_size - r * index::cube_size * index::cube_size - g * index::cube_size)
+		{
+			assert(index::cube_first <= Color && Color <= index::cube_last);
+		}
+
+		explicit(false) constexpr operator uint8_t() const noexcept
+		{
+			return
+				index::nt_size +
+				r * index::cube_size * index::cube_size +
+				g * index::cube_size +
+				b;
+		}
+
+		uint8_t r{}, g{}, b{};
+	};
+
+	[[nodiscard]]
+	string ColorFlagsToString(unsigned long long Flags);
+
+	[[nodiscard]]
+	unsigned long long ColorStringToFlags(string_view Flags);
+
+	COLORREF resolve_default(COLORREF Color, bool IsForeground);
+	FarColor resolve_defaults(FarColor const& Color);
+	FarColor unresolve_defaults(FarColor const& Color);
+	COLORREF default_colorref();
+	FarColor default_color();
+	bool is_default(COLORREF Color);
+	void store_default_color(FarColor const& Color);
+	void invalidate_cache();
 }
 
 template<>

@@ -1,24 +1,32 @@
-!include ../makefile_vc_base
-
 ANSI = 1
 USERCPP = /D WIN32 /D PCRE_STATIC /D _WIN32
 
 !include ..\makefile_vc_def_inc
 
-OUTPUTS = $(OBJDIR)\pcre.lib
-OBJS = $(OBJDIR)\get.obj $(OBJDIR)\pcre.obj $(OBJDIR)\study.obj
+OUTPUTS = $(INTDIR)\pcre.lib
+OBJS = \
+	$(INTDIR)\pcre_chartables.obj \
+	$(INTDIR)\pcre_compile.obj \
+	$(INTDIR)\pcre_exec.obj \
+	$(INTDIR)\pcre_fullinfo.obj \
+	$(INTDIR)\pcre_get.obj \
+	$(INTDIR)\pcre_globals.obj \
+	$(INTDIR)\pcre_study.obj \
+	$(INTDIR)\pcre_tables.obj \
+	$(INTDIR)\pcre_try_flipped.obj \
+	$(INTDIR)\pcre_version.obj
 
 all: $(OUTPUTS)
 
 !ifndef __MAKE__
-{libpcre}.c{$(OBJDIR)}.obj::
+{libpcre}.c{$(INTDIR)}.obj::
 	$(CC) @<<
 	$(CPPFLAGS) $<
 <<
 !else
-{libpcre}.c{$(OBJDIR)}.obj:
+{libpcre}.c{$(INTDIR)}.obj:
 	$(CC) $(CPPFLAGS) { $< }
 !endif
-	
+
 $(OUTPUTS): $(OBJS)
 	@$(LIBR) /nologo /OUT:$(OUTPUTS) $(OBJS)

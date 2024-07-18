@@ -63,8 +63,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //----------------------------------------------------------------------------
 
 FolderTree::FolderTree(private_tag, int ModalMode, int IsStandalone, bool IsFullScreen):
-	m_Tree(nullptr),
-	m_FindEdit(nullptr),
 	m_ModalMode(ModalMode),
 	m_IsFullScreen(IsFullScreen),
 	m_IsStandalone(IsStandalone)
@@ -89,28 +87,28 @@ void FolderTree::init(string &strResultFolder)
 
 	m_Tree = TreeList::create(nullptr, m_ModalMode);
 
-		SetMacroMode(MACROAREA_FINDFOLDER);
-		m_LastName.clear();
-		m_Tree->SetPosition(m_Where);
+	SetMacroMode(MACROAREA_FINDFOLDER);
+	m_LastName.clear();
+	m_Tree->SetPosition(m_Where);
 
-		if (m_ModalMode == MODALTREE_FREE)
-			m_Tree->SetRootDir(strResultFolder);
+	if (m_ModalMode == MODALTREE_FREE)
+		m_Tree->SetRootDir(strResultFolder);
 
-		m_Tree->SetVisible(true);
-		m_Tree->Update(0);
+	m_Tree->SetVisible(true);
+	m_Tree->Update(0);
 
-		// если было прерывание в процессе сканирования и это было дерево копира...
-		if (m_Tree->GetExitCode())
-		{
-			m_FindEdit = std::make_unique<EditControl>(shared_from_this(),shared_from_this().get());
-			m_FindEdit->SetEditBeyondEnd(false);
-			m_FindEdit->SetPersistentBlocks(Global->Opt->Dialogs.EditBlock);
-			InitKeyBar();
-			Global->WindowManager->ExecuteWindow(shared_from_this()); //OT
-			Global->WindowManager->ExecuteModal(shared_from_this()); //OT
-		}
+	// если было прерывание в процессе сканирования и это было дерево копира...
+	if (m_Tree->GetExitCode())
+	{
+		m_FindEdit = std::make_unique<EditControl>(shared_from_this(),shared_from_this().get());
+		m_FindEdit->SetEditBeyondEnd(false);
+		m_FindEdit->SetPersistentBlocks(Global->Opt->Dialogs.EditBlock);
+		InitKeyBar();
+		Global->WindowManager->ExecuteWindow(shared_from_this()); //OT
+		Global->WindowManager->ExecuteModal(shared_from_this()); //OT
+	}
 
-		strResultFolder = m_NewFolder;
+	strResultFolder = m_NewFolder;
 }
 
 void FolderTree::DisplayObject()
@@ -193,105 +191,111 @@ bool FolderTree::ProcessKey(const Manager::Key& Key)
 
 	switch (LocalKey)
 	{
-		case KEY_F1:
-			help::show(L"FindFolder"sv);
-			break;
+	case KEY_F1:
+		help::show(L"FindFolder"sv);
+		break;
 
-		case KEY_ESC:
-		case KEY_F10:
+	case KEY_ESC:
+	case KEY_F10:
+		Global->WindowManager->DeleteWindow();
+		SetExitCode(XC_MODIFIED);
+		break;
+
+	case KEY_NUMENTER:
+	case KEY_ENTER:
+		m_NewFolder = m_Tree->GetCurDir();
+
+		if (os::fs::exists(m_NewFolder))
+		{
 			Global->WindowManager->DeleteWindow();
 			SetExitCode(XC_MODIFIED);
-			break;
-		case KEY_NUMENTER:
-		case KEY_ENTER:
-			m_NewFolder = m_Tree->GetCurDir();
-
-			if (os::fs::exists(m_NewFolder))
-			{
-				Global->WindowManager->DeleteWindow();
-				SetExitCode(XC_MODIFIED);
-			}
-			else
-			{
-				m_Tree->ProcessKey(Manager::Key(KEY_ENTER));
-				DrawEdit();
-			}
-
-			break;
-		case KEY_F5:
-			m_IsFullScreen=!m_IsFullScreen;
-			ResizeConsole();
-			Show();
-			return true;
-		case KEY_CTRLR:		case KEY_RCTRLR:
-		case KEY_F2:
-			m_Tree->ProcessKey(Manager::Key(KEY_CTRLR));
-			DrawEdit();
-			break;
-		case KEY_CTRLNUMENTER:       case KEY_RCTRLNUMENTER:
-		case KEY_CTRLSHIFTNUMENTER:  case KEY_RCTRLSHIFTNUMENTER:
-		case KEY_CTRLENTER:          case KEY_RCTRLENTER:
-		case KEY_CTRLSHIFTENTER:     case KEY_RCTRLSHIFTENTER:
+		}
+		else
 		{
-			m_Tree->FindPartName(m_FindEdit->GetString(), TRUE, any_of(LocalKey, KEY_CTRLSHIFTENTER, KEY_RCTRLSHIFTENTER, KEY_CTRLSHIFTNUMENTER, KEY_RCTRLSHIFTNUMENTER)? -1 : 1);
+			m_Tree->ProcessKey(Manager::Key(KEY_ENTER));
 			DrawEdit();
 		}
 		break;
-		case KEY_UP:
-		case KEY_NUMPAD8:
-		case KEY_DOWN:
-		case KEY_NUMPAD2:
-		case KEY_PGUP:
-		case KEY_NUMPAD9:
-		case KEY_PGDN:
-		case KEY_NUMPAD3:
-		case KEY_HOME:
-		case KEY_NUMPAD7:
-		case KEY_END:
-		case KEY_NUMPAD1:
-		case KEY_MSWHEEL_UP:
-		case(KEY_MSWHEEL_UP | KEY_ALT):
-		case(KEY_MSWHEEL_UP | KEY_RALT):
-		case KEY_MSWHEEL_DOWN:
-		case(KEY_MSWHEEL_DOWN | KEY_ALT):
-		case(KEY_MSWHEEL_DOWN | KEY_RALT):
-			m_FindEdit->ClearString();
+
+	case KEY_F5:
+		m_IsFullScreen=!m_IsFullScreen;
+		ResizeConsole();
+		Show();
+		return true;
+
+	case KEY_CTRLR:
+	case KEY_RCTRLR:
+	case KEY_F2:
+		m_Tree->ProcessKey(Manager::Key(KEY_CTRLR));
+		DrawEdit();
+		break;
+
+	case KEY_CTRLNUMENTER:
+	case KEY_RCTRLNUMENTER:
+	case KEY_CTRLSHIFTNUMENTER:
+	case KEY_RCTRLSHIFTNUMENTER:
+	case KEY_CTRLENTER:
+	case KEY_RCTRLENTER:
+	case KEY_CTRLSHIFTENTER:
+	case KEY_RCTRLSHIFTENTER:
+		m_Tree->FindPartName(m_FindEdit->GetString(), TRUE, any_of(LocalKey, KEY_CTRLSHIFTENTER, KEY_RCTRLSHIFTENTER, KEY_CTRLSHIFTNUMENTER, KEY_RCTRLSHIFTNUMENTER)? -1 : 1);
+		DrawEdit();
+		break;
+
+	case KEY_UP:
+	case KEY_NUMPAD8:
+	case KEY_DOWN:
+	case KEY_NUMPAD2:
+	case KEY_PGUP:
+	case KEY_NUMPAD9:
+	case KEY_PGDN:
+	case KEY_NUMPAD3:
+	case KEY_HOME:
+	case KEY_NUMPAD7:
+	case KEY_END:
+	case KEY_NUMPAD1:
+	case KEY_MSWHEEL_UP:
+	case KEY_MSWHEEL_UP | KEY_ALT:
+	case KEY_MSWHEEL_UP | KEY_RALT:
+	case KEY_MSWHEEL_DOWN:
+	case KEY_MSWHEEL_DOWN | KEY_ALT:
+	case KEY_MSWHEEL_DOWN | KEY_RALT:
+		m_FindEdit->ClearString();
+		m_Tree->ProcessKey(Key);
+		DrawEdit();
+		break;
+
+	default:
+		if (any_of(LocalKey, KEY_ADD, KEY_SUBTRACT)) // OFM: Gray+/Gray- navigation
+		{
 			m_Tree->ProcessKey(Key);
 			DrawEdit();
 			break;
-		default:
+		}
 
-			if (any_of(LocalKey, KEY_ADD, KEY_SUBTRACT)) // OFM: Gray+/Gray- navigation
+		/*
+		else
+		{
+			if((Key&(~KEY_CTRLMASK)) == KEY_ADD)
+				Key = '+';
+			else if((Key&(~KEY_CTRLMASK)) == KEY_SUBTRACT)
+				Key = '-';
+		}
+		*/
+		if (m_FindEdit->ProcessKey(Key))
+		{
+			const auto& strName = m_FindEdit->GetString();
+
+			if (m_Tree->FindPartName(strName, FALSE, 1))
+				m_LastName = strName;
+			else
 			{
-				m_Tree->ProcessKey(Key);
-				DrawEdit();
-				break;
+				m_FindEdit->SetString(m_LastName);
 			}
 
-			/*
-			      else
-			      {
-			        if((Key&(~KEY_CTRLMASK)) == KEY_ADD)
-			          Key='+';
-			        else if((Key&(~KEY_CTRLMASK)) == KEY_SUBTRACT)
-			          Key='-';
-			      }
-			*/
-			if (m_FindEdit->ProcessKey(Key))
-			{
-				const auto& strName = m_FindEdit->GetString();
-
-				if (m_Tree->FindPartName(strName, FALSE, 1))
-					m_LastName = strName;
-				else
-				{
-					m_FindEdit->SetString(m_LastName);
-				}
-
-				DrawEdit();
-			}
-
-			break;
+			DrawEdit();
+		}
+		break;
 	}
 
 	return true;
@@ -309,11 +313,12 @@ bool FolderTree::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		return true;
 	}
 
-	if (!m_Where.contains(MouseEvent->dwMousePosition) && IntKeyState.MouseEventFlags != MOUSE_MOVED)
+	if (IsMouseButtonEvent(MouseEvent->dwEventFlags) && !m_Where.contains(MouseEvent->dwMousePosition))
 	{
-		if (!(MouseEvent->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) && (IntKeyState.PrevMouseButtonState&FROM_LEFT_1ST_BUTTON_PRESSED) && (Global->Opt->Dialogs.MouseButton&DMOUSEBUTTON_LEFT))
+		const auto NewButtonState = MouseEvent->dwButtonState & ~IntKeyState.PrevMouseButtonState;
+		if ((NewButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) && (Global->Opt->Dialogs.MouseButton & DMOUSEBUTTON_LEFT))
 			ProcessKey(Manager::Key(KEY_ESC));
-		else if (!(MouseEvent->dwButtonState & RIGHTMOST_BUTTON_PRESSED) && (IntKeyState.PrevMouseButtonState&RIGHTMOST_BUTTON_PRESSED) && (Global->Opt->Dialogs.MouseButton&DMOUSEBUTTON_RIGHT))
+		else if ((NewButtonState & RIGHTMOST_BUTTON_PRESSED) && (Global->Opt->Dialogs.MouseButton & DMOUSEBUTTON_RIGHT))
 			ProcessKey(Manager::Key(KEY_ENTER));
 
 		return true;

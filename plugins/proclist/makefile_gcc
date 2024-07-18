@@ -10,33 +10,10 @@ SRCS = \
 	perfthread.cpp \
 	Plist.cpp \
 	Pmix.cpp \
-	wmi.cpp
-DOCS = \
-	ProcEng.hlf \
-	ProcRus.hlf \
-	ProcPol.hlf \
-	ProcGer.hlf \
-	ProcUkr.hlf \
-	ProcEng.lng \
-	ProcRus.lng \
-	ProcIta.lng \
-	ProcBel.lng \
-	ProcPol.lng \
-	ProcGer.lng \
-	ProcUkr.lng \
-	changelog
+	wmi.cpp \
+	wmi_init.cpp
 
-ifndef FARDIR
-FAR_DIRECTORY=../../far
-else
-FAR_DIRECTORY=$(FARDIR)
-endif
-
-USERCPP = -I ./WMI -I "$(FAR_DIRECTORY)/thirdparty/fmt"
 USERLIBS = -lversion -lmpr -lole32 -loleaut32 -lpsapi
 
-include ../../far/makefile_gcc_common
-
 include ../makefile_gcc_def_inc
-
 include ../makefile_gcc_target_inc

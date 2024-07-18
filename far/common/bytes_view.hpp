@@ -32,7 +32,9 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "range.hpp"
+#include <algorithm>
+#include <ranges>
+#include <string_view>
 
 //----------------------------------------------------------------------------
 
@@ -41,7 +43,7 @@ namespace detail
 	template<typename T, bool Add>
 	using add_const_if_t = std::conditional_t<Add, T const, T>;
 
-	template<typename return_type, typename T, REQUIRES((std::disjunction_v<std::is_void<T>, std::is_trivially_copyable<T>>))>
+	template<typename return_type, typename T> requires std::is_void_v<T> || std::is_trivially_copyable_v<T>
 	return_type bytes_impl(T* const Data, size_t const Size)
 	{
 		constexpr auto IsConst = std::is_const_v<T>;
@@ -53,12 +55,11 @@ namespace detail
 	template<typename return_type, typename T>
 	auto bytes_impl(T& Object)
 	{
-		if constexpr (is_span_v<T>)
+		if constexpr (std::ranges::contiguous_range<T>)
 		{
-			using value_type = std::remove_reference_t<decltype(*std::data(std::declval<T&>()))>;
-			static_assert(std::is_trivially_copyable_v<value_type>);
+			static_assert(std::is_trivially_copyable_v<std::ranges::range_value_t<T>>);
 
-			return bytes_impl<return_type>(std::data(Object), std::size(Object) * sizeof(value_type));
+			return bytes_impl<return_type>(std::ranges::data(Object), std::ranges::size(Object) * sizeof(std::ranges::range_value_t<T>));
 		}
 		else if constexpr (std::is_trivially_copyable_v<T>)
 		{
@@ -75,7 +76,7 @@ namespace detail
 using bytes_view = std::basic_string_view<std::byte>;
 
 [[nodiscard]]
-constexpr inline bytes_view operator "" _bv(const char* Str, std::size_t Size) noexcept
+constexpr bytes_view operator""_bv(const char* Str, std::size_t Size) noexcept
 {
 	return { static_cast<std::byte const*>(static_cast<void const*>(Str)), Size };
 }
@@ -84,38 +85,34 @@ constexpr inline bytes_view operator "" _bv(const char* Str, std::size_t Size) n
 using bytes = std::basic_string<std::byte>;
 
 [[nodiscard]]
-/*constexpr*/ inline bytes operator "" _b(const char* Str, std::size_t Size) noexcept
+/*constexpr*/ inline bytes operator""_b(const char* Str, std::size_t Size) noexcept
 {
-	return bytes{ operator ""_bv(Str, Size) };
+	return bytes{ operator""_bv(Str, Size) };
 }
 
 
-template<typename T>
 [[nodiscard]]
-auto view_bytes(T const* const Data, size_t const Size)
+auto view_bytes(auto const* const Data, size_t const Size)
 {
 	return detail::bytes_impl<bytes_view>(Data, Size);
 }
 
-template<typename T>
 [[nodiscard]]
-auto view_bytes(T const& Object)
+auto view_bytes(auto const& Object)
 {
 	return detail::bytes_impl<bytes_view>(Object);
 }
 
-template<typename T>
 [[nodiscard]]
-auto edit_bytes(T* const Data, size_t const Size)
+auto edit_bytes(auto* const Data, size_t const Size)
 {
-	return detail::bytes_impl<span<std::byte>>(Data, Size);
+	return detail::bytes_impl<std::span<std::byte>>(Data, Size);
 }
 
-template<typename T>
 [[nodiscard]]
-auto edit_bytes(T& Object)
+auto edit_bytes(auto& Object)
 {
-	return detail::bytes_impl<span<std::byte>>(Object);
+	return detail::bytes_impl<std::span<std::byte>>(Object);
 }
 
 [[nodiscard]]
@@ -124,16 +121,15 @@ inline std::string_view to_string_view(bytes_view const Bytes)
 	return { static_cast<char const*>(static_cast<void const*>(Bytes.data())), Bytes.size() };
 }
 
-template<typename T>
 [[nodiscard]]
-bool deserialise(bytes_view const Bytes, T& Value) noexcept
+bool deserialise(bytes_view const Bytes, auto& Value) noexcept
 {
 	const auto ValueBytes = edit_bytes(Value);
 
 	if (ValueBytes.size() != Bytes.size())
 		return false;
 
-	std::copy(ALL_CONST_RANGE(Bytes), ValueBytes.begin());
+	std::ranges::copy(Bytes, ValueBytes.begin());
 	return true;
 }
 

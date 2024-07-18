@@ -33,7 +33,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "enumerator.hpp"
-#include "type_traits.hpp"
 #include "string_utils.hpp"
 
 //----------------------------------------------------------------------------
@@ -83,9 +82,8 @@ namespace detail
 		[[nodiscard]]
 		auto& get_opt()
 		{
-			using nth_type = std::tuple_element_t<index + 1, base_type>;
-			// This idiotic cast to std::tuple is for clang
-			return std::get<is_detected_v<operation, nth_type>? index + 1 : 0>(static_cast<base_type&>(*this));
+			constexpr auto HasOperation = requires { operation<std::tuple_element_t<index + 1, base_type>>(); };
+			return std::get<HasOperation? index + 1 : 0>(*this);
 		}
 
 		template<typename T>
@@ -145,7 +143,7 @@ namespace detail
 				return;
 
 			m_Cache.clear();
-			reserve_exp_noshrink(m_Cache, Value.size());
+			reserve_exp(m_Cache, Value.size());
 			copy::unquote(Value, std::back_inserter(m_Cache));
 			Value = m_Cache;
 		}
@@ -168,11 +166,11 @@ namespace detail
 	{
 	public:
 		[[nodiscard]]
-		auto extract(std::wstring_view::const_iterator const Begin, std::wstring_view::const_iterator const End, const std::wstring_view Separators, std::wstring_view& Value) const
+		std::wstring_view extract(std::wstring_view const View, const std::wstring_view Separators, std::wstring_view& Value) const
 		{
-			const auto NewIterator = std::find_first_of(Begin, End, ALL_CONST_RANGE(Separators));
-			Value = make_string_view(Begin, NewIterator);
-			return NewIterator;
+			const auto NewIterator = std::ranges::find_first_of(View, Separators);
+			Value = { View.cbegin(), NewIterator };
+			return { NewIterator, View.cend() };
 		}
 	};
 
@@ -181,28 +179,20 @@ namespace detail
 	{
 	public:
 		[[nodiscard]]
-		auto extract(std::wstring_view::const_iterator const Begin, std::wstring_view::const_iterator const End, const std::wstring_view Separators, std::wstring_view& Value) const
+		std::wstring_view extract(std::wstring_view const View, const std::wstring_view Separators, std::wstring_view& Value) const
 		{
 			m_Overrider.reset();
 
-			const auto NewIterator = [&]
+			const auto NewIterator = std::ranges::find_if(View, [&](wchar_t const i)
 			{
-				for (auto i = Begin; i != End; ++i)
-				{
-					if (m_Overrider.active(*i))
-						continue;
+				return !m_Overrider.active(i) && contains(Separators, i);
+			});
 
-					if (contains(Separators, *i))
-						return i;
-				}
-				return End;
-			}();
-
-			Value = make_string_view(Begin, NewIterator);
+			Value = { View.cbegin(), NewIterator };
 
 			m_Overrider.postprocess(Value);
 
-			return NewIterator;
+			return { NewIterator, View.cend() };
 		}
 
 	private:
@@ -236,24 +226,30 @@ public:
 
 private:
 	[[nodiscard]]
-	bool get(bool Reset, std::wstring_view& Value) const
+	bool get(bool const Reset, std::wstring_view& Value) const
 	{
 		if (Reset)
-			m_Iterator = m_View.cbegin();
-		else if (m_Iterator != m_View.cend())
-			++m_Iterator;
-
-		if (m_Iterator == m_View.cend())
+		{
+			m_IterableView = m_View;
+			m_Finished = false;
+		}
+		else if (m_Finished)
 			return false;
 
-		m_Iterator = policy::extract(m_Iterator, m_View.cend(), m_Separators, Value);
+		m_IterableView = policy::extract(m_IterableView, m_Separators, Value);
+
+		m_Finished = m_IterableView.empty();
+		if (!m_Finished)
+			m_IterableView.remove_prefix(1);
+
 		return true;
 	}
 
 	std::wstring m_Storage;
 	std::wstring_view m_View;
 	std::wstring_view m_Separators;
-	mutable std::wstring_view::const_iterator m_Iterator{};
+	mutable std::wstring_view m_IterableView;
+	mutable bool m_Finished{};
 };
 
 using enum_tokens = enum_tokens_t<detail::simple_policy>;

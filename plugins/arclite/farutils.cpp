@@ -2,11 +2,11 @@
 #include "sysutils.hpp"
 #include "farutils.hpp"
 #include "guids.hpp"
-#include "msg.h"
+#include "msg.hpp"
 
 namespace Far {
 
-PluginStartupInfo g_far;
+static PluginStartupInfo g_far;
 FarStandardFunctions g_fsf;
 
 void init(const PluginStartupInfo* psi) {
@@ -15,7 +15,7 @@ void init(const PluginStartupInfo* psi) {
 }
 
 std::wstring get_plugin_module_path() {
-  return extract_file_path(g_far.ModuleName);
+   return search_and_replace(extract_file_path(g_far.ModuleName), L"/", L"\\");
 }
 
 const wchar_t* msg_ptr(int id) {
@@ -37,7 +37,7 @@ unsigned get_optimal_msg_width() {
 }
 
 intptr_t message(const GUID& id, const std::wstring& msg, int button_cnt, FARMESSAGEFLAGS flags) {
-  return g_far.Message(&c_plugin_guid, &id, flags | FMSG_ALLINONE, NULL, reinterpret_cast<const wchar_t* const*>(msg.c_str()), 0, button_cnt);
+  return g_far.Message(&c_plugin_guid, &id, flags | FMSG_ALLINONE, {}, reinterpret_cast<const wchar_t* const*>(msg.c_str()), 0, button_cnt);
 }
 
 unsigned MenuItems::add(const std::wstring& item) {
@@ -69,13 +69,13 @@ intptr_t menu(const GUID& id, const std::wstring& title, const MenuItems& items,
 }
 
 std::wstring get_progress_bar_str(unsigned width, uint64_t completed, uint64_t total) {
-  const wchar_t c_pb_black = 9608;
-  const wchar_t c_pb_white = 9617;
+  constexpr wchar_t c_pb_black = 9608; // '\x2588' █
+  constexpr wchar_t c_pb_white = 9617; // '\x2591' ░
   unsigned len1;
   if (total == 0)
     len1 = 0;
   else
-    len1 = static_cast<unsigned>(static_cast<double>(completed) * width / total);
+    len1 = static_cast<unsigned>(static_cast<double>(completed) * static_cast<double>(width) / static_cast<double>(total));
   if (len1 > width)
     len1 = width;
   unsigned len2 = width - len1;
@@ -108,7 +108,7 @@ void call_user_apc(void* param) {
 bool post_macro(const std::wstring& macro) {
   MacroSendMacroText mcmd = { sizeof(MacroSendMacroText), KMFLAGS_ENABLEOUTPUT };
   mcmd.SequenceText = macro.c_str();
-  return g_far.MacroControl(0, MCTL_SENDSTRING, MSSC_POST, &mcmd) != 0;
+  return g_far.MacroControl({}, MCTL_SENDSTRING, MSSC_POST, &mcmd) != 0;
 }
 
 void quit() {
@@ -124,7 +124,7 @@ void restore_screen(HANDLE h_scr) {
 }
 
 void flush_screen() {
-  g_far.Text(0, 0, 0, NULL); // flush buffer hack
+  g_far.Text(0, 0, {}, {}); // flush buffer hack
   g_far.AdvControl(&c_plugin_guid, ACTL_REDRAWALL, 0, nullptr);
 }
 
@@ -136,9 +136,10 @@ intptr_t editor(const std::wstring& file_name, const std::wstring& title, EDITOR
   return g_far.Editor(file_name.c_str(), title.c_str(), 0, 0, -1, -1, flags, 1, 1, CP_DEFAULT);
 }
 
-void update_panel(HANDLE h_panel, bool keep_selection) {
+void update_panel(HANDLE h_panel, const bool keep_selection, const bool reset_pos) {
   g_far.PanelControl(h_panel, FCTL_UPDATEPANEL, keep_selection ? 1 : 0, nullptr);
-  g_far.PanelControl(h_panel, FCTL_REDRAWPANEL, 0, nullptr);
+  PanelRedrawInfo ri{ sizeof(ri) };
+  g_far.PanelControl(h_panel, FCTL_REDRAWPANEL, 0, reset_pos ? &ri : nullptr);
 }
 
 void set_view_mode(HANDLE h_panel, unsigned view_mode) {
@@ -168,12 +169,12 @@ bool is_real_file_panel(const PanelInfo& panel_info) {
 
 std::wstring get_panel_dir(HANDLE h_panel) {
   size_t buf_size = 512;
-  std::unique_ptr<unsigned char[]> buf(new unsigned char[buf_size]);
+  auto buf = std::make_unique<unsigned char[]>(buf_size);
   reinterpret_cast<FarPanelDirectory*>(buf.get())->StructSize = sizeof(FarPanelDirectory);
   size_t size = g_far.PanelControl(h_panel, FCTL_GETPANELDIRECTORY, buf_size, buf.get());
   if (size > buf_size) {
     buf_size = size;
-    buf.reset(new unsigned char[buf_size]);
+    buf = std::make_unique<unsigned char[]>(buf_size);
     reinterpret_cast<FarPanelDirectory*>(buf.get())->StructSize = sizeof(FarPanelDirectory);
     size = g_far.PanelControl(h_panel, FCTL_GETPANELDIRECTORY, buf_size, buf.get());
   }
@@ -196,7 +197,7 @@ void get_panel_item(HANDLE h_panel, FILE_CONTROL_COMMANDS command, size_t index,
   }
 }
 
-PanelItem get_panel_item(HANDLE h_panel, FILE_CONTROL_COMMANDS command, size_t index) {
+static PanelItem get_panel_item(HANDLE h_panel, FILE_CONTROL_COMMANDS command, size_t index) {
   Buffer<unsigned char> buf(0x1000);
   get_panel_item(h_panel, command, index, buf);
   const PluginPanelItem* panel_item = reinterpret_cast<const PluginPanelItem*>(buf.data());
@@ -208,7 +209,8 @@ PanelItem get_panel_item(HANDLE h_panel, FILE_CONTROL_COMMANDS command, size_t i
   pi.file_size = panel_item->FileSize;
   pi.pack_size = panel_item->AllocationSize;
   pi.file_name = panel_item->FileName;
-  pi.alt_file_name = panel_item->AlternateFileName;
+  if (panel_item->AlternateFileName)
+    pi.alt_file_name = panel_item->AlternateFileName;
   pi.user_data = panel_item->UserData.Data;
   return pi;
 }
@@ -316,7 +318,7 @@ unsigned Dialog::new_item(const DialogItem& di) {
 }
 
 intptr_t WINAPI Dialog::internal_dialog_proc(HANDLE h_dlg, intptr_t msg, intptr_t param1, void* param2) {
-  Dialog* dlg = reinterpret_cast<Dialog*>(g_far.SendDlgMessage(h_dlg, DM_GETDLGDATA, 0, 0));
+  Dialog* dlg = reinterpret_cast<Dialog*>(g_far.SendDlgMessage(h_dlg, DM_GETDLGDATA, 0, {}));
   dlg->h_dlg = h_dlg;
   FAR_ERROR_HANDLER_BEGIN
   if (!dlg->events_enabled)
@@ -337,7 +339,7 @@ intptr_t Dialog::send_message(intptr_t msg, intptr_t param1, void* param2) {
 Dialog::Dialog(
   const std::wstring& title, const GUID* guid, unsigned width, const wchar_t* help, FARDIALOGFLAGS flags
 ) :
-  client_xs(width), x(c_x_frame), y(c_y_frame), help(help), flags(flags), guid(guid), events_enabled(true)
+  client_xs(width), x(c_x_frame), y(c_y_frame), help(help), m_flags(flags), guid(guid), events_enabled(true)
 {
   frame(title);
 }
@@ -595,17 +597,17 @@ intptr_t Dialog::show() {
   }
 
   intptr_t res = -1;
-  HANDLE h_dlg = g_far.DialogInit(&c_plugin_guid, guid, -1, -1, client_xs + 2 * c_x_frame, client_ys + 2 * c_y_frame, help, dlg_items.data(), static_cast<unsigned>(dlg_items.size()), 0, flags, internal_dialog_proc, this);
-  if (h_dlg != INVALID_HANDLE_VALUE) {
-    res = g_far.DialogRun(h_dlg);
-    g_far.DialogFree(h_dlg);
+  HANDLE dlg = g_far.DialogInit(&c_plugin_guid, guid, -1, -1, client_xs + 2 * c_x_frame, client_ys + 2 * c_y_frame, help, dlg_items.data(), static_cast<unsigned>(dlg_items.size()), 0, m_flags, internal_dialog_proc, this);
+  if (dlg != INVALID_HANDLE_VALUE) {
+    res = g_far.DialogRun(dlg);
+    g_far.DialogFree(dlg);
   }
   return res;
 }
 
 std::wstring Dialog::get_text(unsigned ctrl_id) const {
   FarDialogItemData item = { sizeof(FarDialogItemData) };
-  item.PtrLength = g_far.SendDlgMessage(h_dlg, DM_GETTEXT, ctrl_id, 0);
+  item.PtrLength = g_far.SendDlgMessage(h_dlg, DM_GETTEXT, ctrl_id, {});
   Buffer<wchar_t> buf(item.PtrLength + 1);
   item.PtrData = buf.data();
   g_far.SendDlgMessage(h_dlg, DM_GETTEXT, ctrl_id, &item);
@@ -617,7 +619,7 @@ void Dialog::set_text(unsigned ctrl_id, const std::wstring& text) {
 }
 
 bool Dialog::get_check(unsigned ctrl_id) const {
-  return g_far.SendDlgMessage(h_dlg,DM_GETCHECK,ctrl_id,0) == BSTATE_CHECKED;
+  return g_far.SendDlgMessage(h_dlg, DM_GETCHECK, ctrl_id, {}) == BSTATE_CHECKED;
 }
 
 void Dialog::set_check(unsigned ctrl_id, bool check) {
@@ -625,7 +627,7 @@ void Dialog::set_check(unsigned ctrl_id, bool check) {
 }
 
 TriState Dialog::get_check3(unsigned ctrl_id) const {
-  INT_PTR value = g_far.SendDlgMessage(h_dlg,DM_GETCHECK,ctrl_id,0);
+  INT_PTR value = g_far.SendDlgMessage(h_dlg, DM_GETCHECK, ctrl_id, {});
   return value == BSTATE_3STATE ? triUndef : value == BSTATE_CHECKED ? triTrue : triFalse;
 }
 
@@ -634,7 +636,7 @@ void Dialog::set_check3(unsigned ctrl_id, TriState check) {
 }
 
 unsigned Dialog::get_list_pos(unsigned ctrl_id) const {
-  return static_cast<unsigned>(g_far.SendDlgMessage(h_dlg, DM_LISTGETCURPOS, ctrl_id, 0));
+  return static_cast<unsigned>(g_far.SendDlgMessage(h_dlg, DM_LISTGETCURPOS, ctrl_id, {}));
 }
 
 void Dialog::set_list_pos(unsigned ctrl_id, uintptr_t pos) {
@@ -645,23 +647,8 @@ void Dialog::set_list_pos(unsigned ctrl_id, uintptr_t pos) {
   g_far.SendDlgMessage(h_dlg, DM_LISTSETCURPOS, ctrl_id, &list_pos);
 }
 
-void get_dlg_item(HANDLE h_dlg, unsigned ctrl_id, Buffer<unsigned char>& buf) {
-  FarGetDialogItem gdi;
-  gdi.StructSize = sizeof(FarGetDialogItem);
-  gdi.Size = buf.size();
-  gdi.Item = reinterpret_cast<FarDialogItem*>(buf.data());
-  size_t size = g_far.SendDlgMessage(h_dlg, DM_GETDLGITEM, ctrl_id, &gdi);
-  if (size > buf.size()) {
-    buf.resize(size);
-    gdi.Size = buf.size();
-    gdi.Item = reinterpret_cast<FarDialogItem*>(buf.data());
-    size = g_far.SendDlgMessage(h_dlg, DM_GETDLGITEM, ctrl_id, &gdi);
-    CHECK(size == buf.size());
-  }
-}
-
 void Dialog::set_focus(unsigned ctrl_id) {
-  g_far.SendDlgMessage(h_dlg, DM_SETFOCUS, ctrl_id, 0);
+  g_far.SendDlgMessage(h_dlg, DM_SETFOCUS, ctrl_id, {});
 }
 
 void Dialog::enable(unsigned ctrl_id, bool enable) {
@@ -673,7 +660,7 @@ void Dialog::set_visible(unsigned ctrl_id, bool visible) {
 }
 
 Regex::Regex(): h_regex(INVALID_HANDLE_VALUE) {
-  CHECK(g_far.RegExpControl(0, RECTL_CREATE, 0, &h_regex));
+  CHECK(g_far.RegExpControl({}, RECTL_CREATE, 0, &h_regex));
 }
 
 Regex::~Regex() {
@@ -721,7 +708,7 @@ FileFilter::~FileFilter() {
 
 void FileFilter::clean() {
   if (h_filter != INVALID_HANDLE_VALUE) {
-    g_far.FileFilterControl(h_filter, FFCTL_FREEFILEFILTER, 0, 0);
+    g_far.FileFilterControl(h_filter, FFCTL_FREEFILEFILTER, 0, {});
     h_filter = INVALID_HANDLE_VALUE;
   }
 }
@@ -732,11 +719,11 @@ bool FileFilter::create(HANDLE h_panel, int type) {
 }
 
 bool FileFilter::menu() {
-  return g_far.FileFilterControl(h_filter, FFCTL_OPENFILTERSMENU, 0, 0) != FALSE;
+  return g_far.FileFilterControl(h_filter, FFCTL_OPENFILTERSMENU, 0, {}) != FALSE;
 }
 
 void FileFilter::start() {
-  g_far.FileFilterControl(h_filter, FFCTL_STARTINGTOFILTER, 0, 0);
+  g_far.FileFilterControl(h_filter, FFCTL_STARTINGTOFILTER, 0, {});
 }
 
 bool FileFilter::match(const PluginPanelItem& panel_item) {
@@ -767,6 +754,26 @@ bool match_masks(const std::wstring& file_name, const std::wstring& masks) {
 
 bool get_color(PaletteColors color_id, FarColor& color) {
   return g_far.AdvControl(&c_plugin_guid, ACTL_GETCOLOR, color_id, &color) != 0;
+}
+
+void panel_go_to_part(HANDLE h_panel, const int pidx) {
+	PanelRedrawInfo panel_ri = { sizeof(PanelRedrawInfo) };
+	if (pidx >= 0) {
+		g_far.PanelControl(h_panel, FCTL_UPDATEPANEL, 0, nullptr);
+		PanelInfo panel_info{ sizeof(PanelInfo) };
+		if (g_far.PanelControl(h_panel, FCTL_GETPANELINFO, 0, &panel_info)) {
+			Buffer<unsigned char> buf(512);
+			for (size_t i = 0; i < panel_info.ItemsNumber; ++i) {
+				get_panel_item(h_panel, FCTL_GETPANELITEM, i, buf);
+				const PluginPanelItem* panel_item = reinterpret_cast<const PluginPanelItem*>(buf.data());
+				if (isdigit(panel_item->FileName[0]) && pidx == _wtoi(panel_item->FileName)) {
+					panel_ri.CurrentItem = i;
+					break;
+				}
+			}
+		}
+	}
+	g_far.PanelControl(h_panel, FCTL_REDRAWPANEL, 0, &panel_ri);
 }
 
 bool panel_go_to_dir(HANDLE h_panel, const std::wstring& dir) {
@@ -815,10 +822,7 @@ bool panel_go_to_file(HANDLE h_panel, const std::wstring& file_path) {
 }
 
 DWORD get_lang_id() {
-  if (get_msg(MSG_LANG) == L"ru")
-    return MAKELANGID(LANG_RUSSIAN, SUBLANG_DEFAULT);
-  else
-    return MAKELANGID(LANG_ENGLISH, SUBLANG_DEFAULT);
+    return MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL);
 }
 
 void close_panel(HANDLE h_panel, const std::wstring& dir) {
@@ -826,7 +830,7 @@ void close_panel(HANDLE h_panel, const std::wstring& dir) {
 }
 
 void open_help(const std::wstring& topic) {
-  g_far.ShowHelp(g_far.ModuleName, topic.c_str(), FHELP_SELFHELP);
+  g_far.ShowHelp(search_and_replace(g_far.ModuleName,L"/",L"\\").c_str(), topic.c_str(), FHELP_SELFHELP);
 }
 
 
@@ -861,16 +865,16 @@ bool Settings::create(bool app_settings) {
 
 bool Settings::set_dir(const std::wstring& path) {
   FarSettingsValue fsv = { sizeof(FarSettingsValue) };
-  size_t dir_id = 0;
+  size_t dir_id_value = 0;
   std::list<std::wstring> dir_list = split(path, L'\\');
-  for(std::list<std::wstring>::const_iterator dir = dir_list.cbegin(); dir != dir_list.cend(); dir++) {
-    fsv.Root = dir_id;
-    fsv.Value = dir->c_str();
-    dir_id = control(SCTL_CREATESUBKEY, &fsv);
-    if (dir_id == 0)
+  for(const auto& dir: dir_list) {
+    fsv.Root = dir_id_value;
+    fsv.Value = dir.c_str();
+    dir_id_value = control(SCTL_CREATESUBKEY, &fsv);
+    if (dir_id_value == 0)
       return false;
-  };
-  this->dir_id = dir_id;
+  }
+  dir_id = dir_id_value;
   return true;
 }
 

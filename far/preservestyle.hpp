@@ -34,6 +34,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 // Internal:
+#include "string_utils.hpp"
 
 // Platform:
 
@@ -48,10 +49,8 @@ bool PreserveStyleReplaceString(
 	string_view Str,
 	string& ReplaceStr,
 	int& CurPos,
-	bool Case,
-	bool WholeWords,
+	search_replace_string_options options,
 	string_view WordDiv,
-	bool Reverse,
 	int& SearchLength
 );
 

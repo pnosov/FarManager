@@ -57,12 +57,12 @@ namespace components
 	public:
 		void add(component* item)
 		{
-			(m_First? m_Last->m_Next : m_First) = item;
-			m_Last = item;
+			item->m_Next = std::exchange(m_First, item);
 		}
 
 	private:
 		components_list() = default;
+		~components_list() = default;
 
 		[[nodiscard]]
 		bool get(bool Reset, value_type& Value) const
@@ -79,7 +79,6 @@ namespace components
 		}
 
 		component* m_First{};
-		component* m_Last{};
 		mutable component* m_Iterator{};
 	};
 
@@ -89,13 +88,12 @@ namespace components
 		components_list::instance().add(this);
 	}
 
-	const std::map<string_view, string, string_sort::less_t>& GetComponentsInfo()
+	const components_map& GetComponentsInfo()
 	{
 		static const auto sList = []
 		{
 			FN_RETURN_TYPE(GetComponentsInfo) Result;
-			const auto& ComponentsList = components_list::instance();
-			std::transform(ALL_CONST_RANGE(ComponentsList), std::inserter(Result, Result.end()), [](const auto& i)
+			std::ranges::transform(components_list::instance(), std::inserter(Result, Result.end()), [](const auto& i)
 			{
 				return i();
 			});

@@ -84,10 +84,10 @@ namespace
 
 		static const inline wchar_t StarSprites[]
 		{
-			L'\x00B7', // ·
-			L'\x2219', // ∙
-			L'\x2022', // •
-			L'\x25CF', // ●
+			L'·',
+			L'∙',
+			L'•',
+			L'●',
 		};
 
 	public:
@@ -95,9 +95,9 @@ namespace
 
 		starfield()
 		{
-			std::generate(ALL_RANGE(m_Stars), [&] { return create_star(); });
+			std::ranges::generate(m_Stars, [&] { return create_star(); });
 
-			SetScreen({ 0, 0, ScrX, ScrY }, L' ', colors::ConsoleColorToFarColor(F_LIGHTGRAY | B_BLACK));
+			SetScreen({ 0, 0, ScrX, ScrY }, L' ', colors::NtColorToFarColor(F_LIGHTGRAY | B_BLACK));
 		}
 
 		void update()
@@ -303,13 +303,13 @@ void ScreenSaver()
 
 	// The whole point of a screen saver is to be visible
 	if (console.IsViewportShifted())
-		console.ResetPosition();
+		console.ResetViewportPosition();
 
 	SCOPED_ACTION(SaveScreen);
 
 	CONSOLE_CURSOR_INFO CursorInfo;
 	console.GetCursorInfo(CursorInfo);
-	SetCursorType(false, 10);
+	HideCursor();
 
 	SCOPE_EXIT
 	{
@@ -326,5 +326,4 @@ void ScreenSaver()
 	}
 
 	FlushInputBuffer();
-	Global->StartIdleTime = std::chrono::steady_clock::now();
 }

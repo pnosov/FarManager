@@ -37,6 +37,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Internal:
 #include "scrobj.hpp"
+#include "stddlg.hpp"
 #include "namelist.hpp"
 #include "poscache.hpp"
 #include "config.hpp"
@@ -57,7 +58,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 class FileViewer;
 class KeyBar;
 class Dialog;
-class time_check;
 enum SEARCHER_RESULT: int;
 
 class Viewer:public SimpleScreenObject
@@ -136,7 +136,10 @@ private:
 	long long BegOfScreen();
 	long long XYfilepos(int col, int row);
 	void ChangeViewKeyBar();
-	void Search(int Next,const Manager::Key* FirstChar);
+
+	enum class SearchDisposition;
+	SearchDisposition ShowSearchReplaceDialog();
+	void DoSearchReplace(SearchDisposition Disposition);
 	struct search_data;
 	SEARCHER_RESULT search_hex_forward( search_data* sd );
 	SEARCHER_RESULT search_hex_backward( search_data* sd );
@@ -145,6 +148,7 @@ private:
 	SEARCHER_RESULT search_regex_forward( search_data* sd );
 	SEARCHER_RESULT search_regex_backward( search_data* sd );
 	int read_line(wchar_t *buf, wchar_t *tbuf, long long cpos, int adjust, long long& lpos, int &lsize);
+
 	int vread(wchar_t *Buf, int Count, wchar_t *Buf2 = nullptr);
 	bool vseek(long long Offset, int Whence);
 	long long vtell() const;
@@ -152,10 +156,9 @@ private:
 	bool veof() const;
 	wchar_t vgetc_prev();
 	void SetFileSize();
-	int GetStrBytesNum(string_view Str) const;
+	int GetStrBytesNum(const wchar_t* Str, int Length) const; // BUGBUG not string_view, could be unrelated 🤦
 	bool isBinaryFile(uintptr_t cp);
 	void SavePosition();
-	intptr_t ViewerSearchDlgProc(Dialog* Dlg, intptr_t Msg,intptr_t Param1,void* Param2);
 	int getCharSize() const;
 	int txt_dump(std::string_view Str, size_t ClientWidth, string& OutStr, wchar_t ZeroChar, int tail) const;
 
@@ -165,10 +168,15 @@ private:
 	int GetModeDependentLineSize() const;
 
 	wchar_t ZeroChar() const;
-	size_t MaxViewLineSize() const { return ViOpt.MaxLineSize; }
+	int MaxViewLineSize() const { return ViOpt.MaxLineSize; }
 	size_t MaxViewLineBufferSize() const { return ViOpt.MaxLineSize + 15; }
-	int CalculateMaxBytesPerLineByScreenWidth() const;
-	void AdjustBytesPerLine(int Amount);
+	void ChangeHexModeBytesPerLine(int Amount);
+	void AdjustHexModeBytesPerLineToViewWidth();
+
+	// Shift applies to the viewport. E.g., negative Shift moves viewport to the left,
+	// towards the left content edge or towards the beginning of the file.
+	void HorizontalScroll(int Shift);
+	void RollContents(long long OffsetInChars);
 
 	friend class FileViewer;
 
@@ -193,9 +201,9 @@ private:
 
 	bool m_DeleteFolder{true};
 
-	string strLastSearchStr;
-	bool LastSearchCase,LastSearchWholeWords,LastSearchReverse,LastSearchHex,LastSearchRegexp;
-	int LastSearchDirection;
+	SearchReplaceDlgParams m_SearchDlgParams;
+
+	bool LastSearchBackward{}; // Used to adjust StartSearchPos
 	long long StartSearchPos{};
 
 	uintptr_t m_DefCodepage;
@@ -212,7 +220,7 @@ private:
 	long long FileSize{};
 	long long LastSelectPos{}, LastSelectSize{-1};
 
-	long long LeftPos{};
+	long long LeftPos{}; // Left viewport edge relative to left content edge; must be non-negative
 	bool LastPage{};
 	long long SelectPos{}, SelectSize{-1}, ManualSelectPos{-1};
 	DWORD SelectFlags{};
@@ -231,7 +239,10 @@ private:
 	std::list<ViewerUndoData> UndoData;
 
 	int LastKeyUndo{};
-	int Width{}, XX2{};  // используется при расчете ширины при скролбаре
+	// используется при расчете ширины при скролбаре
+	int ScrollbarAdjustedWidth{};
+	int ScrollbarAdjustedRight{};
+
 	int ViewerID;
 	bool OpenFailed{};
 	bool bVE_READ_Sent{};
@@ -240,9 +251,6 @@ private:
 	bool redraw_selection{};
 
 	bool m_bQuickView;
-
-	std::unique_ptr<time_check> m_TimeCheck;
-	std::unique_ptr<time_check> m_IdleCheck;
 
 	std::vector<char> vread_buffer;
 
@@ -307,8 +315,8 @@ private:
 	std::vector<wchar_t> ReadBuffer;
 	F8CP f8cps{true};
 	std::optional<bool> m_GotoHex;
-	int m_PrevXX2{};
-	size_t m_BytesPerLine{ 16 };
+	int m_HexModePrevScrollbarAdjustedWidth{};
+	int m_HexModeBytesPerLine{ 16 };
 };
 
 class ViewerContainer

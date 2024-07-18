@@ -57,6 +57,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "uuids.far.dialogs.hpp"
 #include "global.hpp"
 #include "keyboard.hpp"
+#include "RegExp.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
@@ -66,6 +67,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common/string_utils.hpp"
 
 // External:
+#include "format.hpp"
 
 //----------------------------------------------------------------------------
 
@@ -83,13 +85,44 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
    - Убрал непонятный мне запрет на использование маски файлов типа "*.*"
      (был когда-то, вроде, такой баг-репорт)
 */
-bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, FILETYPE_MODE Mode, bool AlwaysWaitFinish, bool AddToHistory, bool RunAs, function_ref<void(execute_info&)> const Launcher)
+bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, FILETYPE_MODE Mode, bool AlwaysWaitFinish, string_view CurrentDirectory, bool AddToHistory, bool RunAs, function_ref<void(execute_info&)> const Launcher)
 {
-	string strCommand, strDescription;
+	std::optional<os::fs::current_directory_guard> Guard;
+	// We have to set it - users can have associations like !.! which will work funny without this
+	if (!CurrentDirectory.empty())
+		Guard.emplace(CurrentDirectory);
 
 	const subst_context Context(Name, ShortName);
 
+	struct menu_data
 	{
+		string Command;
+		std::vector<RegExpMatch> Matches;
+		unordered_string_map<size_t> NamedMatches;
+	};
+
+	const auto AddMatches = [&](menu_data const& Data)
+	{
+		for (const auto& i: Data.Matches)
+		{
+			Context.Variables.emplace(
+				far::format(L"RegexGroup{}"sv, &i - Data.Matches.data()),
+				get_match(Context.Name, i)
+			);
+		}
+
+		for (const auto& [GroupName, GroupNumber]: Data.NamedMatches)
+		{
+			const auto& Match = Data.Matches[GroupNumber];
+			Context.Variables.emplace(
+				far::format(L"RegexGroup{{{}}}"sv, GroupName),
+				get_match(Context.Name, Match)
+			);
+		}
+	};
+
+	std::vector<menu_data> MenuData;
+
 		int ActualCmdCount=0; // отображаемых ассоциаций в меню
 		filemasks FMask; // для работы с масками файлов
 
@@ -97,28 +130,36 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 
 		std::vector<MenuItemEx> MenuItems;
 
+		string strDescription;
+
 		for(const auto& [Id, Mask]: ConfigProvider().AssocConfig()->TypedMasksEnumerator(Mode))
 		{
-			strCommand.clear();
+			strDescription.clear();
+			Context.Variables.clear();
+
+			menu_data NewMenuData;
+			filemasks::regex_matches const RegexMatches{ NewMenuData.Matches, NewMenuData.NamedMatches };
 
 			if (FMask.assign(Mask, FMF_SILENT))
 			{
-				if (FMask.check(Context.Name))
+				if (FMask.check(Context.Name, &RegexMatches))
 				{
-					ConfigProvider().AssocConfig()->GetCommand(Id, Mode, strCommand);
+					ConfigProvider().AssocConfig()->GetCommand(Id, Mode, NewMenuData.Command);
 
-					if (!strCommand.empty())
+					if (!NewMenuData.Command.empty())
 					{
 						ConfigProvider().AssocConfig()->GetDescription(Id, strDescription);
 						CommandCount++;
 					}
 				}
 
-				if (strCommand.empty())
+				if (NewMenuData.Command.empty())
 					continue;
+
+				AddMatches(NewMenuData);
 			}
 
-			string strCommandText = strCommand;
+			string strCommandText = NewMenuData.Command;
 			if (
 				!SubstFileName(strCommandText, Context, {}, true) ||
 				// все "подставлено", теперь проверим условия "if exist"
@@ -131,11 +172,11 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 			if (!strDescription.empty())
 				SubstFileName(strDescription, Context, {}, true, {}, true);
 			else
-				strDescription = strCommandText;
+				strDescription = std::move(strCommandText);
 
 			MenuItemEx TypesMenuItem(strDescription);
-			TypesMenuItem.ComplexUserData = strCommand;
-			MenuItems.push_back(std::move(TypesMenuItem));
+			MenuData.emplace_back(std::move(NewMenuData));
+			MenuItems.emplace_back(std::move(TypesMenuItem));
 		}
 
 		if (!CommandCount)
@@ -163,29 +204,31 @@ bool ProcessLocalFileTypes(string_view const Name, string_view const ShortName, 
 				return true;
 		}
 
-		strCommand = *TypesMenu->GetComplexUserDataPtr<string>(ExitCode);
-	}
+	auto& ItemData = MenuData[ExitCode];
+	Context.Variables.clear();
+	AddMatches(ItemData);
 
 	bool PreserveLFN = false;
-	if (SubstFileName(strCommand, Context, &PreserveLFN) && !strCommand.empty())
+	if (SubstFileName(ItemData.Command, Context, &PreserveLFN) && !ItemData.Command.empty())
 	{
+		if (AddToHistory && !(Global->Opt->ExcludeCmdHistory & EXCLUDECMDHISTORY_NOTFARASS) && !AlwaysWaitFinish) //AN
+		{
+			const auto curDir = Global->CtrlObject->CmdLine()->GetCurDir();
+			Global->CtrlObject->CmdHistory->AddToHistory(ItemData.Command, HR_DEFAULT, nullptr, {}, curDir);
+		}
+
 		SCOPED_ACTION(PreserveLongName)(Name, PreserveLFN);
 
 		execute_info Info;
-		Info.DisplayCommand = strCommand;
-		Info.Command = strCommand;
+		Info.DisplayCommand = ItemData.Command;
+		Info.Command = std::move(ItemData.Command);
+		Info.Directory = CurrentDirectory;
 		Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : execute_info::wait_mode::if_needed;
 		Info.RunAs = RunAs;
 		// We've already processed them!
 		Info.UseAssociations = false;
 
 		Launcher? Launcher(Info) : Global->CtrlObject->CmdLine()->ExecString(Info);
-
-		if (AddToHistory && !(Global->Opt->ExcludeCmdHistory&EXCLUDECMDHISTORY_NOTFARASS) && !AlwaysWaitFinish) //AN
-		{
-			const auto curDir = Global->CtrlObject->CmdLine()->GetCurDir();
-			Global->CtrlObject->CmdHistory->AddToHistory(strCommand, HR_DEFAULT, nullptr, {}, curDir);
-		}
 	}
 
 	return true;
@@ -262,11 +305,16 @@ bool GetFiletypeOpenMode(int keyPressed, FILETYPE_MODE& mode, bool& shouldForceI
 /*
   Используется для запуска внешнего редактора и вьювера
 */
-void ProcessExternal(string_view const Command, string_view const Name, string_view const ShortName, bool const AlwaysWaitFinish)
+void ProcessExternal(string_view const Command, string_view const Name, string_view const ShortName, bool const AlwaysWaitFinish, string_view const CurrentDirectory)
 {
+	std::optional<os::fs::current_directory_guard> Guard;
+	// We have to set it - users can have associations like !.! which will work funny without this
+	if (!CurrentDirectory.empty())
+		Guard.emplace(CurrentDirectory);
+
 	string strExecStr(Command);
 	bool PreserveLFN = false;
-	if (!SubstFileName(strExecStr, subst_context(Name, ShortName), &PreserveLFN) || strExecStr.empty())
+	if (!SubstFileName(strExecStr, { Name, ShortName }, &PreserveLFN) || strExecStr.empty())
 		return;
 
 	// If you want your history to be usable - use full paths yourself. We cannot reliably substitute them.
@@ -276,7 +324,8 @@ void ProcessExternal(string_view const Command, string_view const Name, string_v
 
 	execute_info Info;
 	Info.DisplayCommand = strExecStr;
-	Info.Command = strExecStr;
+	Info.Command = std::move(strExecStr);
+	Info.Directory = CurrentDirectory;
 	Info.WaitMode = AlwaysWaitFinish? execute_info::wait_mode::wait_finish : execute_info::wait_mode::if_needed;
 
 	Global->CtrlObject->CmdLine()->ExecString(Info);
@@ -300,14 +349,14 @@ static auto FillFileTypesMenu(VMenu2* TypesMenu, int MenuPos)
 		Data.emplace_back(std::move(Item));
 	}
 
-	const auto MaxElement = std::max_element(ALL_CONST_RANGE(Data), [](const auto& a, const auto &b) { return a.Description.size() < b.Description.size(); });
+	const auto MaxElementSize = std::ranges::fold_left(Data, 0uz, [](size_t const Value, data_item const & i){ return std::max(Value, i.Description.size()); });
 
 	TypesMenu->clear();
 
 	for (const auto& i: Data)
 	{
 		const auto AddLen = i.Description.size() - HiStrlen(i.Description);
-		MenuItemEx TypesMenuItem(concat(fit_to_left(i.Description, MaxElement->Description.size() + AddLen), L' ', BoxSymbols[BS_V1], L' ', i.Mask));
+		MenuItemEx TypesMenuItem(concat(fit_to_left(i.Description, MaxElementSize + AddLen), L' ', BoxSymbols[BS_V1], L' ', i.Mask));
 		TypesMenuItem.ComplexUserData = i.Id;
 		TypesMenu->AddItem(TypesMenuItem);
 	}
@@ -358,7 +407,7 @@ static intptr_t EditTypeRecordDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,v
 				case ETR_CHECK_ALTVIEW:
 				case ETR_CHECK_EDIT:
 				case ETR_CHECK_ALTEDIT:
-					Dlg->SendMessage(DM_ENABLE,Param1+1,ToPtr(reinterpret_cast<intptr_t>(Param2)==BSTATE_CHECKED));
+					Dlg->SendMessage(DM_ENABLE,Param1+1,ToPtr(std::bit_cast<intptr_t>(Param2) == BSTATE_CHECKED));
 					break;
 				default:
 					break;
@@ -369,7 +418,7 @@ static intptr_t EditTypeRecordDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1,v
 
 			if (Param1==ETR_BUTTON_OK)
 			{
-				return filemasks().assign(reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ETR_EDIT_MASKS, nullptr)));
+				return filemasks().assign(std::bit_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ETR_EDIT_MASKS, nullptr)));
 			}
 			break;
 
@@ -480,7 +529,7 @@ static bool DeleteTypeRecord(unsigned long long DeletePos)
 			msg(lng::MAskDelAssoc),
 			strMask
 		},
-		{ lng::MDelete, lng::MCancel }) == Message::first_button)
+		{ lng::MDelete, lng::MCancel }) == message_result::first_button)
 	{
 		ConfigProvider().AssocConfig()->DelType(DeletePos);
 		return true;

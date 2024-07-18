@@ -67,17 +67,19 @@ enum DLGEDITTYPE
 class Dialog;
 class Editor;
 
-class DlgEdit: public SimpleScreenObject
+class DlgEdit final: public SimpleScreenObject
 {
 public:
 	// for CtrlEnd
 	string strLastStr;
-	int LastPartLength;
+	int LastPartLength{-1};
 
 	BitFlags& Flags() const;
 
 	DlgEdit(window_ptr Owner,size_t Index,DLGEDITTYPE Type);
 	~DlgEdit() override;
+
+	void Init();
 
 	bool ProcessKey(const Manager::Key& Key) override;
 	bool ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent) override;
@@ -127,7 +129,7 @@ public:
 
 	void  SetPersistentBlocks(bool Mode);
 	int   GetPersistentBlocks() const;
-	void  SetDelRemovesBlocks(bool NewMode);
+	void  SetDelRemovesBlocks(bool Mode);
 	int   GetDelRemovesBlocks() const;
 
 	void  SetObjectColor(PaletteColors Color,PaletteColors SelColor=COL_COMMANDLINESELECTED,PaletteColors ColorUnChanged=COL_DIALOGEDITUNCHANGED);
@@ -173,7 +175,7 @@ private:
 	std::unique_ptr<History> iHistory;
 	std::unique_ptr<EditControl> lineEdit;
 #if defined(PROJECT_DI_MEMOEDIT)
-	Editor *multiEdit;
+	Editor *multiEdit{};
 #endif
 };
 

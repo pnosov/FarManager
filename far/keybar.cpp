@@ -42,7 +42,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "keyboard.hpp"
 #include "keys.hpp"
 #include "manager.hpp"
-#include "syslog.hpp"
 #include "lang.hpp"
 #include "interf.hpp"
 #include "config.hpp"
@@ -56,17 +55,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Common:
 #include "common.hpp"
 #include "common/enum_tokens.hpp"
-#include "common/range.hpp"
 
 // External:
 #include "format.hpp"
 
 //----------------------------------------------------------------------------
 
-enum
-{
-	KEY_COUNT = 12
-};
+static const size_t KEY_COUNT = 12;
 
 KeyBar::KeyBar(window_ptr Owner):
 	SimpleScreenObject(std::move(Owner)),
@@ -81,8 +76,6 @@ KeyBar::KeyBar(window_ptr Owner):
 	{
 		i.resize(KEY_COUNT);
 	}
-
-	_OT(SysLog(L"[%p] KeyBar::KeyBar()", this));
 }
 
 void KeyBar::DisplayObject()
@@ -113,7 +106,7 @@ void KeyBar::DisplayObject()
 
 	static_assert(std::size(Mapping) == KBL_GROUP_COUNT);
 
-	for (size_t i=0; i<KEY_COUNT; i++)
+	for (const auto i: std::views::iota(0uz, KEY_COUNT))
 	{
 		if (WhereX() + LabelWidth >= m_Where.right)
 			break;
@@ -122,7 +115,7 @@ void KeyBar::DisplayObject()
 		Text(str(i + 1));
 		SetColor(COL_KEYBARTEXT);
 
-		const auto State = std::find_if(ALL_CONST_RANGE(Mapping), [&](const auto& Item) { return std::invoke(Item.first, IntKeyState); });
+		const auto State = std::ranges::find_if(Mapping, [&](const auto& Item) { return std::invoke(Item.first, IntKeyState); });
 		// State should always be valid so check is excessive, but style is style
 		auto Label = Items[(State != std::cend(Mapping)? State : std::cbegin(Mapping))->second][i].first;
 
@@ -196,7 +189,7 @@ void KeyBar::SetLabels(lng StartIndex)
 
 static int FnGroup(unsigned ControlState)
 {
-	static const struct
+	static const struct area
 	{
 		unsigned Group;
 		unsigned ControlState;
@@ -214,11 +207,7 @@ static int FnGroup(unsigned ControlState)
 	};
 	static_assert(std::size(Area) == KBL_GROUP_COUNT);
 
-	const auto ItemIterator = std::find_if(CONST_RANGE(Area, i)
-	{
-		return i.ControlState == ControlState;
-	});
-
+	const auto ItemIterator = std::ranges::find(Area, ControlState, &area::ControlState);
 	return ItemIterator == std::cend(Area)? -1 : ItemIterator->Group;
 }
 
@@ -244,7 +233,9 @@ void KeyBar::SetCustomLabels(KEYBARAREA Area)
 		CustomArea = Area;
 		ClearKeyTitles(true);
 
-		for (const auto& [Name, Value]: ConfigProvider().GeneralCfg()->ValuesEnumerator<string>(concat(L"KeyBarLabels."sv, strLanguage, L'.', Names[Area])))
+		const auto LabelsKey = concat(L"KeyBarLabels."sv, strLanguage, L'.', Names[Area]);
+
+		for (const auto& [Name, Value]: ConfigProvider().GeneralCfg()->ValuesEnumerator<string>(LabelsKey))
 		{
 			const auto Key = KeyNameToKey(Name);
 			if (!Key)
@@ -275,8 +266,7 @@ void KeyBar::SetCustomLabels(KEYBARAREA Area)
 
 bool KeyBar::ProcessKey(const Manager::Key& Key)
 {
-	const auto LocalKey = Key();
-	switch (LocalKey)
+	switch (Key())
 	{
 		case KEY_KILLFOCUS:
 		case KEY_GOTFOCUS:
@@ -295,7 +285,7 @@ bool KeyBar::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 	if (!IsVisible())
 		return false;
 
-	if (!(MouseEvent->dwButtonState & 3) || MouseEvent->dwEventFlags)
+	if (!(MouseEvent->dwButtonState & 3) || !IsMouseButtonEvent(MouseEvent->dwEventFlags))
 		return false;
 
 	if (!m_Where.contains(MouseEvent->dwMousePosition))
@@ -376,7 +366,7 @@ size_t KeyBar::Change(const KeyBarTitles *Kbt)
 
 	size_t Result = 0;
 
-	for (const auto& i: span(Kbt->Labels, Kbt->CountLabels))
+	for (const auto& i: std::span(Kbt->Labels, Kbt->CountLabels))
 	{
 		if (i.Key.VirtualKeyCode < VK_F1 || i.Key.VirtualKeyCode >= VK_F1 + KEY_COUNT)
 			continue;

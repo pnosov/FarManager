@@ -38,12 +38,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 #include "palette.hpp"
 #include "plugin.hpp"
+#include "string_utils.hpp"
 
 // Platform:
 
 // Common:
 #include "common/multifunction.hpp"
 #include "common/monitored.hpp"
+#include "common/string_utils.hpp"
 #include "common/utility.hpp"
 
 // External:
@@ -53,9 +55,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 struct FarSettingsItem;
 class GeneralConfig;
 class RegExp;
+class DialogBuilder;
 struct PanelViewSettings;
-struct hash_icase_t;
-struct equal_icase_t;
 struct column;
 struct FARConfigItem;
 
@@ -109,7 +110,6 @@ enum ExcludeCmdHistoryType
 	EXCLUDECMDHISTORY_NOTFARASS    = 1_bit, // не помещать в историю команды выполнения ассоциаций файлов
 	EXCLUDECMDHISTORY_NOTPANEL     = 2_bit, // не помещать в историю команды выполнения с панели
 	EXCLUDECMDHISTORY_NOTCMDLINE   = 3_bit, // не помещать в историю команды выполнения с ком.строки
-	//EXCLUDECMDHISTORY_NOTAPPLYCMD   = 4_bit, // не помещать в историю команды выполнения из "Apply Command"
 };
 
 enum QUOTEDNAMETYPE
@@ -159,21 +159,23 @@ enum disk_menu_mode
 class Option
 {
 public:
+	using variant = std::variant<long long, string, bool>;
+
 	virtual ~Option() = default;
 
 	[[nodiscard]]
 	virtual string toString() const = 0;
 	[[nodiscard]]
-	virtual bool TryParse(const string& value) = 0;
+	virtual bool TryParse(string_view value) = 0;
 	[[nodiscard]]
 	virtual string ExInfo() const = 0;
 	[[nodiscard]]
 	virtual string_view GetType() const = 0;
 	[[nodiscard]]
-	virtual bool IsDefault(const std::any& Default) const = 0;
-	virtual void SetDefault(const std::any& Default) = 0;
+	virtual bool IsDefault(const variant& Default) const = 0;
+	virtual void SetDefault(const variant& Default) = 0;
 	[[nodiscard]]
-	virtual bool Edit(class DialogBuilder* Builder, int Width, int Param) = 0;
+	virtual bool Edit(DialogBuilder& Builder, int Param) = 0;
 	virtual void Export(FarSettingsItem& To) const = 0;
 
 	[[nodiscard]]
@@ -183,12 +185,11 @@ protected:
 	COPY_CONSTRUCTIBLE(Option);
 	COPY_ASSIGNABLE_DEFAULT(Option);
 
-	template<class T>
-	explicit Option(const T& Value): m_Value(Value) {}
+	explicit Option(const auto& Value): m_Value(Value) {}
 
 	template<class T>
 	[[nodiscard]]
-	const T& GetT() const { return std::any_cast<const T&>(m_Value.value().value); }
+	const T& GetT() const { return std::get<T>(m_Value.value()); }
 
 	template<class T>
 	void SetT(const T& NewValue) { if (GetT<T>() != NewValue) m_Value = NewValue; }
@@ -197,30 +198,11 @@ private:
 	friend class Options;
 
 	virtual void StoreValue(GeneralConfig* Storage, string_view KeyName, string_view ValueName, bool always) const = 0;
-	virtual bool ReceiveValue(const GeneralConfig* Storage, string_view KeyName, string_view ValueName, const std::any& Default) = 0;
+	virtual bool ReceiveValue(const GeneralConfig* Storage, string_view KeyName, string_view ValueName, const variant& Default) = 0;
 
 	void MakeUnchanged() { m_Value.forget(); }
 
-	// Workaround for https://gcc.gnu.org/bugzilla/show_bug.cgi?id=91630
-	struct any
-	{
-		std::any value;
-
-		template<typename T>
-		any(T&& Value):
-			value(FWD(Value))
-		{
-		}
-
-
-		template<typename T>
-		auto& operator=(T&& Value)
-		{
-			value = FWD(Value);
-		}
-	};
-
-	monitored<any> m_Value;
+	monitored<variant> m_Value;
 };
 
 namespace option
@@ -228,8 +210,7 @@ namespace option
 	class validator_tag{};
 	class notifier_tag{};
 
-	template<typename callable>
-	auto validator(callable&& Callable)
+	auto validator(auto&& Callable)
 	{
 		return overload
 		{
@@ -238,8 +219,7 @@ namespace option
 		};
 	}
 
-	template<typename callable>
-	auto notifier(callable&& Callable)
+	auto notifier(auto&& Callable)
 	{
 		return overload
 		{
@@ -270,15 +250,27 @@ namespace detail
 		}
 
 		[[nodiscard]]
-		const auto& Get() const { return GetT<base_type>(); }
-		void Set(const base_type& Value) { SetT(Validate(Value)); Notify(); }
+		const auto& Get() const
+		{
+			return GetT<base_type>();
+		}
+
+		void Set(const base_type& Value)
+		{
+			const auto Validated = Validate(Value);
+			if (Validated == Get())
+				return;
+
+			SetT(Validated);
+			Notify();
+		}
+
 		[[nodiscard]]
 		bool TrySet(const base_type& Value)
 		{
 			if (Validate(Value) != Value)
-			{
 				return false;
-			}
+
 			SetT(Value);
 			Notify();
 			return true;
@@ -288,11 +280,11 @@ namespace detail
 		string ExInfo() const override { return {}; }
 
 		[[nodiscard]]
-		bool IsDefault(const std::any& Default) const override { return Get() == std::any_cast<base_type>(Default); }
-		void SetDefault(const std::any& Default) override { Set(std::any_cast<base_type>(Default)); }
+		bool IsDefault(const variant& Default) const override { return Get() == std::get<base_type>(Default); }
+		void SetDefault(const variant& Default) override { Set(std::get<base_type>(Default)); }
 
 		[[nodiscard]]
-		bool ReceiveValue(const GeneralConfig* Storage, string_view KeyName, string_view ValueName, const std::any& Default) override;
+		bool ReceiveValue(const GeneralConfig* Storage, string_view KeyName, string_view ValueName, const variant& Default) override;
 		void StoreValue(GeneralConfig* Storage, string_view KeyName, string_view ValueName, bool always) const override;
 
 		//operator const base_type&() const { return Get(); }
@@ -301,7 +293,7 @@ namespace detail
 		OptionImpl():
 			Option(base_type())
 		{
-			static_assert(std::is_base_of_v<OptionImpl, derived>);
+			static_assert(std::derived_from<derived, OptionImpl>);
 		}
 
 		auto& operator=(const base_type& Value)
@@ -329,7 +321,7 @@ namespace detail
 	};
 }
 
-class BoolOption: public detail::OptionImpl<bool, BoolOption>
+class BoolOption final: public detail::OptionImpl<bool, BoolOption>
 {
 public:
 	using impl_type::OptionImpl;
@@ -338,18 +330,18 @@ public:
 	[[nodiscard]]
 	string toString() const override { return Get() ? L"true"s : L"false"s; }
 	[[nodiscard]]
-	bool TryParse(const string& value) override;
+	bool TryParse(string_view value) override;
 	[[nodiscard]]
 	string_view GetType() const override { return L"boolean"sv; }
 	[[nodiscard]]
-	bool Edit(class DialogBuilder* Builder, int Width, int Param) override;
+	bool Edit(DialogBuilder& Builder, int Param) override;
 	void Export(FarSettingsItem& To) const override;
 
 	[[nodiscard]]
-	operator bool() const { return Get(); }
+	explicit(false) operator bool() const { return Get(); }
 };
 
-class Bool3Option: public detail::OptionImpl<long long, Bool3Option>
+class Bool3Option final: public detail::OptionImpl<long long, Bool3Option>
 {
 public:
 	using impl_type::OptionImpl;
@@ -358,18 +350,18 @@ public:
 	[[nodiscard]]
 	string toString() const override { const auto v = Get(); return v == BSTATE_CHECKED? L"true"s : v == BSTATE_UNCHECKED? L"false"s : L"other"s; }
 	[[nodiscard]]
-	bool TryParse(const string& value) override;
+	bool TryParse(string_view value) override;
 	[[nodiscard]]
 	string_view GetType() const override { return L"3-state"sv; }
 	[[nodiscard]]
-	bool Edit(class DialogBuilder* Builder, int Width, int Param) override;
+	bool Edit(DialogBuilder& Builder, int Param) override;
 	void Export(FarSettingsItem& To) const override;
 
 	[[nodiscard]]
-	operator FARCHECKEDSTATE() const { return static_cast<FARCHECKEDSTATE>(Get()); }
+	explicit(false) operator FARCHECKEDSTATE() const { return static_cast<FARCHECKEDSTATE>(Get()); }
 };
 
-class IntOption: public detail::OptionImpl<long long, IntOption>
+class IntOption final: public detail::OptionImpl<long long, IntOption>
 {
 public:
 	using impl_type::OptionImpl;
@@ -378,13 +370,13 @@ public:
 	[[nodiscard]]
 	string toString() const override;
 	[[nodiscard]]
-	bool TryParse(const string& value) override;
+	bool TryParse(string_view value) override;
 	[[nodiscard]]
 	string ExInfo() const override;
 	[[nodiscard]]
 	string_view GetType() const override { return L"integer"sv; }
 	[[nodiscard]]
-	bool Edit(class DialogBuilder* Builder, int Width, int Param) override;
+	bool Edit(DialogBuilder& Builder, int Param) override;
 	void Export(FarSettingsItem& To) const override;
 
 	IntOption& operator|=(long long Value){Set(Get()|Value); return *this;}
@@ -395,10 +387,10 @@ public:
 	IntOption& operator++(){Set(Get()+1); return *this;}
 
 	[[nodiscard]]
-	operator long long() const { return Get(); }
+	explicit(false) operator long long() const { return Get(); }
 };
 
-class StringOption: public detail::OptionImpl<string, StringOption>
+class StringOption final: public detail::OptionImpl<string, StringOption>
 {
 public:
 	using impl_type::OptionImpl;
@@ -407,11 +399,11 @@ public:
 	[[nodiscard]]
 	string toString() const override { return Get(); }
 	[[nodiscard]]
-	bool TryParse(const string& value) override { Set(value); return true; }
+	bool TryParse(string_view value) override { Set(string(value)); return true; }
 	[[nodiscard]]
 	string_view GetType() const override { return L"string"sv; }
 	[[nodiscard]]
-	bool Edit(class DialogBuilder* Builder, int Width, int Param) override;
+	bool Edit(DialogBuilder& Builder, int Param) override;
 	void Export(FarSettingsItem& To) const override;
 
 	StringOption& operator+=(const string& Value) {Set(Get()+Value); return *this;}
@@ -426,9 +418,9 @@ public:
 	size_t size() const { return Get().size(); }
 
 	[[nodiscard]]
-	operator const string&() const { return Get(); }
+	explicit(false) operator const string&() const { return Get(); }
 	[[nodiscard]]
-	operator string_view() const { return Get(); }
+	explicit(false) operator string_view() const { return Get(); }
 };
 
 class Options: noncopyable
@@ -446,7 +438,7 @@ public:
 	Options();
 	~Options();
 	void ShellOptions(bool LastCommand, const MOUSE_EVENT_RECORD *MouseEvent);
-	using overrides = std::unordered_map<string, string, hash_icase_t, equal_icase_t>;
+	using overrides = unordered_string_map_icase<string_view>;
 	void Load(overrides&& Overrides);
 	void Save(bool Manual);
 	const Option* GetConfigValue(string_view Key, string_view Name) const;
@@ -455,6 +447,8 @@ public:
 	void LocalViewerConfig(ViewerOptions &ViOptRef) {return ViewerConfig(ViOptRef, true);}
 	void LocalEditorConfig(EditorOptions &EdOptRef) {return EditorConfig(EdOptRef, true);}
 	void SetSearchColumns(string_view Columns, string_view Widths);
+	void SetFilePanelModes();
+	static void MaskGroupsSettings();
 
 	struct SortingOptions
 	{
@@ -534,6 +528,7 @@ public:
 		IntOption StartPos;
 		BoolOption AnsiByDefault;
 		BoolOption SaveInUTF;
+		BoolOption ValidateConversion;
 	};
 
 	struct CodeXLAT
@@ -576,7 +571,6 @@ public:
 		BoolOption EditOpenedForWrite;
 		BoolOption SearchSelFound;
 		BoolOption SearchCursorAtEnd;
-		BoolOption SearchRegexp;
 		Bool3Option ShowWhiteSpace;
 
 		StringOption strWordDiv;
@@ -608,8 +602,6 @@ public:
 		BoolOption SaveShortPos;
 		BoolOption SaveViewMode;
 		BoolOption SaveWrapMode;
-		BoolOption SearchEditFocus; // auto-focus on edit text/hex window
-		BoolOption SearchRegexp;
 		Bool3Option SearchWrapStop; // [NonStop] / {Start-End} / [Full Cycle]
 		BoolOption ShowArrows;
 		BoolOption ShowKeyBar;
@@ -631,7 +623,7 @@ public:
 	struct DialogsOptions
 	{
 		BoolOption EditBlock;            // Постоянные блоки в строках ввода
-		BoolOption EditHistory;          // Добавлять в историю?
+		Bool3Option EditHistory;          // Добавлять в историю?
 		BoolOption AutoComplete;         // Разрешено автодополнение?
 		BoolOption EULBsClear;           // = 1 - BS в диалогах для UnChanged строки удаляет такую строку также, как и Del
 		IntOption MouseButton;          // Отключение восприятие правой/левой кнопки мыши как команд закрытия окна диалога
@@ -796,6 +788,7 @@ public:
 		BoolOption RestoreCPAfterExecute;
 		StringOption strExecuteBatchType;
 		StringOption strExcludeCmds;
+		std::vector<string_view> ExcludeCmds;
 		StringOption Comspec;
 		StringOption ComspecArguments;
 		struct
@@ -813,6 +806,8 @@ public:
 	SortingOptions Sort;
 
 	palette Palette;
+	BoolOption SetPalette;
+
 	BoolOption Clock;
 	BoolOption Mouse;
 	BoolOption ShowKeyBar;
@@ -839,8 +834,7 @@ public:
 
 	BoolOption UseRegisteredTypes;
 
-	BoolOption ViewerEditorClock;
-	BoolOption SaveViewHistory;
+	Bool3Option SaveViewHistory;
 	IntOption ViewHistoryCount;
 	IntOption ViewHistoryLifetime;
 
@@ -857,10 +851,10 @@ public:
 	IntOption ChangeDriveMode;
 	BoolOption ChangeDriveDisconnectMode;
 
-	BoolOption SaveHistory;
+	Bool3Option SaveHistory;
 	IntOption HistoryCount;
 	IntOption HistoryLifetime;
-	BoolOption SaveFoldersHistory;
+	Bool3Option SaveFoldersHistory;
 	IntOption FoldersHistoryCount;
 	IntOption FoldersHistoryLifetime;
 	IntOption DialogsHistoryCount;
@@ -936,8 +930,8 @@ public:
 	BoolOption SetAttrFolderRules;
 
 	BoolOption ExceptUsed;
-	StringOption strExceptEventSvc;
 	IntOption CursorSize[4];
+	IntOption GrabberCursorSize;
 
 	CodeXLAT XLat;
 
@@ -945,14 +939,11 @@ public:
 
 	StringOption strHelpLanguage;
 	BoolOption FullScreenHelp;
-	IntOption HelpTabSize;
 
 	IntOption HelpURLRules; // =0 отключить возможность запуска URL-приложений
-	BoolOption HelpSearchRegexp;
 
 	// запоминать логические диски и не опрашивать каждый раз. Для предотвращения "просыпания" "зеленых" винтов.
 	BoolOption RememberLogicalDrives;
-	BoolOption FlagPosixSemantics;
 
 	IntOption MsWheelDelta; // задает смещение для прокрутки
 	IntOption MsWheelDeltaView;
@@ -962,6 +953,9 @@ public:
 	IntOption MsHWheelDelta;
 	IntOption MsHWheelDeltaView;
 	IntOption MsHWheelDeltaEdit;
+
+	// How many ticks constitute an event
+	IntOption MsWheelThreshold;
 
 	/*
 	битовая маска:
@@ -982,6 +976,7 @@ public:
 
 	BoolOption VirtualTerminalRendering;
 	Bool3Option ClearType;
+	Bool3Option FullWidthAwareRendering;
 
 	Bool3Option PgUpChangeDisk;
 	BoolOption ShowDotsInRoot;
@@ -1037,14 +1032,14 @@ public:
 
 	StringOption strBoxSymbols;
 
-	BoolOption SmartFolderMonitor; // def: 0=always monitor panel folder(s), 1=only when FAR has input focus
-
 	int ReadOnlyConfig{-1};
 	int UseExceptionHandler{};
 	long long ElevationMode{};
 	int WindowMode{-1};
 	BoolOption WindowModeStickyX;
 	BoolOption WindowModeStickyY;
+
+	BoolOption ClipboardUnicodeWorkaround;
 
 	std::vector<std::vector<std::pair<panel_sort, sort_order>>> PanelSortLayers;
 
@@ -1057,7 +1052,7 @@ private:
 	void InitConfigsData();
 	farconfig& GetConfig(config_type Type);
 	const farconfig& GetConfig(config_type Type) const;
-	static intptr_t AdvancedConfigDlgProc(class Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2);
+	intptr_t AdvancedConfigDlgProc(class Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2);
 	void SystemSettings();
 	void PanelSettings();
 	void InterfaceSettings();
@@ -1071,10 +1066,8 @@ private:
 	void EditorConfig(EditorOptions &EdOptRef, bool Local = false);
 	void SetFolderInfoFiles();
 	void InfoPanelSettings();
-	static void MaskGroupsSettings();
 	void AutoCompleteSettings();
 	void TreeSettings();
-	void SetFilePanelModes();
 	void SetViewSettings(size_t Index, PanelViewSettings&& Data);
 	void AddViewSettings(size_t Index, PanelViewSettings&& Data);
 	void DeleteViewSettings(size_t Index);
@@ -1087,11 +1080,12 @@ private:
 	std::vector<farconfig> m_Configs;
 	std::vector<PanelViewSettings> m_ViewSettings;
 	bool m_ViewSettingsChanged{};
+	bool m_HideUnchanged{};
 };
 
 string GetFarIniString(string_view AppName, string_view KeyName, string_view Default);
 int GetFarIniInt(string_view AppName, string_view KeyName, int Default);
 
-std::chrono::steady_clock::duration GetRedrawTimeout() noexcept;
+std::chrono::milliseconds GetRedrawTimeout() noexcept;
 
 #endif // CONFIG_HPP_E468759B_688C_4D45_A5BA_CF1D4FCC9A08

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
 
-	<!-- Override the default visualiser - it doesn't have StringView node :( -->
+	<!-- Override the default visualizer - it doesn't have StringView node :( -->
 	<Type Name="std::basic_string_view&lt;*,*&gt;">
-		<Intrinsic Name="size" Expression="_Mysize" />
 		<Intrinsic Name="data" Expression="_Mydata" />
+		<Intrinsic Name="size" Expression="_Mysize" />
 		<DisplayString>{data(),[size()]na}</DisplayString>
 		<StringView>data(),[size()]na</StringView>
 		<Expand>
@@ -16,25 +16,32 @@
 		</Expand>
 	</Type>
 
-	<Type Name="range&lt;*&gt;">
-		<DisplayString>{m_Begin,[m_End - m_Begin]na}</DisplayString>
+	<!-- Override the default visualizer - its DisplayString is not good enough -->
+	<Type Name="std::span&lt;*&gt;">
+		<Intrinsic Name="data" Expression="_Mydata" />
+		<Intrinsic Name="size" Expression="_Mysize" />
+		<DisplayString>{data(),[size()]na}</DisplayString>
 		<Expand>
-			<Item Name="[size]" ExcludeView="simple">m_End - m_Begin</Item>
+			<Item Name="[size]" ExcludeView="simple">size()</Item>
 			<ArrayItems>
-				<Size>m_End - m_Begin</Size>
-				<ValuePointer>m_Begin</ValuePointer>
+				<Size>size()</Size>
+				<ValuePointer>data()</ValuePointer>
 			</ArrayItems>
 		</Expand>
 	</Type>
 
-	<Type Name="span&lt;*&gt;">
-		<DisplayString>{m_Begin,[m_End - m_Begin]na}</DisplayString>
+	<Type Name="matrix_view&lt;*&gt;">
 		<Expand>
-			<Item Name="[size]" ExcludeView="simple">m_End - m_Begin</Item>
-			<ArrayItems>
-				<Size>m_End - m_Begin</Size>
-				<ValuePointer>m_Begin</ValuePointer>
-			</ArrayItems>
+			<CustomListItems>
+				<Variable Name="i" InitialValue="0"/>
+				<Loop>
+					<Item Name="row[{i}]">m_Data + i * m_Cols,[m_Cols]na</Item>
+					<Exec>++i</Exec>
+					<If Condition="i == m_Rows">
+						<Break/>
+					</If>
+				</Loop>
+			</CustomListItems>
 		</Expand>
 	</Type>
 
@@ -68,7 +75,7 @@
 		</Expand>
 	</Type>
 
-	<Type Name="movable&lt;*&gt;">
+	<Type Name="movable">
 		<DisplayString>{m_Value}</DisplayString>
 		<StringView>m_Value</StringView>
 	</Type>
@@ -76,38 +83,36 @@
 	<Type Name="os::detail::handle_t&lt;*&gt;">
 		<Intrinsic Name="get" Expression="_Mypair._Myval2" />
 		<DisplayString Condition="!get()">empty</DisplayString>
-		<DisplayString>{get()}</DisplayString>
+		<DisplayString>{get(),handle}</DisplayString>
 	</Type>
 
 	<Type Name="array_ptr&lt;*,*&gt;">
-		<Intrinsic Name="dynamic" Expression="m_Size &gt; $T2"/>
-		<Intrinsic Name="empty" Expression="!m_Size"/>
-		<Intrinsic Name="ptr" Expression="empty()? nullptr : dynamic()? ($T1*)m_DynamicBuffer._Mypair._Myval2 : ($T1*)&amp;m_StaticBuffer"/>
-		<DisplayString Condition="empty()">empty</DisplayString>
-		<DisplayString Condition="!empty()">size={m_Size}, dynamic={dynamic()}</DisplayString>
+		<Intrinsic Name="index" Expression="m_Buffer.index()" />
 		<Expand>
+			<Item Name="[data]" Condition="index() == 0">m_Buffer._Head</Item>
+			<Item Name="[data]" Condition="index() == 1">m_Buffer._Tail._Head</Item>
+			<Synthetic Name="[type]">
+				<DisplayString Condition="index() == 0">static</DisplayString>
+				<DisplayString Condition="index() == 1">dynamic</DisplayString>
+			</Synthetic>
 			<Item Name="[size]">m_Size</Item>
-			<Item Name="[dynamic]">dynamic()</Item>
-			<ArrayItems Condition="!empty()">
-				<Size>m_Size</Size>
-				<ValuePointer>ptr()</ValuePointer>
-			</ArrayItems>
 		</Expand>
 	</Type>
 
 	<Type Name="block_ptr&lt;*,*&gt;">
+		<Intrinsic Name="index" Expression="m_Buffer.index()" />
 		<Expand>
-			<Synthetic Name="[Buffer]">
-				<DisplayString>{(array_ptr&lt;char,$T2&gt;&amp;)*this}</DisplayString>
-				<Expand>
-					<ExpandedItem>(array_ptr&lt;char,$T2&gt;&amp;)*this</ExpandedItem>
-				</Expand>
+			<Item Name="[data]" Condition="index() == 0">*($T1*)m_Buffer._Head._Elems</Item>
+			<Item Name="[data]" Condition="index() == 1">*($T1*)m_Buffer._Tail._Head._Mypair._Myval2</Item>
+			<Synthetic Name="[type]">
+				<DisplayString Condition="index() == 0">static</DisplayString>
+				<DisplayString Condition="index() == 1">dynamic</DisplayString>
 			</Synthetic>
-			<ExpandedItem Condition="!empty()">($T1*)ptr()</ExpandedItem>
+			<Item Name="[size]">m_Size</Item>
 		</Expand>
 	</Type>
 
-	<Type Name="error_state">
+	<Type Name="os::error_state">
 		<DisplayString>{{Win32Error={Win32Error,h} NtError={NtError,h}}}</DisplayString>
 		<Expand>
 			<Item Name="Win32Error">Win32Error,hr</Item>
@@ -116,118 +121,258 @@
 	</Type>
 
 	<Type Name="error_state_ex">
-		<DisplayString>{{{(*(error_state*)this)} What={What}}}</DisplayString>
+		<DisplayString>{{{(*(os::error_state*)this)} errno={Errno} What={What}}}</DisplayString>
 		<Expand>
-			<ExpandedItem>(*(error_state*)this)</ExpandedItem>
+			<ExpandedItem>(*(os::error_state*)this)</ExpandedItem>
+			<Item Name="errno">Errno</Item>
 			<Item Name="What">What</Item>
 		</Expand>
 	</Type>
 
+
+	<Type Name="color_index">
+		<Intrinsic Name="index_red"   Expression="(i - 16) / 36"/>
+		<Intrinsic Name="index_green" Expression="(i - 16) % 36 / 6"/>
+		<Intrinsic Name="index_blue"  Expression="(i - 16) % 6"/>
+		<Intrinsic Name="index_grey"  Expression="23 - (255 - i)"/>
+		<Intrinsic Name="is_default"  Expression="i == 0 &amp;&amp; reserved0 == 0 &amp;&amp; reserved1 == 0x80"/>
+
+		<DisplayString Condition="is_default()">{{(default) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x0">{{{i,nvo} (black) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x1">{{{i,nvo} (navy) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x2">{{{i,nvo} (green) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x3">{{{i,nvo} (teal) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x4">{{{i,nvo} (maroon) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x5">{{{i,nvo} (purple) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x6">{{{i,nvo} (olive) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x7">{{{i,nvo} (silver) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x8">{{{i,nvo} (gray) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0x9">{{{i,nvo} (blue) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xa">{{{i,nvo} (lime) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xb">{{{i,nvo} (aqua) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xc">{{{i,nvo} (red) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xd">{{{i,nvo} (fuchsia) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xe">{{{i,nvo} (yellow) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i == 0xf">{{{i,nvo} (white) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i&gt;0xe7">{{{i,nvo} (grey {index_grey()}) {a,nvo}}}</DisplayString>
+		<DisplayString Condition="i&gt;0xf">{{{i,nvo}  ({index_red()} {index_green()} {index_blue()}) {a,nvo}}}</DisplayString>
+		<Expand>
+			<Item      Name="index" Condition="!is_default() &amp;&amp; i&lt;0x10">i,nvo</Item>
+			<Synthetic Name="index" Condition="i&gt;0xf">
+				<DisplayString>{i,nvo}</DisplayString>
+				<Expand>
+					<Item Name="index">i,nvo</Item>
+					<Item Name="red"   Condition="i&lt;0xe8">index_red()</Item>
+					<Item Name="green" Condition="i&lt;0xe8">index_green()</Item>
+					<Item Name="blue"  Condition="i&lt;0xe8">index_blue()</Item>
+					<Item Name="grey"  Condition="i&gt;0xe7">index_grey()</Item>
+				</Expand>
+			</Synthetic>
+			<Item Name="alpha">a,nvo</Item>
+		</Expand>
+	</Type>
+
 	<Type Name="rgba">
-		<DisplayString>{short(r)} {short(g)} {short(b)} {short(a)}</DisplayString>
+		<DisplayString>{{{r,nvo} {g,nvo} {b,nvo} {a,nvo}}}</DisplayString>
+		<Expand>
+			<Item Name="red"  >r,nvo</Item>
+			<Item Name="green">g,nvo</Item>
+			<Item Name="blue" >b,nvo</Item>
+			<Item Name="alpha">a,nvo</Item>
+		</Expand>
 	</Type>
 
 	<Type Name="FarColor">
-		<Intrinsic Name="is_f_rgb" Expression="(Flags &amp; FCF_FG_4BIT) == 0"/>
-		<Intrinsic Name="is_b_rgb" Expression="(Flags &amp; FCF_BG_4BIT) == 0"/>
-		<Intrinsic Name="is_f_index" Expression="!is_f_rgb() &amp;&amp; (ForegroundColor &amp; 0xf) == Index">
-			<Parameter Type="int" Name="Index"/>
-		</Intrinsic>
-		<Intrinsic Name="is_b_index" Expression="!is_b_rgb() &amp;&amp; (BackgroundColor &amp; 0xf) == Index">
-			<Parameter Type="int" Name="Index"/>
-		</Intrinsic>
+		<!-- BUGBUG VS debugger can't inspect "constexpr inline" constants -->
+		<Intrinsic Name="is_f_index"    Expression="(Flags &amp; 0x0000000000000001) != 0"/>
+		<Intrinsic Name="is_b_index"    Expression="(Flags &amp; 0x0000000000000002) != 0"/>
+		<Intrinsic Name="is_u_index"    Expression="(Flags &amp; 0x0000000000000008) != 0"/>
+		<Intrinsic Name="is_inherit"    Expression="(Flags &amp; 0x0000000000000004) != 0"/>
+		<Intrinsic Name="is_bold"       Expression="(Flags &amp; 0x1000000000000000) != 0"/>
+		<Intrinsic Name="is_italic"     Expression="(Flags &amp; 0x2000000000000000) != 0"/>
+		<Intrinsic Name="is_overline"   Expression="(Flags &amp; 0x0100000000000000) != 0"/>
+		<Intrinsic Name="is_strikeout"  Expression="(Flags &amp; 0x0200000000000000) != 0"/>
+		<Intrinsic Name="is_faint"      Expression="(Flags &amp; 0x0400000000000000) != 0"/>
+		<Intrinsic Name="is_blink"      Expression="(Flags &amp; 0x0800000000000000) != 0"/>
+		<Intrinsic Name="is_inverse"    Expression="(Flags &amp; 0x0010000000000000) != 0"/>
+		<Intrinsic Name="is_invisible"  Expression="(Flags &amp; 0x0020000000000000) != 0"/>
+		<Intrinsic Name="is_underline0" Expression="(Flags &amp; 0xC040000000000000) == 0"/>
+		<Intrinsic Name="is_underline1" Expression="(Flags &amp; 0x4000000000000000) != 0"/>
+		<Intrinsic Name="is_underline2" Expression="(Flags &amp; 0x8000000000000000) != 0"/>
+		<Intrinsic Name="is_underline3" Expression="(Flags &amp; 0xC000000000000000) == 0xC000000000000000"/>
+		<Intrinsic Name="is_underline4" Expression="(Flags &amp; 0x0040000000000000) != 0"/>
+		<Intrinsic Name="is_underline5" Expression="(Flags &amp; 0x4040000000000000) == 0x4040000000000000"/>
+
 		<Expand>
 			<Synthetic Name="Foreground">
-				<DisplayString Condition="is_f_rgb()">{ForegroundRGBA}</DisplayString>
-				<DisplayString Condition="is_f_index(0x0)">black</DisplayString>
-				<DisplayString Condition="is_f_index(0x1)">navy</DisplayString>
-				<DisplayString Condition="is_f_index(0x2)">green</DisplayString>
-				<DisplayString Condition="is_f_index(0x3)">teal</DisplayString>
-				<DisplayString Condition="is_f_index(0x4)">maroon</DisplayString>
-				<DisplayString Condition="is_f_index(0x5)">purple</DisplayString>
-				<DisplayString Condition="is_f_index(0x6)">olive</DisplayString>
-				<DisplayString Condition="is_f_index(0x7)">silver</DisplayString>
-				<DisplayString Condition="is_f_index(0x8)">gray</DisplayString>
-				<DisplayString Condition="is_f_index(0x9)">blue</DisplayString>
-				<DisplayString Condition="is_f_index(0xa)">lime</DisplayString>
-				<DisplayString Condition="is_f_index(0xb)">aqua</DisplayString>
-				<DisplayString Condition="is_f_index(0xc)">red</DisplayString>
-				<DisplayString Condition="is_f_index(0xd)">fuchsia</DisplayString>
-				<DisplayString Condition="is_f_index(0xe)">yellow</DisplayString>
-				<DisplayString Condition="is_f_index(0xf)">white</DisplayString>
-			</Synthetic>
-			<Synthetic Name="Background">
-				<DisplayString Condition="is_b_rgb()">{BackgroundRGBA}</DisplayString>
-				<DisplayString Condition="is_b_index(0x0)">black</DisplayString>
-				<DisplayString Condition="is_b_index(0x1)">navy</DisplayString>
-				<DisplayString Condition="is_b_index(0x2)">green</DisplayString>
-				<DisplayString Condition="is_b_index(0x3)">teal</DisplayString>
-				<DisplayString Condition="is_b_index(0x4)">maroon</DisplayString>
-				<DisplayString Condition="is_b_index(0x5)">purple</DisplayString>
-				<DisplayString Condition="is_b_index(0x6)">olive</DisplayString>
-				<DisplayString Condition="is_b_index(0x7)">silver</DisplayString>
-				<DisplayString Condition="is_b_index(0x8)">gray</DisplayString>
-				<DisplayString Condition="is_b_index(0x9)">blue</DisplayString>
-				<DisplayString Condition="is_b_index(0xa)">lime</DisplayString>
-				<DisplayString Condition="is_b_index(0xb)">aqua</DisplayString>
-				<DisplayString Condition="is_b_index(0xc)">red</DisplayString>
-				<DisplayString Condition="is_b_index(0xd)">fuchsia</DisplayString>
-				<DisplayString Condition="is_b_index(0xe)">yellow</DisplayString>
-				<DisplayString Condition="is_b_index(0xf)">white</DisplayString>
-			</Synthetic>
-			<Synthetic Name="Flags">
-				<DisplayString>{Flags,h}</DisplayString>
+				<DisplayString Condition="is_f_index()">{ForegroundIndex}</DisplayString>
+				<DisplayString Condition="!is_f_index()">{ForegroundRGBA}</DisplayString>
 				<Expand>
-					<Item Name="bold">bool(Flags &amp; FCF_FG_BOLD)</Item>
-					<Item Name="italic">bool(Flags &amp; FCF_FG_ITALIC)</Item>
-					<Item Name="underline">bool(Flags &amp; FCF_FG_UNDERLINE)</Item>
+					<ExpandedItem Condition="is_f_index()">ForegroundIndex</ExpandedItem>
+					<ExpandedItem Condition="!is_f_index()">ForegroundRGBA</ExpandedItem>
 				</Expand>
 			</Synthetic>
+			<Synthetic Name="Background">
+				<DisplayString Condition="is_b_index()">{BackgroundIndex}</DisplayString>
+				<DisplayString Condition="!is_b_index()">{BackgroundRGBA}</DisplayString>
+				<Expand>
+					<ExpandedItem Condition="is_b_index()">BackgroundIndex</ExpandedItem>
+					<ExpandedItem Condition="!is_b_index()">BackgroundRGBA</ExpandedItem>
+				</Expand>
+			</Synthetic>
+			<Synthetic Name="Underline">
+				<DisplayString Condition="is_u_index()">{UnderlineIndex}</DisplayString>
+				<DisplayString Condition="!is_u_index()">{UnderlineRGBA}</DisplayString>
+				<Expand>
+					<ExpandedItem Condition="is_u_index()">UnderlineIndex</ExpandedItem>
+					<ExpandedItem Condition="!is_u_index()">UnderlineRGBA</ExpandedItem>
+				</Expand>
+			</Synthetic>
+			<Synthetic Name="Style">
+				<DisplayString>
+					{int(is_inherit()),d}|
+					{int(is_bold()),d}|
+					{int(is_italic()),d}|
+					{int(is_overline()),d}|
+					{int(is_strikeout()),d}|
+					{int(is_faint()),d}|
+					{int(is_blink()),d}|
+					{int(is_inverse()),d}|
+					{int(is_invisible()),d}
+				</DisplayString>
+				<Expand>
+					<Item Name="inherit">is_inherit()</Item>
+					<Item Name="bold">is_bold()</Item>
+					<Item Name="italic">is_italic()</Item>
+					<Item Name="overline">is_overline()</Item>
+					<Item Name="strikeout">is_strikeout()</Item>
+					<Item Name="faint">is_faint()</Item>
+					<Item Name="blink">is_blink()</Item>
+					<Item Name="inverse">is_inverse()</Item>
+					<Item Name="invisible">is_invisible()</Item>
+					<Item Name="underline" Condition="is_underline0()">UNDERLINE_NONE</Item>
+					<Item Name="underline" Condition="is_underline1()">UNDERLINE_SINGLE</Item>
+					<Item Name="underline" Condition="is_underline2()">UNDERLINE_DOUBLE</Item>
+					<Item Name="underline" Condition="is_underline3()">UNDERLINE_CURLY</Item>
+					<Item Name="underline" Condition="is_underline4()">UNDERLINE_DOT</Item>
+					<Item Name="underline" Condition="is_underline5()">UNDERLINE_DASH</Item>
+				</Expand>
+			</Synthetic>
+			<Item Name="LVB">char((Flags &amp; 0x000000000000FF00) &gt;&gt; 8),nvoh</Item>
 		</Expand>
 	</Type>
 
 	<Type Name="FAR_CHAR_INFO">
-		<DisplayString>{Char}</DisplayString>
+		<DisplayString>{&amp;Char,[1]sub}</DisplayString>
 	</Type>
 
 	<Type Name="std::chrono::duration&lt;*, std::ratio&lt;*,*&gt;&gt;">
 		<Intrinsic Name="ticks_in_second"       Expression="$T1(1) * $T3 / $T2"/>
-		<Intrinsic Name="ticks_in_nanosecond"   Expression="ticks_in_second() / 1000000000"/>
-		<Intrinsic Name="ticks_in_microsecond"  Expression="ticks_in_second() / 1000000"/>
-		<Intrinsic Name="ticks_in_millisecond"  Expression="ticks_in_second() / 1000"/>
-		<Intrinsic Name="ticks_in_minute"       Expression="ticks_in_second() * 60"/>
-		<Intrinsic Name="ticks_in_hour"         Expression="ticks_in_minute() * 60"/>
-		<Intrinsic Name="ticks_in_day"          Expression="ticks_in_hour() * 24"/>
+		<Intrinsic Name="ticks_in_nanosecond"   Expression="ticks_in_second()? ticks_in_second() / 1000000000 : 0"/>
+		<Intrinsic Name="ticks_in_microsecond"  Expression="ticks_in_second()? ticks_in_second() / 1000000    : 0"/>
+		<Intrinsic Name="ticks_in_millisecond"  Expression="ticks_in_second()? ticks_in_second() / 1000       : 0"/>
+		<Intrinsic Name="ticks_in_minute"       Expression="ticks_in_second()? ticks_in_second() * 60         :           60 * $T1(1) * $T3 / $T2"/>
+		<Intrinsic Name="ticks_in_hour"         Expression="ticks_in_minute()? ticks_in_minute() * 60         :      60 * 60 * $T1(1) * $T3 / $T2"/>
+		<Intrinsic Name="ticks_in_day"          Expression="ticks_in_hour()?   ticks_in_hour()   * 24         : 24 * 60 * 60 * $T1(1) * $T3 / $T2"/>
 
 		<Intrinsic Name="count"        Expression="_MyRep"/>
 
-		<Intrinsic Name="days"         Expression="count()                                       / ticks_in_day()"/>
-		<Intrinsic Name="hours"        Expression="count() % ticks_in_day()                      / ticks_in_hour()"/>
-		<Intrinsic Name="minutes"      Expression="count() % ticks_in_hour()                     / ticks_in_minute()"/>
-		<Intrinsic Name="seconds"      Expression="count() % ticks_in_minute()                   / ticks_in_second()"/>
-		<Intrinsic Name="milliseconds" Expression="count() % ticks_in_second()      * 1000       / ticks_in_second()"/>
-		<Intrinsic Name="microseconds" Expression="count() % ticks_in_millisecond() * 1000000    / ticks_in_second()"/>
-		<Intrinsic Name="nanoseconds"  Expression="count() % ticks_in_microsecond() * 1000000000 / ticks_in_second()"/>
+		<Intrinsic Name="days"         Expression="                                                     count()                          / ticks_in_day()"/>
+		<Intrinsic Name="hours"        Expression="                             ticks_in_hour()?        count() % ticks_in_day()         / ticks_in_hour()        : count() % ticks_in_day()         * 24   / ticks_in_day()"/>
+		<Intrinsic Name="minutes"      Expression="!ticks_in_hour()?        0 : ticks_in_minute()?      count() % ticks_in_hour()        / ticks_in_minute()      : count() % ticks_in_hour()        * 60   / ticks_in_hour()"/>
+		<Intrinsic Name="seconds"      Expression="!ticks_in_minute()?      0 : ticks_in_second()?      count() % ticks_in_minute()      / ticks_in_second()      : count() % ticks_in_minute()      * 60   / ticks_in_minute()"/>
+		<Intrinsic Name="milliseconds" Expression="!ticks_in_second()?      0 : ticks_in_millisecond()? count() % ticks_in_second()      / ticks_in_millisecond() : count() % ticks_in_second()      * 1000 / ticks_in_second()"/>
+		<Intrinsic Name="microseconds" Expression="!ticks_in_millisecond()? 0 : ticks_in_microsecond()? count() % ticks_in_millisecond() / ticks_in_microsecond() : count() % ticks_in_millisecond() * 1000 / ticks_in_millisecond()"/>
+		<Intrinsic Name="nanoseconds"  Expression="!ticks_in_microsecond()? 0 : ticks_in_nanosecond()?  count() % ticks_in_microsecond() / ticks_in_nanosecond()  : count() % ticks_in_microsecond() * 1000 / ticks_in_microsecond()"/>
 
 		<DisplayString>[{days()}d {hours()}h {minutes()}m {seconds()}s]</DisplayString>
 
 		<Expand>
-			<Item Name="days">days()</Item>
-			<Item Name="hours">hours()</Item>
-			<Item Name="minutes">minutes()</Item>
-			<Item Name="seconds">seconds()</Item>
-			<Item Name="milliseconds">milliseconds()</Item>
-			<Item Name="microseconds">microseconds()</Item>
-			<Item Name="nanoseconds">nanoseconds()</Item>
+			<Item Name="days"         ExcludeView="timepoint"           >days()</Item>
+			<Item Name="hours"                                          >hours()</Item>
+			<Item Name="minutes"      Condition="ticks_in_hour()"       >minutes()</Item>
+			<Item Name="seconds"      Condition="ticks_in_minute()"     >seconds()</Item>
+			<Item Name="milliseconds" Condition="ticks_in_second()"     >milliseconds()</Item>
+			<Item Name="microseconds" Condition="ticks_in_millisecond()">microseconds()</Item>
+			<Item Name="nanoseconds"  Condition="ticks_in_microsecond()">nanoseconds()</Item>
+		</Expand>
+	</Type>
+
+
+	<Type Name="std::chrono::time_point&lt;os::chrono::nt_clock, std::chrono::duration&lt;*, std::ratio&lt;*,*&gt;&gt;&gt;">
+		<Intrinsic Name="count"                 Expression="_MyDur.count()"/>
+
+		<Intrinsic Name="days"                  Expression="count() / _MyDur.ticks_in_day()"/>
+		<Intrinsic Name="y400"                  Expression="days() / 146097"/>
+		<Intrinsic Name="y100"                  Expression="((days() - y400() * 146097) * 100 + 75) / 3652425"/>
+		<Intrinsic Name="y4"                    Expression="(days() - y400() * 146097 - y100() * 36524) / 1461"/>
+		<Intrinsic Name="years"                 Expression="1601 + y400() * 400 + y100() * 100 + y4() * 4 + ((days() - y400() * 146097 - y100() * 36524 - y4() * 1461) * 100 + 75) / 36525"/>
+		<Intrinsic Name="years_to_days"         Expression="years * 365 + years / 4 - years / 100 + years / 400">
+			<Parameter Type="int" Name="years"/>
+		</Intrinsic>
+		<Intrinsic Name="is_leap"               Expression="!(years % 400) || ((years % 100) &amp;&amp; !(years % 4))">
+			<Parameter Type="int" Name="years"/>
+		</Intrinsic>
+		<Intrinsic Name="days_y"                Expression="1 + days() - years_to_days(years() - 1601)"/>
+
+		<Intrinsic Name="m01" Expression="31"/>
+		<Intrinsic Name="m02" Expression="28 + m01() + is_leap(years())"/>
+		<Intrinsic Name="m03" Expression="31 + m02()"/>
+		<Intrinsic Name="m04" Expression="30 + m03()"/>
+		<Intrinsic Name="m05" Expression="31 + m04()"/>
+		<Intrinsic Name="m06" Expression="30 + m05()"/>
+		<Intrinsic Name="m07" Expression="31 + m06()"/>
+		<Intrinsic Name="m08" Expression="31 + m07()"/>
+		<Intrinsic Name="m09" Expression="30 + m08()"/>
+		<Intrinsic Name="m10" Expression="31 + m09()"/>
+		<Intrinsic Name="m11" Expression="30 + m10()"/>
+
+		<Intrinsic Name="month" Expression="
+			days_y() &lt;= m01()?  1 :
+			days_y() &lt;= m02()?  2 :
+			days_y() &lt;= m03()?  3 :
+			days_y() &lt;= m04()?  4 :
+			days_y() &lt;= m05()?  5 :
+			days_y() &lt;= m06()?  6 :
+			days_y() &lt;= m07()?  7 :
+			days_y() &lt;= m08()?  8 :
+			days_y() &lt;= m09()?  9 :
+			days_y() &lt;= m10()? 10 :
+			days_y() &lt;= m11()? 11 :
+			                      12
+		"/>
+
+		<Intrinsic Name="day" Expression="
+			days_y() &lt;= m01()? days_y() :
+			days_y() &lt;= m02()? days_y() - m01() :
+			days_y() &lt;= m03()? days_y() - m02() :
+			days_y() &lt;= m04()? days_y() - m03() :
+			days_y() &lt;= m05()? days_y() - m04() :
+			days_y() &lt;= m06()? days_y() - m05() :
+			days_y() &lt;= m07()? days_y() - m06() :
+			days_y() &lt;= m08()? days_y() - m07() :
+			days_y() &lt;= m09()? days_y() - m08() :
+			days_y() &lt;= m10()? days_y() - m09() :
+			days_y() &lt;= m11()? days_y() - m10() :
+			                      days_y() - m11()
+		"/>
+
+		<DisplayString>[{years()}-{month()}-{day()} {_MyDur.hours()}:{_MyDur.minutes()}:{_MyDur.seconds()}]</DisplayString>
+
+		<Expand>
+			<Item Name="year">years()</Item>
+			<Item Name="month">month()</Item>
+			<Item Name="day">day()</Item>
+			<ExpandedItem>_MyDur,view(timepoint)</ExpandedItem>
 		</Expand>
 	</Type>
 
 	<Type Name="_FILETIME">
-		<Intrinsic Name="as_nt_duration" Expression="*(os::chrono::duration*)(this)"/>
-		<DisplayString>{as_nt_duration()}</DisplayString>
+		<Intrinsic Name="as_nt_timepoint" Expression="*(os::chrono::time_point*)(this)"/>
+		<DisplayString>{as_nt_timepoint()}</DisplayString>
 		<Expand>
 			<!-- Same 64-bit representation, save typing -->
-			<ExpandedItem>as_nt_duration()</ExpandedItem>
+			<ExpandedItem>as_nt_timepoint()</ExpandedItem>
 		</Expand>
 	</Type>
 
@@ -250,6 +395,7 @@
 			</Synthetic>
 		</Expand>
 	</Type>
+
 	<Type Name="_MOUSE_EVENT_RECORD">
 		<Expand>
 			<Item Name="Position">dwMousePosition</Item>
@@ -298,6 +444,56 @@
 		</Expand>
 	</Type>
 
+	<Type Name="memcheck::memory_block">
+		<DisplayString Condition="AllocationType == allocation_type::scalar">{{ scalar, {DataSize} bytes }}</DisplayString>
+		<DisplayString Condition="AllocationType == allocation_type::vector">{{ vector, {DataSize} bytes }}</DisplayString>
+		<Expand>
+			<Item Name="Type">AllocationType</Item>
+			<Synthetic Name="Data (char)">
+				<DisplayString>{{ {DataSize} bytes }}</DisplayString>
+				<StringView>(unsigned char*)this + HeaderSize,[DataSize]na</StringView>
+				<Expand>
+					<Item Name="[size]" ExcludeView="simple">DataSize</Item>
+					<ArrayItems>
+						<Size>DataSize</Size>
+						<ValuePointer>(unsigned char const*)this + HeaderSize</ValuePointer>
+					</ArrayItems>
+				</Expand>
+			</Synthetic>
+			<Synthetic Name="Data (wchar_t)">
+				<DisplayString>{{ {DataSize} bytes }}</DisplayString>
+				<StringView>(wchar_t const*)((unsigned char const*)this + HeaderSize),[DataSize / sizeof(wchar_t)]na</StringView>
+				<Expand>
+					<Item Name="[size]" ExcludeView="simple">DataSize / sizeof(wchar_t)</Item>
+					<ArrayItems>
+						<Size>DataSize / sizeof(wchar_t)</Size>
+						<ValuePointer>(wchar_t const*)((unsigned char const*)this + HeaderSize)</ValuePointer>
+					</ArrayItems>
+				</Expand>
+			</Synthetic>
+			<Synthetic Name="Stack">
+				<DisplayString>{{ {sizeof(Stack) / sizeof(Stack[0])} frames }}</DisplayString>
+				<Expand>
+					<ArrayItems>
+						<Size>sizeof(Stack) / sizeof(Stack[0])</Size>
+						<ValuePointer>Stack, na</ValuePointer>
+					</ArrayItems>
+				</Expand>
+			</Synthetic>
+		</Expand>
+	</Type>
 
+	<Type Name="memcheck::blocks_list">
+		<DisplayString>{{Count = {m_Size}}}</DisplayString>
+		<Expand>
+			<Item Name="Count">m_Size</Item>
+			<LinkedListItems>
+				<Size>m_Size</Size>
+				<HeadPointer>m_First</HeadPointer>
+				<NextPointer>next</NextPointer>
+				<ValueNode>this,na</ValueNode>
+			</LinkedListItems>
+		</Expand>
+	</Type>
 
 </AutoVisualizer>

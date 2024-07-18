@@ -47,7 +47,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "filepanels.hpp"
 #include "macroopcode.hpp"
 #include "savescr.hpp"
-#include "lockscrn.hpp"
 #include "interf.hpp"
 #include "keyboard.hpp"
 #include "colormix.hpp"
@@ -91,12 +90,12 @@ HMenu::~HMenu()
 void HMenu::DisplayObject()
 {
 	SetScreen(m_Where, L' ', colors::PaletteColorToFarColor(COL_HMENUTEXT));
-	SetCursorType(false, 10);
+	HideCursor();
 	ShowMenu();
 }
 
 
-void HMenu::ShowMenu()
+void HMenu::ShowMenu() const
 {
 	GotoXY(m_Where.left + 2, m_Where.top);
 
@@ -278,7 +277,7 @@ bool HMenu::ProcessPositioningKey(unsigned LocalKey)
 
 bool HMenu::ProcessKey(const Manager::Key& Key)
 {
-	auto LocalKey = Key();
+	const auto LocalKey = Key();
 
 	UpdateSelectPos();
 
@@ -293,7 +292,6 @@ bool HMenu::ProcessKey(const Manager::Key& Key)
 		break;
 
 	case KEY_NONE:
-	case KEY_IDLE:
 		return false;
 
 	case KEY_F1:
@@ -346,7 +344,12 @@ bool HMenu::TestMouse(const MOUSE_EVENT_RECORD *MouseEvent) const
 	const auto MsX = MouseEvent->dwMousePosition.X;
 	const auto MsY = MouseEvent->dwMousePosition.Y;
 
-	return MsY != m_Where.top || ((!m_SelectPos || MsX >= m_Item[m_SelectPos].XPos) && (m_SelectPos == m_Item.size() - 1 || MsX < m_Item[m_SelectPos + 1].XPos));
+	return
+		MsY == m_Where.top &&
+		(
+			(m_SelectPos && MsX < m_Item[m_SelectPos].XPos) ||
+			(m_SelectPos != m_Item.size() - 1 && MsX >= m_Item[m_SelectPos + 1].XPos)
+		);
 }
 
 bool HMenu::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
@@ -355,7 +358,7 @@ bool HMenu::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 
 	if (m_Where.contains(MouseEvent->dwMousePosition))
 	{
-		auto SubmenuIterator = std::find_if(REVERSE_RANGE(m_Item, i) { return MouseEvent->dwMousePosition.X >= i.XPos; });
+		auto SubmenuIterator = std::ranges::find_if(m_Item | std::views::reverse, [&](HMenuData const& i){ return MouseEvent->dwMousePosition.X >= i.XPos; });
 
 		if (SubmenuIterator == m_Item.rend())
 			--SubmenuIterator;
@@ -371,7 +374,7 @@ bool HMenu::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		ShowMenu();
 		ProcessCurrentSubMenu();
 	}
-	else if (!(MouseEvent->dwButtonState & 3) && !MouseEvent->dwEventFlags)
+	else if (IsMouseButtonEvent(MouseEvent->dwEventFlags))
 		Close(-1);
 
 	return true;
@@ -413,25 +416,25 @@ bool HMenu::ProcessCurrentSubMenu()
 				if (Msg != DN_INPUT)
 					return 0;
 
-				auto& rec = *static_cast<INPUT_RECORD*>(param);
+				const auto& rec = *static_cast<INPUT_RECORD const*>(param);
 				const auto Key = InputRecordToKey(&rec);
 
-				if (Key == KEY_CONSOLE_BUFFER_RESIZE)
+				if (rec.EventType == MOUSE_EVENT)
 				{
-					SCOPED_ACTION(LockScreen);
-					ResizeConsole();
-					Show();
-					return 1;
-				}
-				else if (rec.EventType == MOUSE_EVENT)
-				{
-					if (!TestMouse(&rec.Event.MouseEvent))
+					if (TestMouse(&rec.Event.MouseEvent))
 					{
 						MenuMouseRecord = rec.Event.MouseEvent;
 						SendMouse = true;
 						SubMenu->Close(-1);
 						return 1;
 					}
+
+					if (IsMouseButtonEvent(rec.Event.MouseEvent.dwEventFlags) && rec.Event.MouseEvent.dwMousePosition.Y != m_Where.top && !SubMenu->GetPosition().contains(rec.Event.MouseEvent.dwMousePosition))
+					{
+						MenuMouseRecord = rec.Event.MouseEvent;
+						SendMouse = true;
+					}
+
 					if (rec.Event.MouseEvent.dwMousePosition.Y == m_Where.top)
 						return 1;
 				}
@@ -485,11 +488,9 @@ size_t HMenu::CheckHighlights(WORD CheckSymbol, int StartPos) const
 	if (StartPos < 0)
 		StartPos=0;
 
-	for (size_t I = StartPos; I < m_Item.size(); I++)
+	for (const auto I: std::views::iota(static_cast<size_t>(StartPos), m_Item.size()))
 	{
-		const auto Ch = GetHighlights(m_Item[I]);
-
-		if (Ch)
+		if (const auto Ch = GetHighlights(m_Item[I]))
 		{
 			if (upper(CheckSymbol) == upper(Ch))
 				return I;

@@ -37,6 +37,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Internal:
 #include "plugin.hpp"
+#include "windowsfwd.hpp"
 
 // Platform:
 
@@ -66,7 +67,6 @@ enum MACRODISABLEONLOAD
 	MDOL_ALL            = 31_bit, // дисаблим все макросы при загрузке
 };
 
-class TVar;
 struct point;
 
 struct MacroPanelSelect
@@ -95,9 +95,11 @@ public:
 	static void RunStartMacro();
 	static bool SaveMacros(bool always);
 	static void SetMacroConst(int ConstIndex, long long Value);
+	static long long GetMacroConst(int ConstIndex);
 	static bool PostNewMacro(const wchar_t* Sequence, FARKEYMACROFLAGS InputFlags, DWORD AKey = 0);
+	static bool IsMacroDialog(window_ptr const& Window);
 
-	intptr_t CallFar(intptr_t CheckCode, FarMacroCall* Data);
+	void CallFar(intptr_t CheckCode, FarMacroCall* Data);
 	bool CheckWaitKeyFunc() const;
 	int  GetState() const;
 	int  GetKey();
@@ -125,11 +127,18 @@ private:
 	FARMACROSTATE m_Recording;
 	string m_RecCode;
 	string m_RecDescription;
-	int m_InternalInput;
-	int m_WaitKey;
+	int m_InternalInput{};
+	int m_WaitKey{};
 	string_view m_StringToPrint;
 };
 
 inline bool IsMenuArea(int Area){return Area==MACROAREA_MAINMENU || Area==MACROAREA_MENU || Area==MACROAREA_DISKS || Area==MACROAREA_USERMENU || Area==MACROAREA_SHELLAUTOCOMPLETION || Area==MACROAREA_DIALOGAUTOCOMPLETION;}
+
+inline bool IsPanelsArea(int Area){return Area==MACROAREA_SHELL || Area==MACROAREA_INFOPANEL || Area==MACROAREA_QVIEWPANEL || Area==MACROAREA_TREEPANEL;}
+
+void ShowUserMenu(size_t Count, const FarMacroValue *Values);
+bool IsTopMacroOutputDisabled();
+DWORD GetHistoryDisableMask();
+DWORD SetHistoryDisableMask(DWORD Mask);
 
 #endif // MACRO_HPP_BA3167E8_1846_4B24_88A4_CF59CA90169F

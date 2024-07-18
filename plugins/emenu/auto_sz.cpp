@@ -1,25 +1,12 @@
 ﻿#include "auto_sz.h"
 #include <cassert>
 
-auto_sz::auto_sz()
-  : m_sz(NULL)
-  , m_bDelete(false)
-  , m_nSize(0)
-{
-}
-
 auto_sz::auto_sz(LPCWSTR sz)
-  : m_sz(NULL)
-  , m_bDelete(false)
-  , m_nSize(0)
 {
   operator =(sz);
 }
 
 auto_sz::auto_sz(LPCWSTR szBuf, size_t nBufLen)
-  : m_sz(NULL)
-  , m_bDelete(false)
-  , m_nSize(0)
 {
   nBufLen++;
   Realloc(nBufLen);
@@ -27,17 +14,11 @@ auto_sz::auto_sz(LPCWSTR szBuf, size_t nBufLen)
 }
 
 auto_sz::auto_sz(auto_sz& str)
-  : m_sz(NULL)
-  , m_bDelete(false)
-  , m_nSize(0)
 {
   *this=str;
 }
 
 auto_sz::auto_sz(const STRRET& sr, LPCITEMIDLIST piid)
-  : m_sz(NULL)
-  , m_bDelete(false)
-  , m_nSize(0)
 {
   switch (sr.uType)
   {
@@ -52,7 +33,7 @@ auto_sz::auto_sz(const STRRET& sr, LPCITEMIDLIST piid)
     operator=(sr.pOleStr);
     break;
   case STRRET_OFFSET:
-    operator=((LPCWSTR)(&piid->mkid)+sr.uOffset);
+    operator=(reinterpret_cast<LPCWSTR>(reinterpret_cast<char const*>(&piid->mkid) + sr.uOffset));
     break;
   default:
     assert(0);
@@ -103,11 +84,6 @@ wchar_t auto_sz::operator[](int nPos)
   return m_sz[nPos];
 }
 
-auto_sz::operator void*()
-{
-  return m_sz;
-}
-
 void auto_sz::Alloc(size_t nSize)
 {
   Clear();
@@ -132,7 +108,7 @@ void auto_sz::Clear()
     delete[] m_sz;
   }
   m_bDelete=false;
-  m_sz=NULL;
+  m_sz={};
   m_nSize=0;
 }
 
@@ -175,19 +151,24 @@ void auto_sz::Trunc(size_t nNewLen)
   if (nNewLen<m_nSize) m_sz[nNewLen]=L'\0';
 }
 
-bool auto_sz::operator ==(LPCWSTR sz)
+bool operator==(const auto_sz& str, LPCWSTR sz)
 {
-  return lstrcmp(m_sz, sz)==0;
+	return lstrcmp(str, sz) == 0;
+}
+
+bool operator==(LPCWSTR sz, const auto_sz& str)
+{
+	return str == sz;
+}
+
+bool operator==(const auto_sz& str1, const auto_sz& str2)
+{
+	return str1 == str2.operator LPCWSTR();
 }
 
 int auto_sz::CompareNoCase(LPCWSTR sz)
 {
   return lstrcmpi(m_sz, sz);
-}
-
-bool auto_sz::operator !=(LPCWSTR sz)
-{
-  return lstrcmp(m_sz, sz)!=0;
 }
 
 bool auto_sz::CompareExcluding(LPCWSTR sz, wchar_t chExcl)

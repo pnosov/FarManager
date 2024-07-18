@@ -13,13 +13,13 @@ extern std::wstring get_error_dlg_title();
         return_cancel; \
       } \
       else { \
-        if (!silent) \
+        if (!(silent)) \
           Far::error_dlg(get_error_dlg_title(), e); \
         return_error; \
       } \
     } \
     catch (const std::exception& e) { \
-      if (!silent) \
+      if (!(silent)) \
         Far::error_dlg(get_error_dlg_title(), e); \
       return_error; \
     } \
@@ -29,6 +29,8 @@ extern std::wstring get_error_dlg_title();
   }
 
 namespace Far {
+
+extern FarStandardFunctions g_fsf;
 
 void init(const PluginStartupInfo* psi);
 std::wstring get_plugin_module_path();
@@ -43,7 +45,7 @@ class MenuItems: public std::vector<std::wstring> {
 public:
   unsigned add(const std::wstring& item);
 };
-intptr_t menu(const GUID& id, const std::wstring& title, const MenuItems& items, const wchar_t* help = NULL);
+intptr_t menu(const GUID& id, const std::wstring& title, const MenuItems& items, const wchar_t* help = {});
 
 std::wstring get_progress_bar_str(unsigned width, uint64_t completed, uint64_t total);
 void set_progress_state(TBPFLAG state);
@@ -61,7 +63,7 @@ void flush_screen();
 intptr_t viewer(const std::wstring& file_name, const std::wstring& title, VIEWER_FLAGS flags = 0);
 intptr_t editor(const std::wstring& file_name, const std::wstring& title, EDITOR_FLAGS flags = 0);
 
-void update_panel(HANDLE h_panel, bool keep_selection);
+void update_panel(HANDLE h_panel, const bool keep_selection, const bool reset_position=false);
 void set_view_mode(HANDLE h_panel, unsigned view_mode);
 void set_sort_mode(HANDLE h_panel, unsigned sort_mode);
 void set_reverse_sort(HANDLE h_panel, bool reverse_sort);
@@ -114,14 +116,14 @@ struct DialogItem {
 class Dialog {
 private:
   size_t client_xs;
-  size_t client_ys;
+  size_t client_ys{};
   size_t x;
   size_t y;
   const wchar_t* help;
-  FARDIALOGFLAGS flags;
+  FARDIALOGFLAGS m_flags;
   std::vector<std::wstring> values;
   std::vector<DialogItem> items;
-  HANDLE h_dlg;
+  HANDLE h_dlg{};
   const GUID* guid;
   unsigned new_value(const std::wstring& text);
   const wchar_t* get_value(unsigned idx) const;
@@ -156,6 +158,7 @@ protected:
   intptr_t send_message(intptr_t msg, intptr_t param1, void* param2 = nullptr);
 public:
   Dialog(const std::wstring& title,const GUID* guid,unsigned width=60,const wchar_t* help=nullptr,FARDIALOGFLAGS flags=0);
+  virtual ~Dialog() = default;
   // create different controls
   void new_line();
   void reset_line();
@@ -239,6 +242,7 @@ bool match_masks(const std::wstring& file_name, const std::wstring& masks);
 bool get_color(PaletteColors color_id, FarColor& color);
 bool panel_go_to_dir(HANDLE h_panel, const std::wstring& dir);
 bool panel_go_to_file(HANDLE h_panel, const std::wstring& file_path);
+void panel_go_to_part(HANDLE h_panek, const int part_idx);
 DWORD get_lang_id();
 void close_panel(HANDLE h_panel, const std::wstring& dir);
 void open_help(const std::wstring& topic);

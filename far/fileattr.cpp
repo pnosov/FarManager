@@ -41,10 +41,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "flink.hpp"
 #include "lang.hpp"
 #include "fileowner.hpp"
-#include "exception.hpp"
 #include "stddlg.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.fs.hpp"
 
 // Common:
@@ -54,29 +55,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // External:
 
 //----------------------------------------------------------------------------
-
-static void retrievable_ui_operation(function_ref<bool()> const Action, string_view const Name, lng const ErrorDescription, bool& SkipErrors)
-{
-	while (!Action())
-	{
-		const auto ErrorState = error_state::fetch();
-
-		switch (SkipErrors? operation::skip_all : OperationFailed(ErrorState, Name, lng::MError, msg(ErrorDescription)))
-		{
-		case operation::retry:
-			break;
-
-		case operation::skip_all:
-			SkipErrors = true;
-			[[fallthrough]];
-		case operation::skip:
-			return;
-
-		case operation::cancel:
-			cancel_operation();
-		}
-	}
-}
 
 static auto without_ro(string_view const Name, os::fs::attributes const Attributes, function_ref<bool()> const Action)
 {
@@ -92,8 +70,10 @@ static auto without_ro(string_view const Name, os::fs::attributes const Attribut
 		{
 			SCOPED_ACTION(os::last_error_guard);
 
-			if (Attributes & Mask)
-				(void)os::fs::set_file_attributes(Name, Attributes); //BUGBUG
+			if (Attributes & Mask && !os::fs::set_file_attributes(Name, Attributes)) //BUGBUG
+			{
+				LOGWARNING(L"set_file_attributes({}): {}"sv, Name, os::last_error());
+			}
 		};
 
 		return Action();
@@ -105,12 +85,12 @@ void ESetFileAttributes(string_view const Name, os::fs::attributes Attributes, b
 	if ((Attributes & FILE_ATTRIBUTE_DIRECTORY) && (Attributes & FILE_ATTRIBUTE_TEMPORARY))
 		Attributes &= ~FILE_ATTRIBUTE_TEMPORARY;
 
-	retrievable_ui_operation([&]{ return os::fs::set_file_attributes(Name, Attributes); }, Name, lng::MSetAttrCannotFor, SkipErrors);
+	retryable_ui_operation([&]{ return os::fs::set_file_attributes(Name, Attributes); }, Name, lng::MSetAttrCannotFor, SkipErrors);
 }
 
 static bool set_file_compression(string_view const Name, bool const State)
 {
-	const os::fs::file File(Name, FILE_READ_DATA | FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN);
+	const os::fs::file File(Name, FILE_READ_DATA | FILE_WRITE_DATA, os::fs::file_share_all, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN);
 	if (!File)
 		return false;
 
@@ -131,7 +111,7 @@ void ESetFileCompression(string_view const Name, bool const State, os::fs::attri
 		return set_file_compression(Name, State);
 	};
 
-	retrievable_ui_operation(
+	retryable_ui_operation(
 		without_ro(Name, CurrentAttributes, Implementation),
 		Name, lng::MSetAttrCompressedCannotFor, SkipErrors);
 }
@@ -146,7 +126,7 @@ void ESetFileEncryption(string_view const Name, bool const State, os::fs::attrib
 		return os::fs::set_file_encryption(Name, State);
 	};
 
-	retrievable_ui_operation(
+	retryable_ui_operation(
 		without_ro(Name, CurrentAttributes, Implementation),
 		Name, lng::MSetAttrEncryptedCannotFor, SkipErrors);
 }
@@ -158,7 +138,6 @@ void ESetFileTime(
 	os::chrono::time_point const* const CreationTime,
 	os::chrono::time_point const* const LastAccessTime,
 	os::chrono::time_point const* const ChangeTime,
-	os::fs::attributes const CurrentAttributes,
 	bool& SkipErrors)
 {
 	if (!LastWriteTime && !CreationTime && !LastAccessTime && !ChangeTime)
@@ -166,21 +145,21 @@ void ESetFileTime(
 
 	const auto Implementation = [&]
 	{
-		const os::fs::file File(Name, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT);
+		const os::fs::file File(Name, FILE_WRITE_ATTRIBUTES, os::fs::file_share_all, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT);
 		if (!File)
 			return false;
 
 		return File.SetTime(CreationTime, LastAccessTime, LastWriteTime, ChangeTime);
 	};
 
-	retrievable_ui_operation(
-		without_ro(Name, CurrentAttributes, Implementation),
+	retryable_ui_operation(
+		Implementation,
 		Name, lng::MSetAttrTimeCannotFor, SkipErrors);
 }
 
 static bool set_file_sparse(string_view const Name, bool const State)
 {
-	const os::fs::file File(Name, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING);
+	const os::fs::file File(Name, FILE_WRITE_DATA, os::fs::file_share_all, nullptr, OPEN_EXISTING);
 	if (!File)
 		return false;
 
@@ -198,14 +177,14 @@ void ESetFileSparse(string_view const Name, bool const State, os::fs::attributes
 		return set_file_sparse(Name, State);
 	};
 
-	retrievable_ui_operation(
+	retryable_ui_operation(
 		without_ro(Name, CurrentAttributes, Implementation),
 		Name, lng::MSetAttrSparseCannotFor, SkipErrors);
 }
 
 void ESetFileOwner(string_view const Name, const string& Owner, bool& SkipErrors)
 {
-	retrievable_ui_operation([&]{ return SetFileOwner(Name, Owner); }, Name, lng::MSetAttrOwnerCannotFor, SkipErrors);
+	retryable_ui_operation([&]{ return SetFileOwner(Name, Owner); }, Name, lng::MSetAttrOwnerCannotFor, SkipErrors);
 }
 
 void EDeleteReparsePoint(string_view const Name, os::fs::attributes const CurrentAttributes, bool& SkipErrors)
@@ -213,7 +192,7 @@ void EDeleteReparsePoint(string_view const Name, os::fs::attributes const Curren
 	if (!(CurrentAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
 		return;
 
-	retrievable_ui_operation([&]{ return DeleteReparsePoint(Name); }, Name, lng::MSetAttrReparsePointCannotFor, SkipErrors);
+	retryable_ui_operation([&]{ return DeleteReparsePoint(Name); }, Name, lng::MSetAttrReparsePointCannotFor, SkipErrors);
 }
 
 void enum_attributes(function_ref<bool(os::fs::attributes, wchar_t)> const Pred)
@@ -242,6 +221,7 @@ void enum_attributes(function_ref<bool(os::fs::attributes, wchar_t)> const Pred)
 		{ L'‼', FILE_ATTRIBUTE_RECALL_ON_OPEN },        // Unknown symbol
 		{ L'!', FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS }, // Unknown symbol
 		{ L'B', FILE_ATTRIBUTE_STRICTLY_SEQUENTIAL },   // "SMR Blob" in attrib.exe
+		{ L'*', FILE_ATTRIBUTE_DEVICE },                // Unknown symbol
 	};
 
 	for (const auto& [Letter, Attr]: AttrMap)

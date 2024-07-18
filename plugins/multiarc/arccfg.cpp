@@ -81,7 +81,7 @@ int ConfigGeneral()
 }
 
 
-#define DM_INITCONFIG DM_USER+1
+#define DM_INITCONFIG (DM_USER+1)
 typedef struct
 {
   char *ArcFormat;
@@ -89,7 +89,7 @@ typedef struct
   int PluginNumber, PluginType;
 } FORMATINFO;
 
-LONG_PTR WINAPI CfgCmdProc(HANDLE hDlg,int Msg,int Param1,LONG_PTR Param2)
+static LONG_PTR WINAPI CfgCmdProc(HANDLE hDlg,int Msg,int Param1,LONG_PTR Param2)
 {
   switch(Msg)
   {

@@ -39,16 +39,18 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scantree.hpp"
 
 // Internal:
-#include "syslog.hpp"
 #include "config.hpp"
 #include "pathmix.hpp"
 #include "cvtname.hpp"
 #include "global.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.fs.hpp"
 
 // Common:
+#include "common/algorithm.hpp"
 #include "common/string_utils.hpp"
 
 // External:
@@ -86,7 +88,7 @@ public:
 	std::unique_ptr<os::fs::enum_files> Find;
 	os::fs::enum_files::iterator Iterator;
 	string RealPath;
-	std::unordered_set<string> ActiveDirectories;
+	unordered_string_set ActiveDirectories;
 };
 
 ScanTree::ScanTree(bool RetUpDir, bool Recurse, int ScanJunction, bool FilesFirst)
@@ -108,9 +110,9 @@ void ScanTree::SetFindPath(string_view const Path, string_view const Mask)
 	strFindPathOriginal = Path;
 	AddEndSlash(strFindPathOriginal);
 
-	const auto FullPath = NTPath(ConvertNameToFull(Path));
+	const auto FullPath = nt_path(ConvertNameToFull(Path));
 
-	strFindPath = NTPath(ConvertNameToReal(FullPath));
+	strFindPath = nt_path(ConvertNameToReal(FullPath));
 
 	scantree_item Item;
 	Item.RealPath = strFindPath;
@@ -200,12 +202,15 @@ bool ScanTree::GetNextName(os::fs::find_data& fdata,string &strFullName)
 			{
 				strFullName = strFindPathOriginal;
 				// BUGBUG check result
-				(void)os::fs::get_find_data(strFindPath, fdata);
+				if (!os::fs::get_find_data(strFindPath, fdata))
+				{
+					LOGWARNING(L"get_find_data({}): {}"sv, strFindPath, os::last_error());
+				}
+
 			}
 
 			CutToSlash(strFindPath);
 			strFindPath += strFindMask;
-			_SVS(SysLog(L"1. FullName='%s'",strFullName.c_str()));
 
 			if (Flags.Check(TREE_RETUPDIR))
 			{
@@ -224,13 +229,13 @@ bool ScanTree::GetNextName(os::fs::find_data& fdata,string &strFullName)
 			auto RealPath = path::join(ScanItems.back().RealPath, fdata.FileName);
 
 			if (is_link)
-				RealPath = NTPath(ConvertNameToReal(RealPath));
+				RealPath = nt_path(ConvertNameToReal(RealPath));
 
 			//recursive symlinks guard
-			if (!ScanItems.back().ActiveDirectories.count(RealPath))
+			if (!ScanItems.back().ActiveDirectories.contains(RealPath))
 			{
 				CutToSlash(strFindPath);
-				append(strFindPath, fdata.FileName, L'\\', strFindMask);
+				path::append(strFindPath, fdata.FileName, strFindMask);
 
 				CutToSlash(strFindPathOriginal);
 				strFindPathOriginal += fdata.FileName;
@@ -303,7 +308,7 @@ bool ScanTree::IsDirSearchDone() const
 
 bool ScanTree::InsideReparsePoint() const
 {
-	return std::any_of(ALL_CONST_RANGE(ScanItems), [](scantree_item const& i)
+	return std::ranges::any_of(ScanItems, [](scantree_item const& i)
 	{
 		return i.Flags.Check(TREE_ITEM_INSIDE_REPARSE_POINT);
 	});

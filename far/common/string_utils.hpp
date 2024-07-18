@@ -32,17 +32,29 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "compiler.hpp"
+#include "cpp.hpp"
 #include "preprocessor.hpp"
 #include "type_traits.hpp"
 #include "utility.hpp"
 
+#include <algorithm>
+#include <array>
+#include <functional>
+#include <numeric>
+#include <ranges>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <variant>
+
+#include <cwctype>
+
 //----------------------------------------------------------------------------
 
-template<typename string_type>
-auto copy_string(string_type const& Str, typename string_type::value_type* Destination)
+auto copy_string(std::ranges::contiguous_range auto const& Str, std::contiguous_iterator auto const Destination)
 {
-	return Destination + Str.copy(Destination, Str.npos);
+	return Destination + Str.copy(std::to_address(Destination), Str.npos);
 }
 
 /*
@@ -86,7 +98,8 @@ public:
 
 private:
 	using view_type = std::basic_string_view<T>;
-	using buffer_type = std::array<T, MAX_PATH>;
+	static constexpr auto StaticSize = 260; // MAX_PATH
+	using buffer_type = std::array<T, StaticSize>;
 	using string_type = std::basic_string<T>;
 
 	std::variant<view_type, buffer_type, string_type> m_Str;
@@ -98,18 +111,20 @@ using null_terminated = null_terminated_t<wchar_t>;
 class string_copyref
 {
 public:
-	string_copyref(std::wstring_view Str) noexcept:
+	NONMOVABLE(string_copyref);
+
+	explicit(false) string_copyref(std::wstring_view const Str) noexcept:
 		m_Str(Str)
 	{
 	}
 
-	string_copyref(std::wstring&& Str) noexcept:
+	explicit(false) string_copyref(std::wstring&& Str) noexcept:
 		m_StrBuffer(std::move(Str)),
 		m_Str(m_StrBuffer)
 	{
 	}
 
-	operator std::wstring_view() const noexcept
+	explicit(false) operator std::wstring_view() const noexcept
 	{
 		return m_Str;
 	}
@@ -138,12 +153,12 @@ namespace string_utils::detail
 
 	inline void append_impl(std::wstring& Str, const std::initializer_list<append_arg>& Args)
 	{
-		const auto TotalSize = std::accumulate(ALL_RANGE(Args), size_t{}, [](size_t const Value, const append_arg& Element)
+		const auto TotalSize = std::ranges::fold_left(Args, 0uz, [](size_t const Value, const append_arg& Element)
 		{
 			return Value + Element.size();
 		});
 
-		reserve_exp_noshrink(Str, TotalSize);
+		reserve_exp(Str, TotalSize);
 		for (const auto& i: Args)
 		{
 			Str += i;
@@ -151,15 +166,15 @@ namespace string_utils::detail
 	}
 }
 
-template<typename... args>
+// Don't "auto" it yet, ICE in VS2019
+template <typename... args>
 void append(std::wstring& Str, args const&... Args)
 {
 	string_utils::detail::append_impl(Str, { string_utils::detail::append_arg(Args)... });
 }
 
-template<typename... args>
 [[nodiscard]]
-auto concat(args const&... Args)
+auto concat(auto const&... Args)
 {
 	static_assert(sizeof...(Args) > 1);
 
@@ -169,18 +184,32 @@ auto concat(args const&... Args)
 }
 
 // uniform "contains"
-template<typename find_type, typename... traits>
+template<typename... traits>
 [[nodiscard]]
-bool contains(const std::basic_string<traits...>& Str, const find_type& What) noexcept
+bool contains(const std::basic_string<traits...>& Str, const auto& What) noexcept
 {
-	return Str.find(What) != Str.npos;
+	if constexpr (requires { Str.contains(What); })
+	{
+		return Str.contains(What);
+	}
+	else
+	{
+		return Str.find(What) != Str.npos;
+	}
 }
 
-template<typename find_type, typename... traits>
+template<typename... traits>
 [[nodiscard]]
-bool contains(const std::basic_string_view<traits...> Str, const find_type& What) noexcept
+constexpr bool contains(const std::basic_string_view<traits...> Str, const auto& What) noexcept
 {
-	return Str.find(What) != Str.npos;
+	if constexpr (requires { Str.contains(What); })
+	{
+		return Str.contains(What);
+	}
+	else
+	{
+		return Str.find(What) != Str.npos;
+	}
 }
 
 namespace detail
@@ -189,74 +218,108 @@ namespace detail
 	using char_type = std::remove_const_t<std::remove_pointer_t<raw_string_type>>;
 
 	template<typename raw_string_type>
-	inline constexpr bool is_supported_type = std::conjunction_v<
+	concept supported_type = std::conjunction_v<
 		std::is_pointer<raw_string_type>,
 		is_one_of<char_type<raw_string_type>, wchar_t, char>
 	>;
 }
 
-template<typename raw_string_type, REQUIRES(detail::is_supported_type<raw_string_type>)>
+template<detail::supported_type raw_string_type>
 [[nodiscard]]
 bool contains(raw_string_type const& Str, raw_string_type const& What)
 {
-	if constexpr (std::is_same_v<detail::char_type<raw_string_type>, wchar_t>)
-		return wcsstr(Str, What) != nullptr;
+	if constexpr (std::same_as<detail::char_type<raw_string_type>, wchar_t>)
+		return std::wcsstr(Str, What) != nullptr;
 	else
-		return strstr(Str, What) != nullptr;
+		return std::strstr(Str, What) != nullptr;
 }
 
-template<typename raw_string_type, REQUIRES(detail::is_supported_type<raw_string_type>)>
+template<detail::supported_type raw_string_type>
 [[nodiscard]]
 bool contains(raw_string_type const& Str, detail::char_type<raw_string_type> const What)
 {
-	if constexpr (std::is_same_v<detail::char_type<raw_string_type>, wchar_t>)
-		return wcschr(Str, What) != nullptr;
+	if constexpr (std::same_as<detail::char_type<raw_string_type>, wchar_t>)
+		return std::wcschr(Str, What) != nullptr;
 	else
-		return strchr(Str, What) != nullptr;
+		return std::strchr(Str, What) != nullptr;
+}
+
+[[nodiscard]]
+inline bool within(std::wstring_view const Haystack, std::wstring_view const Needle)
+{
+	const auto HaystackBegin = Haystack.data();
+	const auto HaystackEnd = HaystackBegin + Haystack.size();
+
+	const auto NeedleBegin = Needle.data();
+	const auto NeedleEnd = NeedleBegin + Needle.size();
+
+	/*
+	HHHHHH
+	NN
+	  NN
+		NN
+	*/
+	return
+		std::greater_equal{}(NeedleBegin, HaystackBegin) && std::less{}(NeedleBegin, HaystackEnd) &&
+		std::greater{}(NeedleEnd, HaystackBegin) && std::less_equal{}(NeedleEnd, HaystackEnd) &&
+		// An empty needle could be within the haystack, but who cares.
+		// You can't really break an empty view by invalidating its underlying storage.
+		!Needle.empty();
 }
 
 namespace detail
 {
-	template<typename begin_iterator, typename end_iterator>
 	[[nodiscard]]
-	size_t get_space_count(begin_iterator Begin, end_iterator End) noexcept
+	size_t get_leading_space_count(std::ranges::range auto const Range) noexcept
 	{
-		return std::find_if_not(Begin, End, std::iswspace) - Begin;
+		return std::ranges::find_if_not(Range, std::iswspace) - std::ranges::cbegin(Range);
 	}
 }
 
 namespace inplace
 {
-	inline void cut_left(std::wstring& Str, size_t MaxWidth)
+	inline void cut_left(std::wstring& Str, size_t const MaxWidth) noexcept
 	{
 		if (Str.size() > MaxWidth)
 			Str.erase(0, Str.size() - MaxWidth);
 	}
 
-	inline void cut_right(std::wstring& Str, size_t MaxWidth)
+	constexpr void cut_left(std::wstring_view& Str, size_t const MaxWidth) noexcept
+	{
+		if (Str.size() > MaxWidth)
+			Str.remove_prefix(Str.size() - MaxWidth);
+	}
+
+	inline void cut_right(std::wstring& Str, size_t const MaxWidth) noexcept
 	{
 		if (Str.size() > MaxWidth)
 			Str.resize(MaxWidth);
 	}
 
-	inline void pad_left(std::wstring& Str, size_t MinWidth, wchar_t Padding = L' ')
+	constexpr void cut_right(std::wstring_view& Str, size_t const MaxWidth) noexcept
+	{
+		if (Str.size() > MaxWidth)
+			Str.remove_suffix(Str.size() - MaxWidth);
+	}
+
+	inline void pad_left(std::wstring& Str, size_t const MinWidth, wchar_t const Padding = L' ')
 	{
 		if (Str.size() < MinWidth)
 			Str.insert(0, MinWidth - Str.size(), Padding);
 	}
 
-	inline void pad_right(std::wstring& Str, size_t MinWidth, wchar_t Padding = L' ')
+	inline void pad_right(std::wstring& Str, size_t const MinWidth, wchar_t const Padding = L' ')
 	{
 		if (Str.size() < MinWidth)
 			Str.append(MinWidth - Str.size(), Padding);
 	}
 
-	inline void fit_to_left(std::wstring& Str, size_t Size)
+	inline void fit_to_left(std::wstring& Str, size_t const Size)
 	{
 		Str.size() < Size? pad_right(Str, Size) : cut_right(Str, Size);
 	}
 
-	inline void fit_to_center(std::wstring& Str, size_t Size)
+	inline void fit_to_center(std::wstring& Str, size_t const Size)
 	{
 		const auto StrSize = Str.size();
 
@@ -271,19 +334,14 @@ namespace inplace
 		}
 	}
 
-	inline void fit_to_right(std::wstring& Str, size_t Size)
+	inline void fit_to_right(std::wstring& Str, size_t const Size)
 	{
 		Str.size() < Size? pad_left(Str, Size) : cut_right(Str, Size);
 	}
 
-	inline void erase_all(std::wstring& Str, wchar_t Char)
-	{
-		Str.erase(std::remove(ALL_RANGE(Str), Char), Str.end());
-	}
-
 	inline void unquote(std::wstring& Str)
 	{
-		erase_all(Str, L'"');
+		std::erase(Str, L'"');
 	}
 
 	inline void quote(std::wstring& Str)
@@ -315,22 +373,22 @@ namespace inplace
 
 	inline void trim_left(std::wstring& Str)
 	{
-		Str.erase(0, detail::get_space_count(ALL_CONST_RANGE(Str)));
+		Str.erase(0, detail::get_leading_space_count(std::wstring_view(Str)));
 	}
 
 	inline void trim_left(std::wstring_view& Str) noexcept
 	{
-		Str.remove_prefix(detail::get_space_count(ALL_CONST_RANGE(Str)));
+		Str.remove_prefix(detail::get_leading_space_count(Str));
 	}
 
 	inline void trim_right(std::wstring& Str)
 	{
-		Str.resize(Str.size() - detail::get_space_count(ALL_CONST_REVERSE_RANGE(Str)));
+		Str.resize(Str.size() - detail::get_leading_space_count(std::wstring_view(Str) | std::views::reverse));
 	}
 
 	inline void trim_right(std::wstring_view& Str) noexcept
 	{
-		Str.remove_suffix(detail::get_space_count(ALL_CONST_REVERSE_RANGE(Str)));
+		Str.remove_suffix(detail::get_leading_space_count(Str | std::views::reverse));
 	}
 
 	inline void trim(std::wstring& Str)
@@ -348,82 +406,72 @@ namespace inplace
 
 namespace copy
 {
-	template<typename iterator>
-	void unquote(const std::wstring_view Str, const iterator Destination)
+	void unquote(const std::wstring_view Str, std::output_iterator<wchar_t> auto const Destination)
 	{
-		std::remove_copy(ALL_CONST_RANGE(Str), Destination, L'"');
+		std::ranges::remove_copy(Str, Destination, L'"');
 	}
 }
 
 [[nodiscard]]
-inline auto cut_left(std::wstring Str, size_t MaxWidth)
+inline auto cut_left(std::wstring Str, size_t const MaxWidth)
 {
 	inplace::cut_left(Str, MaxWidth);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto cut_right(std::wstring Str, size_t MaxWidth)
+inline auto cut_right(std::wstring Str, size_t const MaxWidth)
 {
 	inplace::cut_right(Str, MaxWidth);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto cut_left(std::wstring_view Str, size_t MaxWidth) noexcept
+constexpr auto cut_left(std::wstring_view Str, size_t const MaxWidth) noexcept
 {
-	if (Str.size() > MaxWidth)
-		Str.remove_prefix(Str.size() - MaxWidth);
+	inplace::cut_left(Str, MaxWidth);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto cut_right(std::wstring_view Str, size_t MaxWidth) noexcept
+constexpr auto cut_right(std::wstring_view Str, size_t const MaxWidth) noexcept
 {
-	if (Str.size() > MaxWidth)
-		Str.remove_suffix(Str.size() - MaxWidth);
+	inplace::cut_right(Str, MaxWidth);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto pad_left(std::wstring Str, size_t MinWidth, wchar_t Padding = L' ')
+inline auto pad_left(std::wstring Str, size_t const MinWidth, wchar_t Padding = L' ')
 {
 	inplace::pad_left(Str, MinWidth, Padding);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto pad_right(std::wstring Str, size_t MinWidth, wchar_t Padding = L' ')
+inline auto pad_right(std::wstring Str, size_t const MinWidth, wchar_t Padding = L' ')
 {
 	inplace::pad_right(Str, MinWidth, Padding);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto fit_to_left(std::wstring Str, size_t Size)
+inline auto fit_to_left(std::wstring Str, const size_t Size)
 {
 	inplace::fit_to_left(Str, Size);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto fit_to_center(std::wstring Str, size_t Size)
+inline auto fit_to_center(std::wstring Str, const size_t Size)
 {
 	inplace::fit_to_center(Str, Size);
 	return Str;
 }
 
 [[nodiscard]]
-inline auto fit_to_right(std::wstring Str, size_t Size)
+inline auto fit_to_right(std::wstring Str, const size_t Size)
 {
 	inplace::fit_to_right(Str, Size);
-	return Str;
-}
-
-[[nodiscard]]
-inline auto erase_all(std::wstring Str, wchar_t Char)
-{
-	inplace::erase_all(Str, Char);
 	return Str;
 }
 
@@ -493,33 +541,9 @@ inline auto quote_space(std::wstring_view const Str)
 }
 
 [[nodiscard]]
-inline bool equal(const std::wstring_view Str1, const std::wstring_view Str2) noexcept
+constexpr bool equal(const std::wstring_view Str1, const std::wstring_view Str2) noexcept
 {
 	return Str1 == Str2;
-}
-
-[[nodiscard]]
-inline bool starts_with(const std::wstring_view Str, const std::wstring_view Prefix) noexcept
-{
-	return Str.size() >= Prefix.size() && Str.substr(0, Prefix.size()) == Prefix;
-}
-
-[[nodiscard]]
-inline bool starts_with(const std::wstring_view Str, wchar_t const Prefix) noexcept
-{
-	return !Str.empty() && Str.front() == Prefix;
-}
-
-[[nodiscard]]
-inline bool ends_with(const std::wstring_view Str, const std::wstring_view Suffix) noexcept
-{
-	return Str.size() >= Suffix.size() && Str.substr(Str.size() - Suffix.size()) == Suffix;
-}
-
-[[nodiscard]]
-inline bool ends_with(const std::wstring_view Str, wchar_t const Suffix) noexcept
-{
-	return !Str.empty() && Str.back() == Suffix;
 }
 
 [[nodiscard]]
@@ -564,19 +588,18 @@ inline auto trim(std::wstring_view Str) noexcept
 	return Str;
 }
 
-template<typename container>
-void join(std::wstring& Str, const container& Container, std::wstring_view const Separator)
+void join(std::wstring& Str, std::wstring_view const Separator, std::ranges::range auto&& Range)
 {
-	const auto Size = std::accumulate(ALL_CONST_RANGE(Container), size_t{}, [Separator](size_t const Value, const auto& Element)
+	const auto Size = std::ranges::fold_left(Range, 0uz, [Separator](size_t const Value, const auto& Element)
 	{
 		return Value + Separator.size() + string_utils::detail::append_arg(Element).size();
 	});
 
-	reserve_exp_noshrink(Str, Size? Size - Separator.size() : Size);
+	reserve_exp(Str, Size? Size - Separator.size() : Size);
 
 	bool First = true;
 
-	for (const auto& i: Container)
+	for (const auto& i: Range)
 	{
 		if (First)
 		{
@@ -590,43 +613,44 @@ void join(std::wstring& Str, const container& Container, std::wstring_view const
 	}
 }
 
-template<typename container>
 [[nodiscard]]
-std::wstring join(const container& Container, std::wstring_view const Separator)
+std::wstring join(std::wstring_view const Separator, std::ranges::range auto&& Range)
 {
 	std::wstring Str;
-	join(Str, Container, Separator);
+	join(Str, Separator, Range);
 	return Str;
 }
 
 [[nodiscard]]
-inline std::pair<std::wstring_view, std::wstring_view> split(std::wstring_view const Str, wchar_t const Separator = L'=') noexcept
+inline auto split(std::wstring_view const Str, wchar_t const Separator = L'=') noexcept
 {
 	const auto SeparatorPos = Str.find(Separator);
-	return { Str.substr(0, SeparatorPos), Str.substr(SeparatorPos == Str.npos? Str.size() : SeparatorPos + 1) };
+	return std::pair{ Str.substr(0, SeparatorPos), Str.substr(SeparatorPos == Str.npos? Str.size() : SeparatorPos + 1) };
 }
 
 
 // std::string_view is a drop-in replacement for const std::string& they say
 template<typename T>
 [[nodiscard]]
+auto operator+(const std::basic_string_view<T> Lhs, const std::basic_string_view<T> Rhs)
+{
+	std::basic_string<T> Result;
+	Result.reserve(Lhs.size() + Rhs.size());
+	return Result.append(Lhs).append(Rhs);
+}
+
+template<typename T>
+[[nodiscard]]
 auto operator+(const std::basic_string<T>& Lhs, const std::basic_string_view<T> Rhs)
 {
-	return concat(Lhs, Rhs);
+	return std::basic_string_view<T>(Lhs) + Rhs;
 }
 
 template<typename T>
 [[nodiscard]]
 auto operator+(const std::basic_string_view<T> Lhs, const std::basic_string<T>& Rhs)
 {
-	return concat(Lhs, Rhs);
-}
-
-template<typename T>
-[[nodiscard]]
-auto operator+(const std::basic_string_view<T> Lhs, std::basic_string_view<T> Rhs)
-{
-	return concat(Lhs, Rhs);
+	return Lhs + std::basic_string_view<T>(Rhs);
 }
 
 template<typename T>
@@ -638,23 +662,61 @@ auto operator+(const std::basic_string_view<T> Lhs, T const Rhs)
 
 template<typename T>
 [[nodiscard]]
-auto operator+(T const Lhs, std::basic_string_view<T> Rhs)
+auto operator+(T const Lhs, std::basic_string_view<T> const Rhs)
 {
 	return concat(Lhs, Rhs);
 }
 
 
-// string_view has iterators, but you cannot construct it from them
-// "Design by committee" *facepalm*
-template <typename T>
-[[nodiscard]]
-constexpr auto make_string_view(T const Begin, T const End) noexcept
+class lvalue_string_view
 {
-	using char_type = typename std::iterator_traits<T>::value_type;
-	static_assert(std::is_same_v<typename std::basic_string_view<char_type>::const_iterator, T>);
+public:
+	lvalue_string_view() = default;
 
-	const auto Size = static_cast<size_t>(End - Begin);
-	return std::basic_string_view<char_type>{ Size ? &*Begin : nullptr, Size };
-}
+	explicit(false) lvalue_string_view(std::wstring_view const Str):
+		m_Str(Str)
+	{
+	}
+
+	explicit(false) lvalue_string_view(std::wstring const& Str):
+		m_Str(Str)
+	{}
+
+	explicit(false) lvalue_string_view(std::wstring&& Str) = delete;
+
+	explicit(false) operator std::wstring_view() const
+	{
+		return m_Str;
+	}
+
+private:
+	std::wstring_view m_Str;
+};
+
+struct string_comparer
+{
+	using is_transparent = void;
+
+	[[nodiscard]]
+	size_t operator()(const std::wstring_view Str) const
+	{
+		return make_hash(Str);
+	}
+
+	[[nodiscard]]
+	constexpr bool operator()(const std::wstring_view Str1, const std::wstring_view Str2) const noexcept
+	{
+		return Str1 == Str2;
+	}
+};
+
+using unordered_string_set = std::unordered_set<std::wstring, string_comparer, string_comparer>;
+using unordered_string_multiset = std::unordered_multiset<std::wstring, string_comparer, string_comparer>;
+
+template<typename T>
+using unordered_string_map = std::unordered_map<std::wstring, T, string_comparer, string_comparer>;
+
+template<typename T>
+using unordered_string_multimap = std::unordered_multimap<std::wstring, T, string_comparer, string_comparer>;
 
 #endif // STRING_UTILS_HPP_DE39ECEB_2377_44CB_AF4B_FA5BEA09C8C8

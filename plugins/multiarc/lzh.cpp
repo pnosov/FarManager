@@ -51,7 +51,7 @@ static DWORD NextPosition,SFXSize,FileSize;
 // Number of 100 nanosecond units from 01.01.1601 to 01.01.1970
 #define EPOCH_BIAS    116444736000000000ll
 
-void WINAPI UnixTimeToFileTime( DWORD time, FILETIME * ft )
+static void WINAPI UnixTimeToFileTime( DWORD time, FILETIME * ft )
 {
   *(__int64*)ft = EPOCH_BIAS + time * 10000000ll;
 }
@@ -153,11 +153,11 @@ typedef union {
   LZH_Level2 l2;
 } LZH_Header;
 
-BOOL CheckLZHHeader(LZH_Level0 *lzh)
+static BOOL CheckLZHHeader(const LZH_Level0 *lzh)
 {
   return lzh->HeadID[0]=='-' && lzh->HeadID[1]=='l' && (lzh->HeadID[2]=='h' || lzh->HeadID[2]=='z') &&
         ((lzh->Method>='0' && lzh->Method<='9') || lzh->Method=='d' || lzh->Method=='s') &&
-        lzh->free1 == '-' && lzh->FLevel >= 0 && lzh->FLevel <= 2;
+        lzh->free1 == '-' && lzh->FLevel <= 2;
 }
 
 
@@ -165,7 +165,7 @@ BOOL WINAPI _export IsArchive(const char *Name,const unsigned char *Data,int Dat
 {
   for (int I=0;I<DataSize-5;I++)
   {
-    LZH_Level0 *lzh=(LZH_Level0*)(Data+I);
+    const LZH_Level0 *lzh=(const LZH_Level0*)(Data+I);
     if(CheckLZHHeader(lzh))
     {
       const unsigned char *D=Data+I;
@@ -273,7 +273,8 @@ int WINAPI _export GetArcItem(PluginPanelItem *Item, ArcItemInfo *Info)
     WORD NextHeaderSize;
     BYTE ExtType;//, FileNameSize;
 
-    do {
+	for (;;)
+	{
       ReadFile(ArcHandle,&NextHeaderSize,2,&ReadSize,NULL); // Next Header Size
       if(!NextHeaderSize)
         break;
@@ -369,7 +370,7 @@ int WINAPI _export GetArcItem(PluginPanelItem *Item, ArcItemInfo *Info)
         default:
           SetFilePointer(ArcHandle,NextHeaderSize-3,NULL,FILE_CURRENT);
       }
-    } while(NextHeaderSize != 0);
+    }
   }
 
   Item->CRC32=(DWORD)CRC16;

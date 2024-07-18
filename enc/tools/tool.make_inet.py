@@ -1,15 +1,13 @@
-﻿"""
+#!/usr/bin/env python3
+
+"""
 Make web suitable Encyclopedia
 """
 
 # based on tool.make_chm.py pythonized by techtonik // gmail.com
 # modifications by Far Group
 
-#
-# IMPORTANT: must be albe to run under python 2.4
-#
-
-execfile("config.inc.py")
+from config import *
 
 from os import makedirs, walk, listdir
 from os.path import isdir, join, commonprefix, normpath, exists
@@ -49,62 +47,31 @@ def make_inet_lang(lang):
 
   log("copying files")
   copytree("%s/enc_%s/images" % (ROOT_DIR, lang), "%s/images" % (DEST_INET))
-  copytree("%s/enc_%s/meta" % (ROOT_DIR, lang), "%s/%s/meta" % (DEST_INET, lang_code))
-
-  # build empty directory tree
-  inet_html_dir = join(DEST_INET, lang_code)
-  for root, dirs, files in walk(inet_meta_dir):
-    for d in dirs:
-      makedirs(join(root.replace(inet_meta_dir, inet_html_dir), d))
-
-  log("-- translating meta into html")
-  # filter files and replace "win32/.." links with calls to MSDN
-  link_match = re.compile(r'href[\s"\'=\/\.]*?win32\/(?P<funcname>[^"\']*?)(\.html)?[\'"].*?>(?P<linkend>.*?<\/a>)', re.I)
-  link_replace = Template(r'href="$notfound?\g<funcname>">\g<linkend>')
-  id = 0
-  for root, dirs, files in walk(inet_meta_dir):
-    for f in files:
-      relpath = normpath(join(root, "..", "xxx")) # ".." because we need to get rid of 1 level because of "meta""
-      plen = len(commonprefix([ join(inet_html_dir, "msdn.html"), relpath ]))
-      relpath = relpath[plen:].replace('\\','/')
-      notfound = "../" * relpath.count('/') + "msdn.html"
-      infile  = open(join(root, f))
-      outfile = open(join(root.replace(inet_meta_dir, inet_html_dir), f), "w")
-      for line in infile:
-        while link_match.search(line):
-          line = link_match.sub(link_replace.substitute(notfound=notfound), line)
-          id += 1
-        outfile.write(line)
-      infile.close()
-      outfile.close()
-  log("total %d win32 links" % id)
-
-  log("-- cleaning meta")
-  shutil.rmtree(inet_meta_dir)
+  copytree("%s/enc_%s/meta" % (ROOT_DIR, lang), "%s/%s" % (DEST_INET, lang_code))
 
 # end def make_inet_lang(lang):
 
 
 
 log("preparing INET build")
-log("-- cleaning build dir")
+log("-- cleaning build dir " + DEST)
 if isdir(DEST): shutil.rmtree(DEST)
 makedirs(DEST)
-logfile = logging.FileHandler(BUILD_INET_LOG, "w")
+logfile = logging.FileHandler(BUILD_INET_LOG, "w", encoding="utf-8")
 logging.getLogger().addHandler(logfile)
 
 
-log("-- making directory tree")
+log("-- output dir " + DEST_INET)
 makedirs(DEST_INET)
 makedirs(join(DEST_INET,"images"))
 makedirs(join(DEST_INET,"styles"))
 
-make_inet_lang("rus3.work")
+make_inet_lang("rus")
 #make_inet_lang("eng")
 
 log("-- copying index files")
-shutil.copy("inet/index.html", DEST_INET)
-shutil.copy("inet/farenclogo.gif", join(DEST_INET,"images"))
-shutil.copy("inet/styles.css", join(DEST_INET,"styles"))
+shutil.copy(ROOT_DIR+"/tools/inet/index.html", DEST_INET)
+shutil.copy(ROOT_DIR+"/tools/inet/farenclogo.gif", join(DEST_INET,"images"))
+shutil.copy(ROOT_DIR+"/tools/inet/styles.css", join(DEST_INET,"styles"))
 
 log("-- done. check build log at %s" % BUILD_INET_LOG)

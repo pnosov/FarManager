@@ -55,9 +55,9 @@ enum
 };
 
 
-class TreeList: public Panel
+class TreeList final: public Panel
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	struct TreeItem
@@ -82,7 +82,7 @@ public:
 		{
 		}
 
-		operator string_view() const { return strName; }
+		explicit(false) operator string_view() const { return strName; }
 	};
 
 	static tree_panel_ptr create(window_ptr Owner, int ModalMode = 0);
@@ -145,7 +145,7 @@ private:
 	void GetRoot();
 	panel_ptr GetRootPanel();
 	void SyncDir();
-	void SaveTreeFile();
+	void SaveTreeFile() const;
 	bool ReadTreeFile();
 	int GetNextNavPos() const;
 	int GetPrevNavPos() const;
@@ -156,10 +156,10 @@ private:
 	std::vector<TreeItem> m_SavedListData;
 	const string m_Empty; // bugbug
 	string m_Root;
-	size_t m_WorkDir;
-	size_t m_SavedWorkDir;
-	long m_GetSelPosition;
-	int m_ExitCode; // актуально только для дерева, вызванного из копира!
+	size_t m_WorkDir{};
+	size_t m_SavedWorkDir{};
+	long m_GetSelPosition{};
+	int m_ExitCode{1}; // актуально только для дерева, вызванного из копира!
 	bool m_ReadingTree{};
 };
 

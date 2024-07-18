@@ -42,6 +42,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "farversion.hpp"
 #include "plugapi.hpp"
 #include "message.hpp"
+#include "mix.hpp"
+#include "notification.hpp"
 #include "dirmix.hpp"
 #include "strmix.hpp"
 #include "uuids.far.hpp"
@@ -51,13 +53,16 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "global.hpp"
 #include "encoding.hpp"
 #include "exception_handler.hpp"
+#include "log.hpp"
 
 // Platform:
 #include "platform.env.hpp"
 #include "platform.fs.hpp"
+#include "platform.process.hpp"
 
 // Common:
 #include "common/enum_tokens.hpp"
+#include "common/io.hpp"
 #include "common/scope_exit.hpp"
 #include "common/uuid.hpp"
 #include "common/view/zip.hpp"
@@ -112,9 +117,9 @@ DECLARE_PLUGIN_FUNCTION(iFreeContentData,     void     (WINAPI*)(const GetConten
 
 #undef DECLARE_PLUGIN_FUNCTION
 
-std::unique_ptr<Plugin> plugin_factory::CreatePlugin(const string& filename)
+std::unique_ptr<Plugin> plugin_factory::CreatePlugin(const string& FileName)
 {
-	return IsPlugin(filename)? std::make_unique<Plugin>(this, filename) : nullptr;
+	return IsPlugin(FileName)? std::make_unique<Plugin>(this, FileName) : nullptr;
 }
 
 plugin_factory::plugin_factory(PluginManager* owner):
@@ -168,7 +173,7 @@ plugin_factory::plugin_module_ptr native_plugin_factory::Create(const string& fi
 	auto Module = std::make_unique<native_plugin_module>(filename);
 	if (!*Module)
 	{
-		const auto ErrorState = error_state::fetch();
+		const auto ErrorState = os::last_error();
 
 		Module.reset();
 
@@ -185,13 +190,13 @@ plugin_factory::plugin_module_ptr native_plugin_factory::Create(const string& fi
 	return Module;
 }
 
-bool native_plugin_factory::Destroy(plugin_factory::plugin_module_ptr& instance)
+bool native_plugin_factory::Destroy(plugin_module_ptr& instance)
 {
 	instance.reset();
 	return true;
 }
 
-plugin_factory::function_address native_plugin_factory::Function(const plugin_factory::plugin_module_ptr& Instance, const plugin_factory::export_name& Name)
+plugin_factory::function_address native_plugin_factory::Function(const plugin_module_ptr& Instance, const export_name& Name)
 {
 	return !Name.AName.empty()? static_cast<native_plugin_module*>(Instance.get())->GetProcAddress<function_address>(null_terminated_t<char>(Name.AName).c_str()) : nullptr;
 }
@@ -202,53 +207,60 @@ bool native_plugin_factory::FindExport(const std::string_view ExportName) const
 	return ExportName == m_ExportsNames[iGetGlobalInfo].AName;
 }
 
-template<typename T>
-static decltype(auto) view_as(void const* const BaseAddress, IMAGE_SECTION_HEADER const& Section, size_t const VirtualAddress)
-{
-	return view_as<T>(BaseAddress, Section.PointerToRawData + (VirtualAddress - Section.VirtualAddress));
-}
-
 bool native_plugin_factory::IsPlugin(const string& FileName) const
 {
 	if (!ends_with_icase(FileName, L".dll"sv))
 		return false;
 
-	const os::fs::file ModuleFile(FileName, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING);
+	const os::fs::file ModuleFile(FileName, FILE_READ_DATA, os::fs::file_share_read, nullptr, OPEN_EXISTING);
 	if (!ModuleFile)
-		return false;
-
-	const os::handle ModuleMapping(CreateFileMapping(ModuleFile.get().native_handle(), nullptr, PAGE_READONLY, 0, 0, nullptr));
-	if (!ModuleMapping)
-		return false;
-
-	const os::fs::file_view Data(MapViewOfFile(ModuleMapping.native_handle(), FILE_MAP_READ, 0, 0, 0));
-	if (!Data)
-		return false;
-
-	return seh_try_no_ui([&]
 	{
-		return IsPlugin(Data.get());
-	},
-	[]
-	{
-		// TODO: log
+		LOGDEBUG(L"create_file({}) {}"sv, FileName, os::last_error());
 		return false;
-	});
+	}
+
+	os::fs::filebuf StreamBuffer(ModuleFile, std::ios::in);
+	std::istream Stream(&StreamBuffer);
+	Stream.exceptions(Stream.badbit | Stream.failbit);
+
+	return IsPlugin(FileName, Stream);
 }
 
-bool native_plugin_factory::IsPlugin(const void* Data) const
+bool native_plugin_factory::IsPlugin(string_view const FileName, std::istream& Stream) const
 {
-	const auto& DosHeader = view_as<IMAGE_DOS_HEADER>(Data, 0);
-	if (DosHeader.e_magic != IMAGE_DOS_SIGNATURE)
+	IMAGE_DOS_HEADER DosHeader;
+	if (io::read(Stream, edit_bytes(DosHeader)) != sizeof(DosHeader))
+	{
+		LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
 		return false;
+	}
 
-	const auto& NtHeaders = view_as<IMAGE_NT_HEADERS>(Data, DosHeader.e_lfanew);
+	if (DosHeader.e_magic != IMAGE_DOS_SIGNATURE)
+	{
+		LOGDEBUG(L"Not a {} plugin: wrong DOS signature 0x{:04X} in {}"sv, kind(), DosHeader.e_magic, FileName);
+		return false;
+	}
+
+	Stream.seekg(DosHeader.e_lfanew);
+
+	IMAGE_NT_HEADERS NtHeaders;
+	if (io::read(Stream, edit_bytes(NtHeaders)) != sizeof(NtHeaders))
+	{
+		LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
+		return false;
+	}
 
 	if (NtHeaders.Signature != IMAGE_NT_SIGNATURE)
+	{
+		LOGDEBUG(L"Not a {} plugin: wrong NT signature 0x{:08X} in {}"sv, kind(), NtHeaders.Signature, FileName);
 		return false;
+	}
 
 	if (!(NtHeaders.FileHeader.Characteristics & IMAGE_FILE_DLL))
+	{
+		LOGDEBUG(L"Not a {} plugin: not a DLL 0x{:04X} in {}"sv, kind(), NtHeaders.FileHeader.Characteristics, FileName);
 		return false;
+	}
 
 	static const auto FarMachineType = []
 	{
@@ -259,31 +271,101 @@ bool native_plugin_factory::IsPlugin(const void* Data) const
 	}();
 
 	if (NtHeaders.FileHeader.Machine != FarMachineType)
+	{
+		LOGDEBUG(L"Not a {} plugin: machine type is {:04X}, expected {:04X} in {}"sv, kind(), NtHeaders.FileHeader.Machine, FarMachineType, FileName);
 		return false;
+	}
 
 	const auto ExportDirectoryAddress = NtHeaders.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
 	if (!ExportDirectoryAddress)
-		return false;
-
-	const auto FirstSection = view_as<IMAGE_SECTION_HEADER const*>(&NtHeaders, offsetof(IMAGE_NT_HEADERS, OptionalHeader) + NtHeaders.FileHeader.SizeOfOptionalHeader);
-	const span Sections(FirstSection, NtHeaders.FileHeader.NumberOfSections);
-	const auto SectionIterator = std::find_if(ALL_CONST_RANGE(Sections), [&](IMAGE_SECTION_HEADER const& Section)
 	{
-		return
+		LOGDEBUG(L"Not a {} plugin: no exports in {}"sv, kind(), FileName);
+		return false;
+	}
+
+	Stream.seekg(DosHeader.e_lfanew + offsetof(IMAGE_NT_HEADERS, OptionalHeader) + NtHeaders.FileHeader.SizeOfOptionalHeader);
+
+	IMAGE_SECTION_HEADER Section;
+	bool Found{};
+
+	for ([[maybe_unused]] const auto i: std::views::iota(0uz, NtHeaders.FileHeader.NumberOfSections))
+	{
+		if (io::read(Stream, edit_bytes(Section)) != sizeof(Section))
+		{
+			LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
+			return false;
+		}
+
+		if (
 			Section.VirtualAddress == ExportDirectoryAddress ||
-			(Section.VirtualAddress <= ExportDirectoryAddress && ExportDirectoryAddress < Section.VirtualAddress + Section.Misc.VirtualSize);
-	});
+			(Section.VirtualAddress <= ExportDirectoryAddress && ExportDirectoryAddress < Section.VirtualAddress + Section.Misc.VirtualSize)
+		)
+		{
+			Found = true;
+			break;
+		}
+	}
 
-	if (SectionIterator == Sections.cend())
-		return false;
-
-	const auto& ExportDirectory = view_as<IMAGE_EXPORT_DIRECTORY>(Data, *SectionIterator, ExportDirectoryAddress);
-	const span Names(view_as<DWORD const*>(Data, *SectionIterator, ExportDirectory.AddressOfNames), ExportDirectory.NumberOfNames);
-
-	return std::any_of(ALL_CONST_RANGE(Names), [&](DWORD const NameAddress)
+	if (!Found)
 	{
-		return FindExport(view_as<char const*>(Data, *SectionIterator, NameAddress));
-	});
+		LOGDEBUG(L"Not a {} plugin: exports section not found in {}"sv, kind(), FileName);
+		return false;
+	}
+
+	const auto section_address_to_real = [&](size_t const VirtualAddress)
+	{
+		return VirtualAddress - Section.VirtualAddress + Section.PointerToRawData;
+	};
+
+	Stream.seekg(section_address_to_real(ExportDirectoryAddress));
+
+	IMAGE_EXPORT_DIRECTORY ExportDirectory;
+	if (io::read(Stream, edit_bytes(ExportDirectory)) != sizeof(ExportDirectory))
+	{
+		LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
+		return false;
+	}
+
+	std::string Name;
+	for (const auto i: std::views::iota(0uz, ExportDirectory.NumberOfNames))
+	{
+		Stream.seekg(section_address_to_real(ExportDirectory.AddressOfNames) + sizeof(DWORD) * i);
+
+		DWORD NameAddress;
+		if (io::read(Stream, edit_bytes(NameAddress)) != sizeof(NameAddress))
+		{
+			LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
+			return false;
+		}
+
+		Stream.seekg(section_address_to_real(NameAddress));
+
+		Name.clear();
+
+		for (;;)
+		{
+			char Ch;
+			if (!io::read(Stream, edit_bytes(Ch)))
+			{
+				LOGDEBUG(L"Not a {} plugin: not enough data in {}"sv, kind(), FileName);
+				return false;
+			}
+
+			if (!Ch)
+				break;
+
+			Name.push_back(Ch);
+		}
+
+		if (FindExport(Name))
+		{
+			LOGTRACE(L"Found a {} plugin: {}"sv, kind(), FileName);
+			return true;
+		}
+	}
+
+	LOGDEBUG(L"Not a {} plugin: no known exports found in {}"sv, kind(), FileName);
+	return false;
 }
 
 static void PrepareModulePath(string_view const ModuleName)
@@ -349,8 +431,8 @@ static void ShowMessageAboutIllegalPluginVersion(const string& plg, const Versio
 		{
 			msg(lng::MPlgBadVers),
 			plg,
-			format(msg(lng::MPlgRequired), version_to_string(required)),
-			format(msg(lng::MPlgRequired2), version_to_string(build::version()))
+			far::vformat(msg(lng::MPlgRequired), version_to_string(required)),
+			far::vformat(msg(lng::MPlgRequired2), version_to_string(build::version()))
 		},
 		{ lng::MOk }
 	);
@@ -358,12 +440,17 @@ static void ShowMessageAboutIllegalPluginVersion(const string& plg, const Versio
 
 static auto MakeSignature(const os::fs::find_data& Data)
 {
-	return concat(to_hex_wstring(Data.FileSize), to_hex_wstring(os::chrono::nt_clock::to_filetime(Data.CreationTime).dwLowDateTime), to_hex_wstring(os::chrono::nt_clock::to_filetime(Data.LastWriteTime).dwLowDateTime));
+	return concat
+	(
+		to_hex_wstring(Data.FileSize),
+		to_hex_wstring(Data.CreationTime.time_since_epoch().count()),
+		to_hex_wstring(Data.LastWriteTime.time_since_epoch().count())
+	);
 }
 
 bool Plugin::SaveToCache()
 {
-	PluginInfo Info = {sizeof(Info)};
+	PluginInfo Info{ sizeof(Info) };
 	GetPluginInfo(&Info);
 
 	auto& PlCache = ConfigProvider().PlCacheCfg();
@@ -382,13 +469,14 @@ bool Plugin::SaveToCache()
 	}
 
 	os::fs::find_data fdata;
-	// BUGBUG check result
-	(void)os::fs::get_find_data(m_strModuleName, fdata);
+	if (!os::fs::get_find_data(m_strModuleName, fdata))
+		return false;
+
 	PlCache->SetSignature(id, MakeSignature(fdata));
 
 	const auto SaveItems = [&PlCache, &id](const auto& Setter, const PluginMenuItem& Item)
 	{
-		for (size_t i = 0; i != Item.Count; ++i)
+		for (const auto i: std::views::iota(0uz, Item.Count))
 		{
 			std::invoke(Setter, PlCache, id, i, Item.Strings[i], Item.Guids[i]);
 		}
@@ -424,12 +512,11 @@ void Plugin::InitExports()
 	}
 }
 
-Plugin::Plugin(plugin_factory* Factory, const string& ModuleName):
+Plugin::Plugin(plugin_factory* Factory, const string_view ModuleName):
 	m_Factory(Factory),
 	m_strModuleName(ModuleName),
 	m_strCacheName(ModuleName)
 {
-	ReplaceBackslashToSlash(m_strCacheName);
 	SetUuid(FarUuid);
 }
 
@@ -439,6 +526,16 @@ void Plugin::SetUuid(const UUID& Uuid)
 {
 	m_Uuid = Uuid;
 	m_strUuid = uuid::str(m_Uuid);
+}
+
+void Plugin::increase_activity()
+{
+	++m_Activity;
+}
+
+void Plugin::decrease_activity()
+{
+	--m_Activity;
 }
 
 bool Plugin::LoadData()
@@ -454,7 +551,7 @@ bool Plugin::LoadData()
 
 	string strCurPlugDiskPath;
 	wchar_t Drive[]{ L'=', 0, L':', 0 };
-	const auto strCurPath = os::fs::GetCurrentDirectory();
+	const auto strCurPath = os::fs::get_current_directory();
 
 	if (ParsePath(m_strModuleName) == root_type::drive_letter)  // если указан локальный путь, то...
 	{
@@ -463,6 +560,12 @@ bool Plugin::LoadData()
 	}
 
 	PrepareModulePath(m_strModuleName);
+
+	// Factory can spawn error messages, which in turn can cause redraw events
+	// and load plugins recursively again and again, eventually overflowing the stack.
+	// Expect nothing and you will never be disappointed.
+	WorkFlags.Set(PIWF_DONTLOADAGAIN);
+
 	m_Instance = m_Factory->Create(m_strModuleName);
 	FarChDir(strCurPath);
 
@@ -470,13 +573,9 @@ bool Plugin::LoadData()
 		os::env::set(Drive, strCurPlugDiskPath);
 
 	if (!m_Instance)
-	{
-		//чтоб не пытаться загрузить опять а то ошибка будет постоянно показываться.
-		WorkFlags.Set(PIWF_DONTLOADAGAIN);
 		return false;
-	}
 
-	WorkFlags.Clear(PIWF_CACHED);
+	WorkFlags.Clear(PIWF_DONTLOADAGAIN | PIWF_CACHED);
 
 	if(bPendingRemove)
 	{
@@ -485,13 +584,13 @@ bool Plugin::LoadData()
 	}
 	InitExports();
 
-	GlobalInfo Info={sizeof(Info)};
+	GlobalInfo Info{ sizeof(Info) };
 
 	if(GetGlobalInfo(&Info) &&
 		Info.StructSize &&
 		Info.Title && *Info.Title &&
 		Info.Description && *Info.Description &&
- 		Info.Author && *Info.Author)
+		Info.Author && *Info.Author)
 	{
 		m_MinFarVersion = Info.MinFarVersion;
 		m_PluginVersion = Info.Version;
@@ -516,11 +615,12 @@ bool Plugin::LoadData()
 
 		if (ok)
 		{
+			SubscribeToSynchroEvents();
 			WorkFlags.Set(PIWF_DATALOADED);
 			return true;
 		}
 	}
-	Unload();
+	Unload(false);
 	//чтоб не пытаться загрузить опять а то ошибка будет постоянно показываться.
 	WorkFlags.Set(PIWF_DONTLOADAGAIN);
 	return false;
@@ -553,7 +653,7 @@ bool Plugin::Load()
 	{
 		if (!bPendingRemove)
 		{
-			Unload();
+			Unload(false);
 		}
 
 		//чтоб не пытаться загрузить опять а то ошибка будет постоянно показываться.
@@ -614,6 +714,7 @@ bool Plugin::LoadFromCache(const os::fs::find_data &FindData)
 		if (PlCache->GetExportState(id, Name.UName))
 			Export = ToPtr(true); // Fake, will be overwritten with the real address later
 	}
+	SubscribeToSynchroEvents();
 
 	WorkFlags.Set(PIWF_CACHED); //too many "cached" flags
 	return true;
@@ -625,16 +726,14 @@ bool Plugin::Unload(bool bExitFAR)
 		return true;
 
 	if (bExitFAR)
-	{
-		ExitInfo Info={sizeof(Info)};
-		ExitFAR(&Info);
-	}
+		NotifyExit();
 
 	bool Result = true;
 
 	if (!WorkFlags.Check(PIWF_CACHED))
 	{
 		Result = m_Factory->Destroy(m_Instance);
+		LOGDEBUG(L"Unloaded {}"sv, ModuleName());
 		ClearExports();
 	}
 
@@ -644,6 +743,15 @@ bool Plugin::Unload(bool bExitFAR)
 	bPendingRemove = true;
 
 	return Result;
+}
+
+void Plugin::NotifyExit()
+{
+	if (WorkFlags.Check(PIWF_LOADED))
+	{
+		ExitInfo Info{sizeof(Info)};
+		ExitFAR(&Info);
+	}
 }
 
 void Plugin::ClearExports()
@@ -666,7 +774,27 @@ bool Plugin::RemoveDialog(const window_ptr& Dlg)
 	return true;
 }
 
-bool Plugin::IsPanelPlugin()
+void Plugin::SubscribeToSynchroEvents()
+{
+	if (!has(iProcessSynchroEvent))
+		return;
+
+	// Already initialised
+	if (m_SynchroListenerCreated)
+		return;
+
+	m_SynchroListenerCreated = true;
+
+	m_SynchroListener = std::make_unique<listener>(m_Uuid, [this](const std::any& Payload)
+	{
+		const auto Param = std::any_cast<void*>(Payload);
+
+		ProcessSynchroEventInfo Info{ sizeof(Info), SE_COMMONSYNCHRO, Param };
+		ProcessSynchroEvent(&Info);
+	});
+}
+
+bool Plugin::IsPanelPlugin() const
 {
 	static const int PanelExports[]
 	{
@@ -688,7 +816,7 @@ bool Plugin::IsPanelPlugin()
 		iClosePanel,
 	};
 
-	return std::any_of(CONST_RANGE(PanelExports, i)
+	return std::ranges::any_of(PanelExports, [&](int const i)
 	{
 		return Exports[i] != nullptr;
 	});
@@ -697,7 +825,7 @@ bool Plugin::IsPanelPlugin()
 bool Plugin::SetStartupInfo(PluginStartupInfo *Info)
 {
 	ExecuteStruct<iSetStartupInfo> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -741,9 +869,9 @@ bool Plugin::InitLang(string_view const Path, string_view const Language)
 		PluginLang = std::make_unique<plugin_language>(Path, Language);
 		return true;
 	}
-	catch (const std::exception&)
+	catch (std::exception const& e)
 	{
-		// TODO: log
+		LOGERROR(L"{}"sv, e);
 		return false;
 	}
 }
@@ -766,7 +894,7 @@ void* Plugin::OpenFilePlugin(const wchar_t *Name, const unsigned char *Data, siz
 void* Plugin::Analyse(AnalyseInfo* Info)
 {
 	ExecuteStruct<iAnalyse> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -777,7 +905,7 @@ void* Plugin::Analyse(AnalyseInfo* Info)
 void Plugin::CloseAnalyse(CloseAnalyseInfo* Info)
 {
 	ExecuteStruct<iCloseAnalyse> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -787,7 +915,7 @@ void Plugin::CloseAnalyse(CloseAnalyseInfo* Info)
 void* Plugin::Open(OpenInfo* Info)
 {
 	ExecuteStruct<iOpen> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -798,7 +926,7 @@ void* Plugin::Open(OpenInfo* Info)
 intptr_t Plugin::SetFindList(SetFindListInfo* Info)
 {
 	ExecuteStruct<iSetFindList> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -809,7 +937,7 @@ intptr_t Plugin::SetFindList(SetFindListInfo* Info)
 intptr_t Plugin::ProcessEditorInput(ProcessEditorInputInfo* Info)
 {
 	ExecuteStruct<iProcessEditorInput> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -820,7 +948,7 @@ intptr_t Plugin::ProcessEditorInput(ProcessEditorInputInfo* Info)
 intptr_t Plugin::ProcessEditorEvent(ProcessEditorEventInfo* Info)
 {
 	ExecuteStruct<iProcessEditorEvent> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -831,7 +959,7 @@ intptr_t Plugin::ProcessEditorEvent(ProcessEditorEventInfo* Info)
 intptr_t Plugin::ProcessViewerEvent(ProcessViewerEventInfo* Info)
 {
 	ExecuteStruct<iProcessViewerEvent> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -842,7 +970,7 @@ intptr_t Plugin::ProcessViewerEvent(ProcessViewerEventInfo* Info)
 intptr_t Plugin::ProcessDialogEvent(ProcessDialogEventInfo* Info)
 {
 	ExecuteStruct<iProcessDialogEvent> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -853,7 +981,7 @@ intptr_t Plugin::ProcessDialogEvent(ProcessDialogEventInfo* Info)
 intptr_t Plugin::ProcessSynchroEvent(ProcessSynchroEventInfo* Info)
 {
 	ExecuteStruct<iProcessSynchroEvent> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -864,7 +992,7 @@ intptr_t Plugin::ProcessSynchroEvent(ProcessSynchroEventInfo* Info)
 intptr_t Plugin::ProcessConsoleInput(ProcessConsoleInputInfo *Info)
 {
 	ExecuteStruct<iProcessConsoleInput> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -875,7 +1003,7 @@ intptr_t Plugin::ProcessConsoleInput(ProcessConsoleInputInfo *Info)
 intptr_t Plugin::GetVirtualFindData(GetVirtualFindDataInfo* Info)
 {
 	ExecuteStruct<iGetVirtualFindData> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -886,7 +1014,7 @@ intptr_t Plugin::GetVirtualFindData(GetVirtualFindDataInfo* Info)
 void Plugin::FreeVirtualFindData(FreeFindDataInfo* Info)
 {
 	ExecuteStruct<iFreeVirtualFindData> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -896,7 +1024,7 @@ void Plugin::FreeVirtualFindData(FreeFindDataInfo* Info)
 intptr_t Plugin::GetFiles(GetFilesInfo* Info)
 {
 	ExecuteStruct<iGetFiles> es(-1);
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -907,7 +1035,7 @@ intptr_t Plugin::GetFiles(GetFilesInfo* Info)
 intptr_t Plugin::PutFiles(PutFilesInfo* Info)
 {
 	ExecuteStruct<iPutFiles> es(-1);
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -918,7 +1046,7 @@ intptr_t Plugin::PutFiles(PutFilesInfo* Info)
 intptr_t Plugin::DeleteFiles(DeleteFilesInfo* Info)
 {
 	ExecuteStruct<iDeleteFiles> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -929,7 +1057,7 @@ intptr_t Plugin::DeleteFiles(DeleteFilesInfo* Info)
 intptr_t Plugin::MakeDirectory(MakeDirectoryInfo* Info)
 {
 	ExecuteStruct<iMakeDirectory> es(-1);
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -940,7 +1068,7 @@ intptr_t Plugin::MakeDirectory(MakeDirectoryInfo* Info)
 intptr_t Plugin::ProcessHostFile(ProcessHostFileInfo* Info)
 {
 	ExecuteStruct<iProcessHostFile> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -951,7 +1079,7 @@ intptr_t Plugin::ProcessHostFile(ProcessHostFileInfo* Info)
 intptr_t Plugin::ProcessPanelEvent(ProcessPanelEventInfo* Info)
 {
 	ExecuteStruct<iProcessPanelEvent> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -962,7 +1090,7 @@ intptr_t Plugin::ProcessPanelEvent(ProcessPanelEventInfo* Info)
 intptr_t Plugin::Compare(CompareInfo* Info)
 {
 	ExecuteStruct<iCompare> es(-2);
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -973,7 +1101,7 @@ intptr_t Plugin::Compare(CompareInfo* Info)
 intptr_t Plugin::GetFindData(GetFindDataInfo* Info)
 {
 	ExecuteStruct<iGetFindData> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -984,7 +1112,7 @@ intptr_t Plugin::GetFindData(GetFindDataInfo* Info)
 void Plugin::FreeFindData(FreeFindDataInfo* Info)
 {
 	ExecuteStruct<iFreeFindData> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -994,7 +1122,7 @@ void Plugin::FreeFindData(FreeFindDataInfo* Info)
 intptr_t Plugin::ProcessPanelInput(ProcessPanelInputInfo* Info)
 {
 	ExecuteStruct<iProcessPanelInput> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -1006,7 +1134,7 @@ intptr_t Plugin::ProcessPanelInput(ProcessPanelInputInfo* Info)
 void Plugin::ClosePanel(ClosePanelInfo* Info)
 {
 	ExecuteStruct<iClosePanel> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -1017,7 +1145,7 @@ void Plugin::ClosePanel(ClosePanelInfo* Info)
 intptr_t Plugin::SetDirectory(SetDirectoryInfo* Info)
 {
 	ExecuteStruct<iSetDirectory> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -1028,7 +1156,7 @@ intptr_t Plugin::SetDirectory(SetDirectoryInfo* Info)
 void Plugin::GetOpenPanelInfo(OpenPanelInfo* Info)
 {
 	ExecuteStruct<iGetOpenPanelInfo> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -1039,7 +1167,7 @@ void Plugin::GetOpenPanelInfo(OpenPanelInfo* Info)
 intptr_t Plugin::Configure(ConfigureInfo* Info)
 {
 	ExecuteStruct<iConfigure> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -1051,7 +1179,7 @@ intptr_t Plugin::Configure(ConfigureInfo* Info)
 bool Plugin::GetPluginInfo(PluginInfo* Info)
 {
 	ExecuteStruct<iGetPluginInfo> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return false;
 
 	SetInstance(Info);
@@ -1062,7 +1190,7 @@ bool Plugin::GetPluginInfo(PluginInfo* Info)
 intptr_t Plugin::GetContentFields(GetContentFieldsInfo *Info)
 {
 	ExecuteStruct<iGetContentFields> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -1073,7 +1201,7 @@ intptr_t Plugin::GetContentFields(GetContentFieldsInfo *Info)
 intptr_t Plugin::GetContentData(GetContentDataInfo *Info)
 {
 	ExecuteStruct<iGetContentData> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return es;
 
 	SetInstance(Info);
@@ -1084,7 +1212,7 @@ intptr_t Plugin::GetContentData(GetContentDataInfo *Info)
 void Plugin::FreeContentData(GetContentDataInfo *Info)
 {
 	ExecuteStruct<iFreeContentData> es;
-	if (Global->ProcessException || !Load() || !has(es))
+	if (exception_handling_in_progress() || !Load() || !has(es))
 		return;
 
 	SetInstance(Info);
@@ -1094,33 +1222,38 @@ void Plugin::FreeContentData(GetContentDataInfo *Info)
 void Plugin::ExitFAR(ExitInfo *Info)
 {
 	ExecuteStruct<iExitFAR> es;
-	if (Global->ProcessException || !has(es))
+	if (exception_handling_in_progress() || !has(es))
 		return;
 
 	SetInstance(Info);
 	ExecuteFunction(es, Info);
 }
 
-void Plugin::ExecuteFunctionImpl(export_index const ExportId, function_ref<void()> const Callback)
+void Plugin::ExecuteFunctionImpl(export_index const ExportId, function_ref<void()> const Callback, source_location const& Location)
 {
-	const auto HandleFailure = [&]
+	const auto HandleFailure = [&](DWORD const ExceptionCode = EXIT_FAILURE)
 	{
 		if (use_terminate_handler())
-			std::_Exit(EXIT_FAILURE);
+			os::process::terminate_by_user(ExceptionCode);
 
 		m_Factory->Owner()->UnloadPlugin(this, ExportId);
-		Global->ProcessException = false;
 	};
 
 	seh_try_with_ui(
 	[&]
 	{
-		Prologue(); ++Activity;
-		SCOPE_EXIT{ --Activity; Epilogue(); };
+		Prologue();
+		increase_activity();
+
+		SCOPE_EXIT
+		{
+			decrease_activity();
+			Epilogue();
+		};
 
 		const auto HandleException = [&](const auto& Handler, auto&&... ProcArgs)
 		{
-			Handler(FWD(ProcArgs)..., m_Factory->ExportsNames()[ExportId].AName, this)? HandleFailure() : throw;
+			Handler(FWD(ProcArgs)..., this, Location)? HandleFailure() : throw;
 		};
 
 		cpp_try(
@@ -1130,23 +1263,22 @@ void Plugin::ExecuteFunctionImpl(export_index const ExportId, function_ref<void(
 			rethrow_if(GlobalExceptionPtr());
 			m_Factory->ProcessError(m_Factory->ExportsNames()[ExportId].AName);
 		},
-		[&]
+		[&](source_location const&)
 		{
 			HandleException(handle_unknown_exception);
 		},
-		[&](std::exception const& e)
+		[&](std::exception const& e, source_location const&)
 		{
 			HandleException(handle_std_exception, e);
-		});
+		},
+		Location);
 	},
-	[&]
-	{
-		HandleFailure();
-	},
-	m_Factory->ExportsNames()[ExportId].AName, this);
+	HandleFailure,
+	this,
+	Location);
 }
 
-class custom_plugin_module: public i_plugin_module
+class custom_plugin_module final: public i_plugin_module
 {
 public:
 	NONCOPYABLE(custom_plugin_module);
@@ -1157,15 +1289,15 @@ private:
 	void* m_Opaque;
 };
 
-class custom_plugin_factory: public plugin_factory
+class custom_plugin_factory final: public plugin_factory
 {
 public:
 	NONCOPYABLE(custom_plugin_factory);
-	custom_plugin_factory(PluginManager* Owner, const string& Filename):
+	custom_plugin_factory(PluginManager* Owner, const string_view Filename):
 		plugin_factory(Owner),
 		m_Imports(Filename)
 	{
-		GlobalInfo Info = { sizeof(Info) };
+		GlobalInfo Info{ sizeof(Info) };
 
 		if (m_Imports.IsValid() &&
 			m_Imports.pInitialize(&Info) &&
@@ -1191,16 +1323,16 @@ public:
 		if (!m_Success)
 			return;
 
-		ExitInfo Info = { sizeof(Info) };
+		ExitInfo Info{ sizeof(Info) };
 		m_Imports.pFree(&Info);
 		custom_plugin_factory::ProcessError(m_Imports.pFree.name());
 	}
 
 	bool Success() const { return m_Success; }
 
-	bool IsPlugin(const string& Filename) const override
+	bool IsPlugin(const string& FileName) const override
 	{
-		const auto Result = m_Imports.pIsPlugin(Filename.c_str()) != FALSE;
+		const auto Result = m_Imports.pIsPlugin(FileName.c_str()) != FALSE;
 		ProcessError(m_Imports.pIsPlugin.name());
 		return Result;
 	}
@@ -1238,14 +1370,14 @@ public:
 		if (!m_Imports.pGetError)
 			return;
 
-		ErrorInfo Info = { sizeof(Info) };
+		ErrorInfo Info{ sizeof(Info) };
 		if (!m_Imports.pGetError(&Info))
 			return;
 
 		std::vector<string> MessageLines;
-		const string Summary = concat(Info.Summary, L" ("sv, encoding::utf8::get_chars(Function), L')');
+		const string Summary = concat(Info.Summary, L" ("sv, encoding::ansi::get_chars(Function), L')');
 		const auto Enumerator = enum_tokens(Info.Description, L"\n"sv);
-		std::transform(ALL_CONST_RANGE(Enumerator), std::back_inserter(MessageLines), [](const string_view View) { return string(View); });
+		std::ranges::transform(Enumerator, std::back_inserter(MessageLines), [](const string_view View) { return string(View); });
 		Message(MSG_WARNING | MSG_LEFTALIGN,
 			Summary,
 			MessageLines,
@@ -1276,17 +1408,17 @@ private:
 	public:
 #define DECLARE_IMPORT_FUNCTION(name, ...) os::rtdl::function_pointer<__VA_ARGS__> p ## name{ m_Module, #name }
 
-		DECLARE_IMPORT_FUNCTION(Initialize,            BOOL(WINAPI*)(GlobalInfo* info));
-		DECLARE_IMPORT_FUNCTION(IsPlugin,              BOOL(WINAPI*)(const wchar_t* filename));
-		DECLARE_IMPORT_FUNCTION(CreateInstance,        HANDLE(WINAPI*)(const wchar_t* filename));
-		DECLARE_IMPORT_FUNCTION(GetFunctionAddress,    void*(WINAPI*)(HANDLE Instance, const wchar_t* functionname));
-		DECLARE_IMPORT_FUNCTION(GetError,              BOOL(WINAPI*)(ErrorInfo* info));
-		DECLARE_IMPORT_FUNCTION(DestroyInstance,       BOOL(WINAPI*)(HANDLE Instance));
-		DECLARE_IMPORT_FUNCTION(Free,                  void (WINAPI*)(const ExitInfo* info));
+		DECLARE_IMPORT_FUNCTION(Initialize,            BOOL   WINAPI(GlobalInfo* info));
+		DECLARE_IMPORT_FUNCTION(IsPlugin,              BOOL   WINAPI(const wchar_t* filename));
+		DECLARE_IMPORT_FUNCTION(CreateInstance,        HANDLE WINAPI(const wchar_t* filename));
+		DECLARE_IMPORT_FUNCTION(GetFunctionAddress,    void*  WINAPI(HANDLE Instance, const wchar_t* functionname));
+		DECLARE_IMPORT_FUNCTION(GetError,              BOOL   WINAPI(ErrorInfo* info));
+		DECLARE_IMPORT_FUNCTION(DestroyInstance,       BOOL   WINAPI(HANDLE Instance));
+		DECLARE_IMPORT_FUNCTION(Free,                  void   WINAPI(const ExitInfo* info));
 
 #undef DECLARE_IMPORT_FUNCTION
 
-		explicit ModuleImports(const string& Filename):
+		explicit ModuleImports(const string_view Filename):
 			m_Module(Filename),
 			m_IsValid(pInitialize && pIsPlugin && pCreateInstance && pGetFunctionAddress && pGetError && pDestroyInstance && pFree)
 		{
@@ -1303,7 +1435,7 @@ private:
 	bool m_Success{};
 };
 
-plugin_factory_ptr CreateCustomPluginFactory(PluginManager* Owner, const string& Filename)
+plugin_factory_ptr CreateCustomPluginFactory(PluginManager* const Owner, const string_view Filename)
 {
 	auto Model = std::make_unique<custom_plugin_factory>(Owner, Filename);
 	if (!Model->Success())

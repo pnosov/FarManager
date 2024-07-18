@@ -35,20 +35,14 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#ifdef _MSC_VER
-#if !defined __clang__ && _MSC_FULL_VER < 191627023
-#error Visual C++ 2017 Update 9 (or higher) required
-#endif
-#endif //_MSC_VER
+#include "common/compiler.hpp"
 
-
-#ifdef __GNUC__
-#define GCC_VER_(gcc_major,gcc_minor,gcc_patch) (100*(gcc_major) + 10*(gcc_minor) + (gcc_patch))
-#define _GCC_VER GCC_VER_(__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__)
-
-#if !defined __clang__ && _GCC_VER < GCC_VER_(8,1,0)
-#error gcc 8.1.0 (or higher) required
-#endif
+#if !CHECK_COMPILER(CL, 19, 29, 30148)
+#error Visual C++ 2019 Update 16.11.24 (or higher) required
+#elif !CHECK_COMPILER(GCC, 12, 0, 0)
+#error GCC 12.0.0 (or higher) required
+#elif !CHECK_COMPILER(CLANG, 16, 0, 0)
+#error Clang 16.0.0 (or higher) required
 #endif
 
 #ifdef __GNUC__
@@ -56,9 +50,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // These semi-magical defines and appropriate overloads in cpp.hpp are intended to fix this madness.
 
 // Force C version to return const
+#undef _CONST_RETURN
 #define _CONST_RETURN const
 // Disable broken inline overloads
 #define __CORRECT_ISO_CPP_WCHAR_H_PROTO
+// Enable inline overloads in common/cpp.hpp
+#define FAR_ENABLE_CORRECT_ISO_CPP_WCHAR_H_OVERLOADS
 #endif
 
 #include "disable_warnings_in_std_begin.hpp"
@@ -68,8 +65,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <any>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bitset>
 #include <chrono>
+#include <compare>
+#include <concepts>
+#include <exception>
 #include <forward_list>
 #include <fstream>
 #include <functional>
@@ -84,9 +85,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <numeric>
 #include <optional>
 #include <random>
+#include <ranges>
 #include <regex>
 #include <set>
-#include <shared_mutex>
+#include <span>
 #include <sstream>
 #include <stack>
 #include <string>
@@ -95,6 +97,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -103,33 +106,44 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <cfloat>
 #include <climits>
 #include <cmath>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <cwchar>
 #include <cwctype>
 
-#include <fcntl.h>
-#include <io.h>
-#include <process.h>
-#include <share.h>
-
 //----------------------------------------------------------------------------
 #include "disable_warnings_in_std_end.hpp"
 
-#include "cpp.hpp"
+#include "common/cpp.hpp"
 
 using string = std::wstring;
 using string_view = std::wstring_view;
+using size_t = std::size_t;
 
 inline namespace literals
 {
 	using namespace std::literals;
 }
 
-static_assert(std::is_unsigned_v<char>);
+// Basic sanity checks to avoid surprizes
+
+// char must be unsigned: we use it for indexing in a few places
+static_assert(std::unsigned_integral<char>);
+
+// wchar_t must be 16-bit: we have lookup tables
 static_assert(sizeof(wchar_t) == 2);
+
+// C and by extension C++ standard define it as uint_least16_t, which is insane.
+static_assert(sizeof(char16_t) == 2);
+
+// C and by extension C++ standard define it as uint_least32_t, which is insane.
+static_assert(sizeof(char32_t) == 4);
+
+// source encoding must be UTF-8, we use various special characters directly
 static_assert("𠜎"sv == "\xF0\xA0\x9C\x8E"sv);
 
 

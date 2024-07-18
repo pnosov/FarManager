@@ -1,45 +1,30 @@
-!include ../makefile_vc_base
-
 ANSI = 1
 NAME = MultiArc
 LINK_OBJS = \
-	$(OBJDIR)\MultiArc.obj \
-	$(OBJDIR)\ArcCfg.obj \
-	$(OBJDIR)\ArcCmd.obj \
-	$(OBJDIR)\ArcGet.obj \
-	$(OBJDIR)\ArcMix.obj \
-	$(OBJDIR)\ArcPlg.obj \
-	$(OBJDIR)\ArcProc.obj \
-	$(OBJDIR)\ArcPut.obj \
-	$(OBJDIR)\ArcRead.obj \
-	$(OBJDIR)\ArcReg.obj \
-	$(OBJDIR)\global.obj
+	$(INTDIR)\MultiArc.obj \
+	$(INTDIR)\ArcCfg.obj \
+	$(INTDIR)\ArcCmd.obj \
+	$(INTDIR)\ArcGet.obj \
+	$(INTDIR)\ArcMix.obj \
+	$(INTDIR)\ArcPlg.obj \
+	$(INTDIR)\ArcProc.obj \
+	$(INTDIR)\ArcPut.obj \
+	$(INTDIR)\ArcRead.obj \
+	$(INTDIR)\ArcReg.obj \
+	$(INTDIR)\global.obj
 
 DOCS = \
-	arceng.hlf \
-	arcrus.hlf \
-	arcger.hlf \
-	arcukr.hlf \
-	arceng.lng \
-	arcrus.lng \
-	arcspa.lng \
-	arcita.lng \
-	arcbel.lng \
-	arcger.lng \
-	arcukr.lng \
-	MultiArc.TryIfNoOther.reg \
-	changelog
+	MultiArc.TryIfNoOther.reg
 
 USERCPP=/wd4996
 
 !include ..\makefile_vc_def_inc
-
 !include ..\makefile_vc_target_inc
 
 ALL: dirs libpcre fmtdir fmts
 	@copy /Y Custom.ini $(OUTDIR)\Formats\*.* 1>nul
 
-FMTLIST=Custom Ace Arc Arj Cab Ha Lzh Rar TarGz Zip
+FMTLIST=custom ace arc arj cab ha lzh rar targz zip
 
 $(RES): multiarcversion.hpp
 
@@ -66,5 +51,5 @@ $(FMTLIST): $(FICTIVE)
 !ifndef INSTALL
 	@$(MAKE) $(_MKHIDE) /f makefile_vc_fmt $(_MKDO_)FMT=$@ $(_MDEFS)
 !else
-	@$(MAKE) $(_MKHIDE) /f makefile_vc_fmt $(_MKDO_)FMT=$@ $(_MDEFS) INSTALL=$(INSTALL)
+	@$(MAKE) $(_MKHIDE) /f makefile_vc_fmt $(_MKDO_)FMT=$@ $(_MDEFS) $(_MKDO)INSTALL=$(INSTALL)
 !endif

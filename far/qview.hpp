@@ -51,9 +51,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 class Viewer;
 
-class QuickView:public Panel
+class QuickView final: public Panel
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
+
 public:
 	static qview_panel_ptr create(window_ptr Owner);
 	QuickView(private_tag, window_ptr Owner);
@@ -68,7 +69,7 @@ private:
 	void Update(int Mode) override;
 	void CloseFile() override;
 	void QViewDelTempName() override;
-	void UpdateIfChanged(bool Idle) override;
+	void UpdateIfChanged(bool Changed = false) override;
 	void RefreshTitle() override;
 	string GetTitle() const override;
 	void UpdateKeyBar() override;
@@ -86,10 +87,10 @@ private:
 	UserDataItem CurUserData{};
 	string strCurFileType;
 	DirInfoData Data;
-	bool OldWrapMode;
-	bool OldWrapType;
-	bool m_TemporaryFile;
-	bool uncomplete_dirscan;
+	bool OldWrapMode{};
+	bool OldWrapType{};
+	bool m_TemporaryFile{};
+	bool uncomplete_dirscan{};
 
 	enum class scan_status
 	{

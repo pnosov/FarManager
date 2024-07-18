@@ -47,10 +47,9 @@
 
 @Contents
 $^#Fájl- és archívumkezelő program#
-`$^#'FULLVERSION`#'
+$^#M4_MACRO_GET(FULLVERSION)#
 $^#Copyright © 1996-2000 Eugene Roshal#
-`$^#Copyright © 2000-'COPYRIGHTYEAR` Far Group#'
-$^(help file last translated for build 882)
+$^#Copyright © 2000-M4_MACRO_GET(COPYRIGHTYEAR) Far Group#
  ~A súgó betűrendes tartalomjegyzéke~@Index@
  ~A súgó használata~@Help@
 
@@ -87,6 +86,7 @@ $^(help file last translated for build 882)
  ~Fájltársítások~@FileAssoc@
  ~Operációs rendszer parancsok~@OSCommands@
  ~Mappa gyorsbillentyűk~@FolderShortcuts@
+ ~Sort groups~@SortGroups@
  ~Szűrők menü~@FiltersMenu@
  ~Képernyők váltása~@ScrSwitch@
  ~Futó programok~@TaskList@
@@ -112,6 +112,8 @@ $^(help file last translated for build 882)
 
  ~Fájlmaszkok~@FileMasks@
  ~Makrók~@KeyMacro@
+
+ ~Customizing UI elements~@CustomizingUI@
 
 
 @Help
@@ -218,9 +220,9 @@ nem üres, a gyorsítótárból töltődnek be a pluginek;
  - ^<wrap>a -co kapcsolót a Far figyelmen kívül hagyja, ha -p is áll
 mellette;
  - ^<wrap>ha sem a -p, sem a -co kapcsoló nem szerepel a parancssorban,
-akkor a pluginek csak az alapértelmezett plugin mappából, valamint a
-~saját pluginek elérési útvonala~@SystemSettings@ által meghatározott
-mappákból töltődnek be.
+akkor a pluginek will be loaded from the 'Plugins'
+folder, which is in the same folder as Far.exe, and the 'Plugins' folder, which is in the
+user profile folder (#%APPDATA%\\Far Manager\\Profile# by default).
 
  #-m#
  A Far induláskor nem tölti be a registryből a makróit.
@@ -239,7 +241,7 @@ mappákból töltődnek be.
 a <felhasználónév> értéket adja.
 
  #-v <fájlnév>#
- Megnézi a megadott fájlt. Ha a <fájlnév> #-#, akkor az
+ Megnézi a megadott fájlt. Ha a <fájlnév> `#-#', akkor az
 stdin adatát olvassa ki.
 
  Például a "dir|far -v -" a dir parancs kimenetét fogja
@@ -251,7 +253,7 @@ végtelenségig fog várakozni a bemenő adatfolyam végére. Ezt a hibát a Far
 egy későbbi verziójában a szerzők valószínűleg ki fogják javítani.
 
  #-w[-]#
- Stretch to console window instead of console buffer or vice versa.
+ Show the interface within the console window instead of the console buffer or vice versa.
 
  #-t templateprofile#
  Location of Far template configuration file (overrides the ini file).
@@ -296,7 +298,6 @@ Single letter prefixes A-Z or conflicted with disk letter will be ignored.
 
 @KeyRef
 $ #Billentyűparancsok#
-
  ~Panelvezérlő parancsok~@PanelCmd@
 
  ~Parancssor~@CmdLineCmd@
@@ -318,8 +319,35 @@ $ #Billentyűparancsok#
 $ #Menu control commands#
  #Common menu and drop-down list commands#
 
- Filter menu or list items                          #Ctrl+Alt+F,RAlt#
- Lock filter                                             #Ctrl+Alt+L#
+ #Ctrl+Alt+F#, #RAlt#
+ Filter menu or list items.
+
+ #Ctrl+Alt+L#
+ Lock filter.
+
+ #Alt+Left#, #Alt+Right#, #MsWheelLeft#, #MsWheelRight#
+ Scroll all items horizontally.
+
+ #Alt+Shift+Left#, #Alt+Shift+Right#
+ Scroll the selected item horizontally.
+
+ #Ctrl+Alt+Left#, #Ctrl+Alt+Right#, #Ctrl+MsWheelLeft#, #Ctrl+MsWheelRight#
+ Scroll all items horizontally by 20 characters.
+
+ #Ctrl+Shift+Left#, #Ctrl+Shift+Right#
+ Scroll the selected item horizontally by 20 characters.
+
+ #Alt+Home#
+ Align all items to the left.
+
+ #Alt+End#
+ Align all items to the right.
+
+ #Alt+Shift+Home#
+ Align the selected item to the left.
+
+ #Alt+Shift+End#
+ Align the selected item to the right.
 
  See also the list of ~macro keys~@KeyMacroMenuList@, available in the menus.
 
@@ -332,8 +360,8 @@ $ #Panelvezérlő parancsok#
  Panelek megcserélése                                        #Ctrl+U#
  Panel frissítése                                            #Ctrl+R#
  Info panel be/ki                                            #Ctrl+L#
- ~Gyorsnézet~@QViewPanel@ panel be/ki                                      #Ctrl+Q#
- Fastruktúra panel be/ki                                     #Ctrl+T#
+ ~Gyorsnézet panel~@QViewPanel@ be/ki                                      #Ctrl+Q#
+ ~Fastruktúra panel~@TreePanel@ be/ki                                     #Ctrl+T#
  Mindkét panelt elrejti/megmutatja                           #Ctrl+O#
  Átmenetileg elrejti mindkét panelt                  #Ctrl+Alt+Shift#
  (amíg a billentyűk le vannak nyomva)
@@ -348,11 +376,11 @@ $ #Panelvezérlő parancsok#
  Megmutatja/elrejti a funkcióbillentyűk sorát                #Ctrl+B#
  a képernyő alján
  Toggle total and free size show mode                  #Ctrl+Shift+S#
- in bytes (if possible) or with size suffices K/M/G/T
+ in bytes (if possible) or with size suffixes K/M/G/T
 
  #Fájlpanel parancsok#
 
- Fájlokat kijelöl/kijelölést levesz           #Ins, Shift+Kurzorbill#
+ ~Fájlokat kijelöl/kijelölést levesz~@SelectFiles@           #Ins, Shift+Kurzorbill#
                                                  #Right mouse button#
  Csoport kijelölése                                        #Szürke +#
  Csoportkijelölést levesz                                  #Szürke -#
@@ -362,11 +390,10 @@ $ #Panelvezérlő parancsok#
  A kijelölést leveszi az aktuális fájl              #Ctrl+<Szürke ->#
  kiterjesztésével megegyező fájlokról
  A kijelölést megfordítja a mappákon is             #Ctrl+<Szürke *>#
- (a parancssor állapotától és a mappák
- kijelölhetőségi opciójától függetlenül)
  Kijelöli az aktuális fájllal azonos nevű fájlokat   #Alt+<Szürke +>#
  A kijelölést leveszi az aktuális fájllal            #Alt+<Szürke ->#
  megegyező nevű fájlokról
+ Invert selection on files, deselect folders         #Alt+<Szürke *>#
  Minden fájl kijelölése                            #Shift+<Szürke +>#
  Minden fájlról leveszi a kijelölést               #Shift+<Szürke ->#
  Visszaállítja az előző kijelölést                           #Ctrl+M#
@@ -478,7 +505,46 @@ aktív panelre fog vonatkozni. A következő rendezési módok használhatók:
  Rendezési csoport használata                             #Shift+F11#
  A kijelölt fájlok előre kerülnek                         #Shift+F12#
 
+ You can ~fine-tune~@PanelSortCriteria@ sort modes by pressing #F4#.
+
  See also: common ~menu~@MenuCmd@ keyboard commands.
+
+
+@PanelSortCriteria
+$ #Sort criteria#
+ When files are considered equivalent using the selected sort mode, additional sort criteria are taken into account.
+ For example, if files are sorted by size and both "a.txt" and "b.txt" have the same size, "a.txt" will come first, as if they were sorted by name.
+ In this menu you can adjust the set of criteria associated with the selected sort mode.
+
+ #Ins#
+ Add a criterion to the set.
+
+ #Del#
+ Remove the selected criterion.
+
+ #F4#
+ Replace the selected criterion.
+
+ #+#
+ Use ascending order.
+
+ #-#
+ Use descending order.
+
+ #*#
+ Change the order.
+
+ #=#
+ Inherit the order from the corresponding sort mode.
+
+ #Ctrl+Up#
+ Move the criterion up.
+
+ #Ctrl+Down#
+ Move the criterion down.
+
+ #Ctrl+R#
+ Reset the set of criteria to default.
 
 
 @FastFind
@@ -703,9 +769,7 @@ kurzor fájlon áll, a fájl típusához ~társított parancsot~@FileAssoc@ hajt
 végre, vagy belép a tömörítettbe.
 
  Visszalépés a szülőmappába                               #Ctrl+PgUp#
- Ha a "Kezelőfelület beállítások" ~A Ctrl+PgUp meghajtót vált~@InterfSettings@
-opcióját engedélyeztük, a meghajtók gyökerében a #Ctrl+PgUp#
-lenyomása a hálózati plugint hívja meg, vagy a ~Meghajtók~@DriveDlg@ menüt.
+ The behavior in root folders depends on "~Use Ctrl+PgUp to change drive~@InterfSettings@" option.
 
  Gyorsbillentyűt rendel az aktuális mappához         #Ctrl+Shift+0…9#
 
@@ -742,7 +806,7 @@ a #Shift+F8# a törölt fájlokat a Lomtárba teszi-e vagy sem. Ezzel szemben
 a #Shift+Del# mindig a Lomtár kihagyásával töröl.
 
  2. Kisöprésnél (#Alt+Del#) a Far a fájl adatait törlés előtt nullákkal
-írja felül (a TechInfo##29-ben elolvasható, hogyan lehet zéró helyett más
+írja felül (a ~System.WipeSymbol~@System.WipeSymbol@-ben elolvasható, hogyan lehet zéró helyett más
 felülíró karaktert megadni), ezután a fájl méretét nulla hosszúságúra
 állítja, átmeneti nevet ad neki, végül törli.
 
@@ -804,7 +868,13 @@ sztringek mindig megmaradnak.
  Párbeszédablak szerkesztési előzmény aktuális elemének   #Shift+Del#
  törlése (ha az elem nincs rögzítve)
 
- A párbeszédablak alapértelmezett elemére állítja a kurzort    #PgDn#
+ Set the dialog focus to the first element                     #Home#
+
+ A párbeszédablak alapértelmezett                         #PgDn, End#
+ elemére állítja a kurzort
+
+ The #Home# and #End# keys move the focus if it is currently not
+on a control which handles these keys internally, like edit control.
 
  Ez a billentyűkombináció minden szerkesztett sornál működik,
 beleértve a párbeszédablakokat és a ~belső szerkesztőt~@Editor@ is, kivéve a parancssort.
@@ -885,7 +955,7 @@ feleslegesen nem foglalnak memóriát. Ha biztosak vagyunk benne, hogy egyes
 plugineket soha nem használunk, törlésükkel lemezterületet takaríthatunk meg.
 
  A pluginek meghívhatók a ~Meghajtók~@DriveDlg@ menüből, a
-#Plugin parancsok# menüből az #F11# leütésével és a ~Parancsok~@CmdMenu@
+~Plugin parancsok~@PluginCommands@ menüből az #F11# leütésével és a ~Parancsok~@CmdMenu@
 menüből is. A "Plugin parancsok" menüben az #F4#-gyel
 gyorsbillentyűt rendelhetünk a menü elemeihez, ezáltal egyszerűbben,
 ~makrókból~@KeyMacro@ hívhatók meg. A pluginek meghívhatók a
@@ -1196,7 +1266,6 @@ battery life time and battery life percent. Without smart battery subsystems, th
     ^<wrap>In Windows Vista and above charge status is update automatically.
     ^<wrap>Power status section can be turned on and off in ~settings~@InfoPanelSettings@.
 
-
  All sections (except computer and user names) can be hidden or shown (see ~InfoPanel display modes~@InfoPanelShowMode@).
 
  Also see the list of ~macro keys~@KeyMacroInfoList@, available in the info panel.
@@ -1259,7 +1328,6 @@ Supported types: CD-ROM, CD-RW, CD-RW/DVD, DVD-ROM, DVD-RW and DVD-RAM.
  The output format depends on the domain structure, group policies and DNS settings.
 
  #User name format#
-
  Can be one of:
 
  - #Bejelentkezési név#
@@ -1311,7 +1379,7 @@ valódi méretét, beleértve a meddő lemezterületet (a kihasználatlan
 klaszterrészek összegét) jeleníti meg. A tömörített méretnek csak NTFS
 meghajtókon van értelme.
 
- Reparse pontoknál a forrásmappa elérési útja is megjelenik.
+ ~Reparse pontoknál~@HardSymLink@ a forrásmappa elérési útja is megjelenik.
 
  Mappáknál a teljes méret értéke eltérhet a valóságostól, ha:
  - ^<wrap>A mappa vagy a mappa almappái szimbolikus linkeket tartalmaz(nak) és
@@ -1478,6 +1546,7 @@ információk a ~mappakeresés~@FindFolder@ témakörben.
 ~megnézett vagy szerkesztett~@HistoryViews@ fájlok listáját mutatja meg.
 
  #Mappa előzmények#     ^<wrap>A bejárt ~mappák előzményeit~@HistoryFolders@
+
 jeleníti meg. A "Mappa előzmények" és a "Fájl előzmények" listák elemei
 kiválasztás után a lista aljára kerülnek. Ezt elkerülhetjük, ha Enter helyett
 #Shift+Enterrel# választunk közülük.
@@ -1501,6 +1570,8 @@ pedig szerkeszthetjük a fájlok társításait.
 
  #Mappa#                A ~mappa gyorsbillentyűk~@FolderShortcuts@ aktuális
  #gyorsbillentyűk#      összerendeléseit jeleníti meg.
+
+ #Edit sort groups#     Allows to edit user defined ~sort groups~@SortGroups@.
 
  #Fájlpanel szűrő#      A fájlpanelek tartalmát szűrhetjük.
                       ^<wrap>A ~Szűrők menü~@FiltersMenu@ témakör
@@ -1526,14 +1597,17 @@ $ #Menük: Beállítások menü#
 
  #Fastruktúra#           A ~fastruktúra beállítások~@TreeSettings@
  #beállítások#           párbeszédablakot jeleníti meg.
+                       Available only if ~Panel.Tree.TurnOffCompletely~@Panel.Tree.TurnOffCompletely@
+                       parameter in ~far:config~@FarConfig@ is set to “false.”
 
  #Kezelőfelület#         A ~kezelőfelület beállítások~@InterfSettings@
  #beállítások#           párbeszédablakot jeleníti meg.
 
  #Nyelvek#               A program és a súgó nyelve választható ki.
                        ^<wrap>Használjuk a "Beállítások mentése" funkciót!
+                       You can ~customize UI elements~@CustomizingUI@ to you needs and taste.
 
- #Plugin#                A ~pluginek~@Plugins@ működése állítható be, a pluginek
+ #Plugin#                A ~pluginek~@PluginsConfig@ működése állítható be, a pluginek
  #beállítások#           beállítási párbeszédablakaiban.
 
  #Plugin manager#        Shows ~Plugin manager settings~@PluginsManagerSettings@ dialog.
@@ -1562,9 +1636,8 @@ funkcióval.
  #fájlok#                mely fájlokból olvassa ki a Far. Beállíthatók
                        a megjelenítés és frissítés jellemzői is.
 
- #Mappa megjegyzés-#     Megadható, hogy az ~info panel~@InfoPanel@ mely
- #fájlok#                fájlokat jelenítse meg mappa megjegyzésként
-                       (~joker~@FileMasks@ karakter is megengedett).
+ #Mappa megjegyzés-#     Shows ~Folder description files~@FolderDiz@ dialog.
+ #fájlok#
 
  #Nézőke beállítások#    A külső és belső ~nézőke beállításai~@ViewerSettings@.
 
@@ -1573,9 +1646,7 @@ funkcióval.
 
  #Code pages#            Shows the ~Code pages~@CodePagesMenu@ menu.
 
- #Színek#                ^<wrap>Kiválasztható minden egyes képernyőelem
-színe, a Far teljes palettája fekete-fehérre cserélhető vagy visszaállítható
-az eredeti színkombináció.
+ #Színek#                Shows the ~Color groups~@ColorGroups@ menu.
 
  #Fájlkiemelések,#       A ~fájlkiemelések, rendezési csoportok~@Highlight@
  #rendezési csoportok#   beállításai.
@@ -1697,6 +1768,11 @@ szövegrészeket, ha a megadott karaktersort a többitől a szóköz, tabulátor
 soremelés karakter választja el, vagy a szabványos határoló karakterek,
 amelyek alapértelmezés szerint: #!%^&*()+|{}:"<>?`-=\\[];',./#.
 
+ #Fuzzy search# is diacritical insensitive, treats ligatures equivalent
+to their corresponding multicharacter sequences and fancy numerals
+to corresponding number characters, and ignores some other minor
+differences.
+
  A #Keresés hexákra# opcióval hexadecimális számsorokat adhatunk meg
 keresési feltételként. Ebben az esetben a #Nagy/kisbetű érzékeny#, a
 #Csak egész szavak#, a #Kódlap# és a #Keresés mappákra# opciók
@@ -1709,7 +1785,7 @@ figyelembe a keresés során.
 egy konkrét kódlapot, vagy megjelölhető a #Minden kódlappal# lehetőség is,
 utóbbi esetben a Far a szabványos és a #Kedvenc# kódlapok szerint keresi a
 szövegeket a fájlokban. A #Kedvenc# kódlapokat a nézőke vagy a szerkesztő
-kódlapválasztó párbeszédablakában (Shift+F8) jelölhetjük ki. Ha a
+~kódlapválasztó~@CodepagesMenu@ párbeszédablakában (Shift+F8) jelölhetjük ki. Ha a
 #Minden kódlappal# opciót választottuk, de a kódlapok kínálatát túlzóan
 bőségesnek találjuk, az #Ins# vagy a #Space# billentyűvel leszűkíthetjük
 a szabványos és #Kedvenc# kódlapok körét, így kizárólag a megjelölt
@@ -1803,7 +1879,6 @@ The following column types are supported:
  LN         - number of hard links
 
  F          - number of alternate streams
-
 
  File attributes are denoted as follows:
 
@@ -1977,13 +2052,13 @@ The logic at work this option is similar to arithmetic with negative numbers.
  <= 0  - select files in the period from the "Today"
  >= 30 - and 30-days ago, including
 
-
  #Attribútumok#
  Befoglaló és kizáró attribútumok.
 
  A szűrőfeltételek akkor teljesülnek, ha az
 attribútumelemzés be van kapcsolva és a fájl minden megadott befoglaló
 attribútummal rendelkezik, de nincs egyetlen kizáró attribútuma sem:
+
  #[x]# - ^<wrap>befoglaló attribútum - a fájlnak rendelkeznie kell az attribútummal;
  #[ ]# - ^<wrap>kizáró attribútum - a fájlnak nem lehet ilyen attribútuma;
  #[?]# - ^<wrap>az attribútum értéke nem számít.
@@ -1991,7 +2066,6 @@ attribútummal rendelkezik, de nincs egyetlen kizáró attribútuma sem:
 A #Tömörített#, #Titkosított#, #Nem indexelt#, #Ritkított#, #Átmeneti# és #Offline# attribútum csak NTFS fájlrendszerű
 lemezeken létezik. A #Virtuális# attribútumot csak a Windows Vista/2008 operációs rendszerek használják.
 The #Integrity stream# and #No scrub data# attributes are supported only on ReFS volumes starting from Windows Server 2012.
-
 
  #Has more than one hardlink#
  Used only on disks with NTFS file system. Condition evaluates to true,
@@ -2031,16 +2105,14 @@ $ #Parancs előzmények#
 parancssorból szeretnénk meghívni, használjuk a #Ctrl+E# vagy
 a #Ctrl+X# billentyűket.
 
- Ha parancsot szeretnénk választani a listából, a kurzorvezérlőkön
-és az #Enteren# kívül használhatjuk közvetlenül a parancs kiemelt
-betűjelét is.
-
  Ha azt szeretnénk, hogy a Far kilépéskor elmentse a parancsok
 előzményét, jelöljük be a megfelelő opciót a ~Rendszer beállítások~@SystemSettings@
 párbeszédablakban.
 
  A zárolt előzményelemek nem törlődnek az előzménylista módosulása
 vagy törlése esetén sem.
+
+ See also: common ~menu~@MenuCmd@ keyboard commands.
 
 
 @HistoryViews
@@ -2301,6 +2373,7 @@ Windowsban definiált társításokat alkalmazni.
 szabhatunk. Ha azonos fájltípushoz több különböző társítást adtunk meg, az
 említett szabályok hatására a menüben csak a feltételeknek megfelelő
 társítások jelennek meg.
+ 3. ^<wrap>If the specified mask is a regular expression, its capturing groups can be referenced in the commands as %RegexGroup#N# or %RegexGroup{#Name#}.
 
 
 @MetaSymbols
@@ -2358,6 +2431,22 @@ vonatkozik (lásd 4-es számú megjegyzés). Például a !^!.! szimbólum az akt
 panel aktuális fájljára utal, a !##!\\!^!.! pedig a passzív panelen lévő fájl
 nevére és az aktív panel aktuális, azonos nevű fájljára utal.
 
+ #![#
+ "![" prefix forces all subsequent special symbols
+to refer to the left panel (see note 4).
+For example, ![!.! denotes a current file name on
+the left panel, ![!\\!^!.! - a file on the left
+panel with the same name as the name of the current
+file on the active panel.
+
+ #!]#
+ "!]" prefix forces all subsequent special symbols
+to refer to the right panel (see note 4).
+For example, !]!.! denotes a current file name on
+the right panel, !]!\\!^!.! - a file on the right
+panel with the same name as the name of the current
+file on the active panel.
+
  Megjegyzések:
 
  1. ^<wrap>A Far a különleges szimbólumok kezelésénél kizárólag a
@@ -2387,7 +2476,7 @@ selected file names, in ANSI encoding, with full pathnames, each enclosed in quo
 eredeti alakjában jelenik meg a menüben. Ezeket a Far a parancs
 végrehajtásakor fogja értelmezni.
 
- 4. ^<wrap>A "!##" és a "!^" előtag a hivatkozások paneloldali
+ 4. ^<wrap>A "!##", "!^", "![" és a "!]" előtag a hivatkozások paneloldali
 átkapcsolójaként szolgál. Az ilyen előtag hatóköre a sorban utána következő,
 szintén átkapcsoló előtagig terjed. Például:
 
@@ -2427,12 +2516,6 @@ megnyitott fájlok másolására, de veszélyessé is válhat, ha a fájl a más
 során a normál mappák mérete, valamint a ~szimbolikus linkjeik~@HardSymLink@
 mérete együttesen fogják meghatározni a mappákban található fájlok méretének összegét.
 
- #Update panels only when Far is active#
- If enabled, file panels will be monitored only when Far is active, i.e. panels will not be updated until Far window is focused.
-This allows to avoid blocking the directories opened on panels.
-However, sometimes the update is not triggered after receiving focus,
-so this option is disabled by default and directories are always monitored.
-
  #Parancs előzmények mentése#
  A Far kilépés előtt elmenti, indításnál visszatölti a ~parancs előzményeket~@History@.
 
@@ -2449,11 +2532,6 @@ A mappa előzmények listája az #Alt+F12#-vel is megjeleníthető.
 Windows ismer és a típus nem szerepel a Far
 ~fájltársítások~@FileAssoc@ listáján, a Windows a saját társítású programjával
 próbálja megnyitni.
-
- #CD tálca automatikus behúzása#
- Ha CD-ROM típusú meghajtót választottunk a ~Meghajtók menüben~@DriveDlg@, a Far megpróbálja
-behúzni a meghajtó nyitott tálcáját. Kapcsoljuk ki az opciót, ha nem működik
-megfelelően (néhány CD-ROM meghajtó hibás drivere miatt ez előfordulhat).
 
  #Automatic update of environment variables#
  Automatically update the environment variables if they have been changed globally.
@@ -2576,11 +2654,8 @@ mappát vált. Ha nincs engedélyezve, a fastruktúrán a mappaváltáshoz #Ente
 
 @InterfSettings
 $ #Beállítások: kezelőfelület beállítások#
- #Óra a paneleken#
+ #Óra#
  Megjeleníti az órát a képernyő jobb felső sarkában.
-
- #Óra a nézőkében és a szerkesztőben#
- Megjeleníti az órát a nézőkében és a szerkesztőben is.
 
  #Egér kezelése#
  A Far egérrel is vezérelhető.
@@ -2618,6 +2693,15 @@ to calculate the total files count.
  A #Ctrl+PgUp# leütése egy meghajtó gyökérmappájában: helyi meghajtónál megjeleníti a Meghajtók menüt.
  Hálózati meghajtónál elindítja a Hálózat plugint (ha lehetséges) vagy meghívja a Meghajtók menüt (ha a Hálózat plugin
 nem elérhető).
+
+ #Use Virtual Terminal for rendering#
+ Render the output using ANSI escape sequences. You can find more about it ~here~@https://docs.microsoft.com/en-us/windows/console/classic-vs-vt@.
+ This allows using 8 and 24-bit colors, text styles, and may (or may not) work better (or worse) with some Unicode characters.
+ Requires Windows 10 and above.
+
+ #Fullwidth-aware rendering#
+ Take into account the fact that East Asian characters require two screen cells instead of one.
+ The support is rudimentary and experimental. It may work or not, depending on your OS, locale, terminal, font and other settings.
 
  #ClearType friendly redraw#
  Redraw the window in such a way that ClearType related artifacts do not appear.
@@ -2730,7 +2814,7 @@ These parameters can be changed via ~far:config~@FarConfig@
 @CommandPrompt
 $ #A parancssori prompt formátuma#
  A Far-ban megváltoztatható a parancssori prompt formátuma.
-Ehhez a ~kezelőfelület beállítások~@InterfSettings@ párbeszédablak
+Ehhez a ~kezelőfelület beállítások~@CmdlineSettings@ párbeszédablak
 #Parancssori prompt formátuma# beviteli mezőjében be kell írni a változók és
 speciális kódszavak megfelelő sorrendjét, így a prompt további adatokat
 jeleníthet meg.
@@ -2777,7 +2861,7 @@ saved path.
  Prompt elements can be highlighted with #colors#.
 
  Format:
- #([[T]FFFFFFFF][:[T]BBBBBBBB])#, where:
+ #([[T]FFFFFFFF][:[T]BBBBBBBB][:style[:[T]UUUUUUUU]])#, where:
 
   #FFFFFFFF#
   Foreground color in aarrggbb format or index in the console palette.
@@ -2785,13 +2869,32 @@ saved path.
   #BBBBBBBB#
   Background color in aarrggbb format or index in the console palette.
 
+  #style#
+  One or more text styles, separated by spaces:
+  #bold#
+  #italic#
+  #overline#
+  #strikeout#
+  #faint#
+  #blink#
+  #inverse#
+  #invisible#
+  #underline#
+  #underline_double#
+  #underline_curly#
+  #underline_dot#
+  #underline_dash#
+
+  #UUUUUUUU#
+  Underline color in aarrggbb format or index in the console palette.
+
   #T#
-  "TrueColor" flag. If absent, value is treated as the console palette index (0-F):
+  "TrueColor" flag. If absent, value is treated as the console palette index (00-FF):
 
   \00 \11 \22 \33 \44 \55 \66 \77 \88 \99 \AA \BB \CC \DD \EE \FF \-
   0123456789ABCDEF
 
- If foreground or background color is omitted, the corresponding default value will be used.
+ If a color is omitted, the corresponding default value will be used.
 
  Examples:
 
@@ -2832,14 +2935,19 @@ $ #Nézőke: vezérlőbillentyűk#
  #Ctrl+Shift+Bal#    A sorok kezdő pozíciójára ugrik (ha a sortörés nincs bekapcsolva és a sorok túlnyúlnak a kép méretén)
  #Ctrl+Shift+Jobb#   A sorok végső pozíciójára ugrik (ha a sortörés nincs bekapcsolva és a sorok túlnyúlnak a kép méretén)
 
- In the #hex# and #dump# ~view modes~@ViewerMode@, #Ctrl+Left# and
-#Ctrl+Right# keys shift the content within the window one byte at a time
-in the corresponding direction.
+ The following additional keys work in #dump# and #hex# modes:
 
- In the #hex# ~view mode~@ViewerMode@, #Alt+Left# and #Alt+Right# key
-combinations decrease or increase the number of bytes displayed on each
-row by one byte, respectively. #Ctrl+Alt+Left# and #Ctrl+Alt+Right# key
-combinations adjust the number of displayed bytes by 16 at a time.
+ #Ctrl+Left#          ^<wrap>Shift all characters (#dump# mode) or bytes (#hex# mode) to the right
+moving the last character (byte) of a row to the first positions of the next row
+ #Ctrl+Right#         Shift all characters (#dump# mode) or bytes (#hex# mode) to the left
+moving the first character (byte) of a row to the last position of the previous row
+
+ The following additional keys work in #hex mode#:
+
+ #Alt+Left#           ^<wrap>Decrement the number of bytes per row
+ #Alt+Right#          Inrement the number of bytes per row
+ #Ctrl+Alt+Left#      Decrease the number of bytes per row to the nearest multiple of 16-bytes
+ #Ctrl+Alt+Right#     Increase the number of bytes per row to the nearest multiple of 16-bytes
 
  Viewer commands
 
@@ -2850,10 +2958,10 @@ combinations adjust the number of displayed bytes by 16 at a time.
  #Shift+F4#           Select ~view mode~@ViewerMode@: #text#, #hex#, or #dump#
  #F6#                 Átvált ~szerkesztésre~@Editor@
  #F7#                 ~Keresés~@ViewerSearch@
- #Shift+F7, Szóköz#   Tovább keres
- #Alt+F7#             Tovább keres, de visszafelé
+ #Shift+F7, Szóköz#   Continue searching forward
+ #Alt+F7#             Continue searching backwards
  #F8#                 OEM/ANSI kódlap váltó
- #Shift+F8#           Kódlap kiválasztása
+ #Shift+F8#           ~Kódlap~@CodePagesMenu@ kiválasztása
  #Alt+F8#             ~Ugrás~@ViewerGotoPos@ a jelenlegi szövegpozícióból másik pozícióba
  #Alt+F9#             Átváltja a Far konzolablak méretét (video);
 see also ~Interface.AltF9~@Interface.AltF9@
@@ -2887,24 +2995,21 @@ beginning in the text.
 
  Megjegyzések:
 
- 1. ^<wrap>A keresőablak meghívásához a nézőkében az is elég, ha elkezdjük
-begépelni a keresett szöveget.
-
- 2. ^<wrap>Az, hogy a nézőkében megnyitunk egy fájlt, nem zárja ki,
+ 1. ^<wrap>Az, hogy a nézőkében megnyitunk egy fájlt, nem zárja ki,
 hogy közben egy másik folyamat ne törölhetné azt. Annak ellenére, hogy a fájl
 valójában csak a nézőke bezárásakor törlődik, a törölt fájlra irányuló további
 műveletek hibával fognak leállni - ez Windows sajátosság.
 
- 3. ^<wrap>A Far jelenlegi verziója korlátozza a belső nézőkében megnyitott
-fájlok oszlopainak egy sorban megjeleníthető maximális számát: értéke nem
-haladhatja meg a 2048-at. Ha valamelyik sor túllépi ezt, a Far akkor is
-több sorban jeleníti meg, ha a sortörés ki van kapcsolva. (Oszlopok száma =
-karakterek száma.)
+ 2. ^<wrap>The maximum number of columns displayed in the #text#
+~view mode~@ViewerMode@ can be configured in the
+~Viewer settings~@ViewerSettings@ dialog. The range is between 100 to 100,000,
+the default is 10,000. Ha valamelyik sor túllépi ezt, a Far akkor is
+több sorban jeleníti meg, ha a sortörés ki van kapcsolva.
 
- 4. ^<wrap>A Far nézőke ~keresője~@ViewerSearch@ (#F7#) a fájl képernyőn
+ 3. ^<wrap>A Far nézőke ~keresője~@ViewerSearch@ (#F7#) a fájl képernyőn
 megjelenő részének kezdetétől az első előfordulásig keresi a sztringet.
 
- 5. ^<wrap>Ha automatikusan szeretnénk gördíteni egy folyamatosan változó
+ 4. ^<wrap>Ha automatikusan szeretnénk gördíteni egy folyamatosan változó
 tartalmú fájlt, vigyük a kurzort a fájl végére (az End billentyűvel).
 
 
@@ -2944,9 +3049,11 @@ of the base mode (#dump# or #text#) most recently selected in the
 #View mode# menu. Note: #F4# and #F2# switch #hex# mode to different
 modes.
 
+ See also the full list of ~viewer commands~@Viewer@.
+
  #Text# mode
 
- In the #text# mode, viewer renders file content interpreting byte
+ In the #text# mode viewer renders file content interpreting byte
 sequences as character strings using the encoding defined by the current
 code page. (Note that some encodings can use more than one byte
 to represent a character.) Byte sequences invalid in the current
@@ -2979,7 +3086,8 @@ are split into several screen rows even in #truncate# mode.
 
  #Dump# mode
 
- In the #dump# mode, viewer renders file content character by character
+ In the #dump# mode there is no notion of a text line.
+The viewer renders file content character by character
 without regard of line breaks or control codes which are treated
 as ordinary characters. The characters are displayed on screen rows from
 left to right. After reaching the end of the row, the next character
@@ -3002,30 +3110,22 @@ the positions of continuation bytes are filled with the #›# characters
  Code page 1200 (UTF-16): each screen position represents two
 consecutive bytes starting at an even offset in the file.
 
- In the #dump# mode, there is no notion of a text line. Instead
-of horizontal scrolling (cf. #text# #truncate# mode), the text
-is shifted one character at a time. The #Ctrl+Right# key combination
-shifts all characters to the left; the first character on a row becomes
-the last on the previous row. The #Ctrl+Left# key combination shifts all
-characters to the right moving the last character of a row to the first
-positions of the next row. The text “flows” from row to row. The #Right#
-and #Left# keys are ignored.
-
  #Hex# mode (hexadecimal codes)
 
- In the #hex# mode, viewer renders file content 16 bytes per screen
-row, with the hexadecimal offset of the first byte of each row at the
-left, followed by the hexadecimal representation of the bytes, followed
-by the character representation.
+ In the #hex# mode viewer renders hexadecimal representation of the
+bytes in the file. Each row starts with the hexadecimal offset of the
+first byte and ends with the character representation of the bytes
+of the row.
 
- The rendition depends on the encoding defined by the current code
-page. For single-byte encodings (e.g. all ANSI code pages), the bytes
-on each row are represented by 16 double-digit hex values followed by 16
-characters. For UTF-8 encoding, the bytes are represented the same way,
-while the characters are displayed at the positions of the leading bytes
-of the UTF-8 sequences with the positions of continuation bytes being
-filled with the #›# characters (code point U+203A). For UTF-16(BE)
-encodings the hex values are followed by eight characters. For example:
+ The rendition depends on the encoding defined by the current code page.
+For single-byte encodings (e.g. all ANSI code pages), the bytes on each
+row are represented by the sequence of double-digit hex values followed
+by the character sequence of the same length. For UTF-8 encoding, the
+bytes are represented the same way, while the characters are displayed
+at the positions of the leading bytes of the UTF-8 sequences with the
+positions of continuation bytes being filled with the #›# characters
+(code point U+203A). For UTF-16(BE) encodings, each pair of double-digit
+hex values is represented by one character. For example:
 
  Code page 1252 (ANSI - Latin I)
 
@@ -3052,21 +3152,6 @@ encodings the hex values are followed by eight characters. For example:
  \1b00000000C2: 35 04 3C 04 3F 04 3B 04 │ 4F 04 40 04 2C 00 20 00  емпляр, \-
  \1b00000000D2: 34 04 30 04 2E 00 0D 00 │ 0A 00                    да.♪◙   \-
 @+
-
- The #Ctrl+Right# key combination shifts all bytes to the left; the
-first byte on a row becomes the last on the previous row. The
-#Ctrl+Left# key combination shifts all bytes to the right moving the
-last byte of a row to the first positions of the next row. Unlike
-in #dump# mode, the content is shifted by a byte, not by a character.
-
- The #Alt+Right# key combination increases the number of bytes displayed
-on each row by one byte. The #Ctrl+Alt+Right# key combination increases
-the number of bytes by 16 at a time. The #Alt+Left# key combination
-decreases the number of bytes displayed on each row by one byte. The
-#Ctrl+Alt+Left# key combination decreases the number of bytes by 16 at
-a time.
-
- The #Right# and #Left# keys are ignored.
 
 
 @ViewerGotoPos
@@ -3105,12 +3190,21 @@ szöveget a Far nem értékeli találatnak)
  A megadott szöveg előfordulásait csak akkor veszi találatnak, ha soremelések, tabulátorok vagy szóközök határolják,
 vagy a szabványos elválasztó karakterek: #!%^&*()+|{}:"<>?`-=\\[];',./#
 
- #Visszafelé keres#
- Megfordítja a keresés irányát, a fájl végétől keres a fájl elejéig.
+ #Fuzzy search#
+ The search will be diacritical insensitive (for example, #deja# will be found in #déjà vu#),
+ligatures will be equivalent to corresponding multicharacter sequences (#fluffy# matches #ﬂuﬀy#),
+fancy numbers to corresponding numbers (#42# matches #④②#), and so on.
+
+ Note that case sensitive fuzzy search sometimes may be useful. For example, #Uber# will be found
+in #Überwald# but not in #überwald#. However, #Æther# will match #AEther#, but not #Aether#.
 
  #Regular expressions#
  Enable the use of ~regular expressions~@RegExp@ in the search string.
 The multiline search is not supported.
+
+ The #Find next# button starts searching forward.
+
+ The #Find previous# button starts searching backwards.
 
 
 @Editor
@@ -3193,12 +3287,12 @@ kódlapját kapja, de ez az opció a ~szerkesztő beállítások~@EditorSettings
  #F6#                      ~Nézőke~@Viewer@ módba kapcsol
  #F7#                      ~Keresés~@EditorSearch@
  #Ctrl+F7#                 ~Keresés és csere~@EditorSearch@
- #Shift+F7#                Keresés és csere folytatása
- #Alt+F7#                  Keresés és csere folytatása, visszafelé
+ #Shift+F7#                Continue searching or replacing forward
+ #Alt+F7#                  Continue searching or replacing backwards
  #F8#                      OEM/ANSI kódlap váltó
  #Shift+F8#                Kódlap kiválasztása
  #Alt+F8#                  ~Ugrás~@EditorGotoPos@ megadott sorra és oszlopra
- #Alt+F9#                  A Far konzolablak méretének átváltása
+ #Alt+F9#                  A Far konzolablak méretének átváltása; see also ~Interface.AltF9~@Interface.AltF9@
  #Alt+Shift+F9#            A ~szerkesztő beállítások~@EditorSettings@ párbeszédablakot jeleníti meg
  #F10, Esc#                Kilépés
  #Shift+F10#               Mentés és kilépés
@@ -3241,8 +3335,13 @@ $ #Editor: search/replace#
  #Whole words#
  The given text will be found only if it occurs in the text as a whole word.
 
- #Reverse search#
- Change the direction of search (from the end of file towards the beginning)
+ #Fuzzy search#
+ The search will be diacritical insensitive (for example, #deja# will be found in #déjà vu#),
+ligatures will be equivalent to corresponding multicharacter sequences (#fluffy# matches #ﬂuﬀy#),
+fancy numbers to corresponding numbers (#42# matches #④②#), and so on.
+
+ Note that case sensitive fuzzy search sometimes may be useful. For example, #Uber# will be found
+in #Überwald# but not in #überwald#. However, #Æther# will match #AEther#, but not #Aether#.
 
  #Regular expressions#
  Treat input as Perl regular expression (~search~@RegExp@ and ~replace~@RegExpRepl@).
@@ -3250,6 +3349,10 @@ Each line is processed individually, so multi-line expressions and line break ch
 
  ~Preserve style~@PreserveStyle@
  Preserve style (case and delimiters in program source code) of the replaced text.
+
+ The #Find next# / #Replace next# buttons start searching / replacing forward.
+
+ The #Find previous# / #Replace previous# buttons start searching / replacing backwards.
 
  The #All# button will show All matching entries ~menu~@FindAllMenu@.
 
@@ -3416,8 +3519,11 @@ $ #Editor: All matching entries menu#
  #Ctrl+Up#, #Ctrl+Down#
  Scroll the text in the editor.
 
- #Ctrl+Enter#, #Ctrl+Left#, #mouse click#
+ #Ctrl+Enter#, #Ctrl+Left mouse click#
  Go to the position of the found text.
+
+ #Ctrl+Numpad5#
+ Vertically align all found entries.
 
  #Gray +#
  Add session bookmark with the current position.
@@ -3427,6 +3533,8 @@ $ #Editor: All matching entries menu#
 
  #LeftCtrl+0…9#
  Go to the bookmark 0…9.
+
+ See also: common ~menu~@MenuCmd@ keyboard commands.
 
 
 @FileOpenCreate
@@ -3579,7 +3687,6 @@ $ #Code pages menu#
  #Other#
  The rest of code pages installed in the system.
 
-
  The following key combinations are available in this menu:
 
  #Ctrl+H#
@@ -3618,7 +3725,7 @@ nyithatunk meg.
 betűjelekkel és számokkal választhatunk. Ha a panel típusa eredetileg
 nem ~fájlpanel~@FilePanel@ volt, meghajtóváltás után az lesz.
 
- #Ctrl+A#, #F4# nyílt a meghajtó tulajdonságai párbeszédpanelen.
+ #Ctrl+A#, #F4# nyílt a ~meghajtó tulajdonságai~@FileAttrDlg@ párbeszédpanelen.
 
  #Ctrl+A#, #F4# hotkeys can be used to assign a hotkey to plugin item.
 
@@ -3635,7 +3742,7 @@ nem ~fájlpanel~@FilePanel@ volt, meghajtóváltás után az lesz.
 
  A #Shift+Del# billentyűkombinációval biztonságosan eltávolíthatjuk az USB
 portra csatlakoztatott tárolóeszközöket. Ha olyan kártyaolvasóba
-helyezett flash memóriakártyára adtuk ki a ~biztonságos eltávolítás~@HotPlugList@
+helyezett flash memóriakártyára adtuk ki a biztonságos eltávolítás
 parancsot, ahol a kártyalvasó több lemez kezelésére képes, a parancs a
 kártyaolvasót választja le.
 
@@ -3667,6 +3774,8 @@ bezárja az ablakot.
  A #Shift+Enter# meghívja a Windows Explorert, megjelenítve benne a
 kiválasztott meghajtó gyökerét (csak "valódi" meghajtóknál működik,
 pluginnel emulált fájlrendszereknél nem).
+
+ #Ctrl+H# shows unmapped volumes.
 
  A #Ctrl+R# frissíti a Meghajtók menü tartalmát.
 
@@ -3808,7 +3917,8 @@ műveleteket hajthatunk végre a csoportok listáján, a következő billentyűk
  #Ctrl+Le#        - A csoportot lefelé mozgatja
 
  A Far a csoportkiemeléseket felülről lefelé haladva vizsgálja. Ha érzékeli,
-hogy a fájl valamelyik csoport tagja, további hovatartozását nem vizsgálja.
+hogy a fájl valamelyik csoport tagja, további hovatartozását nem vizsgálja,
+unless #[x] Continue processing# is set in the group.
 
  See also: common ~menu~@MenuCmd@ keyboard commands.
 
@@ -3816,7 +3926,7 @@ hogy a fájl valamelyik csoport tagja, további hovatartozását nem vizsgálja.
 @HighlightEdit
 $ #Fájlkiemelések, rendezési csoportok: szerkesztés#
  A ~Beállítások menü~@OptMenu@ #Fájlkiemelések, rendezési csoportok#
-párbeszédablakában hozhatunk létre fájlkiemelési csoportokat. Minden csoportdefiníció tartalmazhat:
+párbeszédablakában hozhatunk létre fájlkiemelési csoportokat. Minden csoportdefiníció ~tartalmazhat~@Filter@:
 
  - egy vagy több ~fájlmaszkot~@FileMasks@;
 
@@ -3830,11 +3940,8 @@ fájlnév és a kurzor alatti kijelölt fájlnév színét. Ha egy elemre az
 alapértelmezett színeket szeretnénk használni, a színeket állítsuk "feketén
 fekete", azaz fekete háttéren fekete szöveg színösszetételre;
 
- - ^<wrap>megadható fájljelölő karaktert. A jelölő karaktert használhatjuk
-színkiemeléssel együtt vagy helyette.
-
- Ha a "Maszk" opció ki van kapcsolva, a Far a maszkokat nem elemzi, csak a
-többi bekapcsolt analízis számít (méret, dátum/idő, attribútum).
+ - ^<wrap>a csoportból származó fájlok jelölése.
+A jelölő karaktert használhatjuk színkiemeléssel együtt vagy helyette.
 
  Egy fájl akkor tartozik egy kiemelési csoportba, ha:
  - ^<wrap>a fájlmaszkelemzés engedélyezve van és a fájl megfelel
@@ -3852,173 +3959,168 @@ Windows Server 2012.
 
 @ViewerSettings
 $ #Beállítások: nézőke beállítások#
- Ebben a párbeszédablakban a külső és ~belső nézőke~@Viewer@ alapértelmezett
-beállításait változtathatjuk meg.
+ Ebben a párbeszédablakban a külső és ~belső nézőke~@Viewer@ alapértelmezett beállításait változtathatjuk meg.
 
 @=
 ^#Nézőke#
 @=
- #Alt+F3 helyett F3 in-#   Az #Alt+F3# helyett #F3# hívja meg
- #dítja a külső nézőkét#   a külső nézőkét.
+ #Alt+F3 helyett F3 indítja a külső nézőkét#
+ Az #Alt+F3# helyett #F3# hívja meg a külső nézőkét.
 
- #Nézőke parancs#          A külső nézőkét elindító parancssor.
-                         ^<wrap>A parancssorban a megnézendő fájlnevek
-megadásához alkalmazhatunk ~különleges szimbólumokat~@MetaSymbols@ is.
+ #Nézőke parancs#
+ A külső nézőkét elindító parancssor.
+A parancssorban a megnézendő fájlnevek megadásához alkalmazhatunk ~különleges szimbólumokat~@MetaSymbols@ is.
 
 @=
 ^#Belső nézőke#
 @=
- #Maradó blokkok#          ^<wrap>Nem veszi le a kijelölést a blokkokról,
-ha megmozdítjuk a kurzort.
+ #Maradó blokkok#
+ Nem veszi le a kijelölést a blokkokról, ha megmozdítjuk a kurzort.
 
- #Search dialog#           Always returns focus to the search text field in
- #auto-focus#              the ~Viewer~@Viewer@ search dialog.
+ #Tabulátor mérete#
+ A tabulátor szóközökben mért hossza.
 
- #Tabulátor mérete#        A tabulátor szóközökben mért hossza.
+ #Gördítőnyilak mutatva#
+ Kikapcsolt sortörésnél a vízszintesen túlnyúló sorok végein gördítőnyilak jelennek meg.
 
- #Gördítőnyilak mutatva#   ^<wrap>Kikapcsolt sortörésnél a vízszintesen
-túlnyúló sorok végein gördítőnyilak jelennek meg.
+ #Visible '\0'#
+ Show a printable character instead of space for the character '\0'.
+The character to display can be set in ~far:config~@FarConfig@ #Viewer.ZeroChar#.
 
- #Visible '\0'#            Show a printable character instead of space for
-                         the character '\0'. The character to diplay can be
-                         set in ~far:config~@FarConfig@ #Viewer.ZeroChar#.
+ #Gördítősáv mutatva#
+ Az oldalsó gördítősáv megjelenítése a belső nézőkében. Ezt a lehetőséget a #Ctrl+S# leütésével is bekapcsolhatjuk.
 
- #Gördítősáv mutatva#      ^<wrap>Az oldalsó gördítősáv megjelenítése a
-belső nézőkében. Ezt a lehetőséget a #Ctrl+S# leütésével is bekapcsolhatjuk.
 @=
- #Fájlpozíció mentése#     ^<wrap>Elmenti és visszatölti a legutóbb
-megnézett fájlok szöveghelyzetét, vele a kódlapot is (ha "kézzel" választottuk
-ki), valamint a nézet módját (normál vagy hexadecimális).
+ #Fájlpozíció mentése#
+ Elmenti és visszatölti a legutóbb megnézett fájlok szöveghelyzetét, vele a kódlapot is (ha "kézzel" választottuk
+ki), valamint a ~nézet módját~@ViewerMode@.
 
- #Save file code page#     Save and restore the code page selected for a file.
-                         This is automatically enabled if #Save file position#
-                         is enabled, as file position depends on the encoding.
+ #Save file code page#
+ Save and restore the code page selected for a file. This is automatically enabled if #Save file position#
+is enabled, as file position depends on the encoding.
 
- #Könyvjelzők mentése#     ^<wrap>Elmenti és visszatölti az utoljára
-megnézett fájlokban a #JobbCtrl+0…9# vagy a #Ctrl+Shift+0…9# leütésével
+ #Könyvjelzők mentése#
+ Elmenti és visszatölti az utoljára megnézett fájlokban a #JobbCtrl+0…9# vagy a #Ctrl+Shift+0…9# leütésével
 elhelyezett könyvjelzőinket.
 
- #Maximum line width#      Maximum number of columns for text mode viewer.
-                         Min=100, Max=100,000, Default=10,000.
+ #Maximum line width#
+ Maximum number of columns for text mode viewer. Min=100, Max=100,000, Default=10,000.
 
- #Save view mode#          Save and restore ~view modes~@ViewerMode@
-                         of recently viewed files.
+ #Save view mode#
+ Save and restore ~view modes~@ViewerMode@ of recently viewed files.
 
- #Save wrap mode#          Save and restore #wrap# and #word wrap# ~modes~@ViewerMode@
-                         of recently viewed files.
+ #Save wrap mode#
+ Save and restore #wrap# and #word wrap# ~modes~@ViewerMode@ of recently viewed files.
 
- #Detect dump view mode#   If this option is on and Far considers the file binary,
-                         the #dump# ~mode~@ViewerMode@ is selected automatically
-                         at the first view. Otherwise, the #text# mode is selected.
+ #Detect dump view mode#
+ If this option is on and Far considers the file binary, the #dump# ~mode~@ViewerMode@ is selected automatically
+at the first view. Otherwise, the #text# mode is selected.
 
- #Kódlap automatikus#      ~Automatikusan felismeri~@CodePageAuto@ a megnézett
- #felismerése#             szöveg kódlapját.
+ #Kódlap automatikus felismerése#
+ ~Automatikusan felismeri~@CodePageAuto@ a megnézett szöveg kódlapját.
 
- #Fájlok eredeti meg-#     A megnyitott fájlok alapértelmezett
- #nyitása ANSI kódlappal#  kódlapja OEM helyett ANSI lesz.
+ #Default code page#
+ Allows to select the default code page.
 
+@=
  Ha az #F3# billentyűhöz rendeltük a külső nézőkét, az csak akkor indul el,
 ha az aktuális fájltípushoz nincs ~társítva~@FileAssoc@ nézőke.
 
- A párbeszédablakban a beállítások módosítása nincs hatással az előzőleg
-megnyitott belső nézőke ablakokra.
+ A párbeszédablakban a beállítások módosítása nincs hatással az előzőleg megnyitott belső nézőke ablakokra.
 
  A nézőke beállításainak párbeszédablakát meghívhatjuk úgy is, ha a
 ~belső nézőkében~@Viewer@ #Alt+Shift+F9#-et ütünk. Ebben az esetben a
-változtatások rögtön életbe lépnek, de csak az aktuális munkafolyamatra
-érvényesek.
+változtatások rögtön életbe lépnek, de csak az aktuális munkafolyamatra érvényesek.
 
 
 @EditorSettings
 $ #Beállítások: szerkesztő beállítások#
- Ebben a párbeszédablakban a külső és ~belső szerkesztő~@Editor@
-alapértelmezett beállításait változtathatjuk meg.
+ Ebben a párbeszédablakban a külső és ~belső szerkesztő~@Editor@ alapértelmezett beállításait változtathatjuk meg.
 
- Külső szerkesztő
+@=
+^#Külső szerkesztő#
+@=
+ #Alt+F4 helyett F4 indítja a külső szerkesztőt#
+ Az #Alt+F4# helyett #F4# hívja meg a külső szerkesztőt.
 
- #Alt+F4 helyett F4#       Az #Alt+F4# helyett #F4# hívja meg a külső
- #indítja a külső#         szerkesztőt.
- #szerkesztőt#
+ #Szerkesztő parancs#
+ A külső szerkesztőt indító parancssor.
+~Különleges szimbólumokat~@MetaSymbols@ is használhatunk a szerkesztendő fájl megadásánál.
 
- #Szerkesztő parancs#      ^<wrap>A külső szerkesztőt indító parancssor.
-~Különleges szimbólumokat~@MetaSymbols@ is használhatunk a szerkesztendő fájl
-megadásánál. Ha nem szeretnénk, hogy a külső szerkesztő futtatása előtt a Far
-paneljei kikapcsolódjanak, kezdjük a parancssort #@@# karakterrel.
+@=
+^#Belső szerkesztő#
+@=
+ #Ne helyettesítse a tabulátorokat Újonnan beírt tabu#
+ A tabulátorokat nem konvertálja szóközzé a szerkesztés során. Szövegszerkesztés közben minden beírt.
 
- Belső szerkesztő
+ #látorokból szóközök#
+ #Tab# karaktert megfelelő számú szóközzel helyettesít.
+De a korábbi tabulátorokat nem konvertálja.
 
- #Ne helyettesítse a#    A tabulátorokat nem konvertálja szóközzé
- #tabulátorokat#         a szerkesztés során.
- #Újonnan beírt tabu-#   Szövegszerkesztés közben minden beírt
+ #Minden tabulátorból szóközök#
+ A szöveg megnyitásakor automatikusan minden tabulátort szóközzé alakít.
 
- #látorokból szóközök#   ^<wrap>#Tab# karaktert megfelelő számú szóközzel
-helyettesít, de a korábbi tabulátorokat nem konvertálja.
+ #Maradó blokkok#
+ Nem veszi le a blokkokról a ha megmozdítjuk a kurzort.
 
- #Minden tabulátorból#   A szöveg megnyitásakor automatikusan
- #szóközök#              minden tabulátort szóközzé alakít.
+ #A Del törli a blokkokat#
+ Ha van kijelölt blokk, a #Del# nem a kurzor alatti karaktert, hanem a blokkot törli.
 
- #Maradó blokkok#          ^<wrap>Nem veszi le a blokkokról a
-ha megmozdítjuk a kurzort.
+ #Automatikus behúzás#
+ Szöveg beírásánál engedélyezi az önműködő behúzást.
 
- #A Del törli#             Ha van kijelölt blokk, a #Del# nem a
- #a blokkokat#             ^<wrap>kurzor alatti karaktert, hanem a blokkot
-törli.
+ #Tabulátor mérete#
+ A tabulátor hossza, szóközökben.
 
- #Fájlpozíció mentése#     ^<wrap>Elmenti és visszatölti a legutóbb
-szerkesztett fájlok szöveghelyzetét és a kódlapot is, ha utóbbit kézzel
+ #Show white space#
+ Make while space characters (spaces, tabulations, line breaks) visible.
+
+ #Kurzor a sorvégjel után is#
+ A szerkesztőben a kurzor a sorvégjel mögé is vihető.
+
+ #Select found#
+ Found text is selected.
+
+ #Cursor at the end#
+ Place the cursor at the end of the found block.
+
+ #Gördítősáv mutatva#
+ Az oldalsó gördítősáv megjelenítése a belső szerkesztőben.
+
+@=
+ #Fájlpozíció mentése#
+ Elmenti és visszatölti a legutóbb szerkesztett fájlok szöveghelyzetét és a kódlapot is, ha utóbbit kézzel
 választottuk ki.
 
- #Könyvjelzők mentése#     ^<wrap>Elmenti és visszatölti az utoljára
-szerkesztett fájlokban a #JobbCtrl+0…9# vagy a #Ctrl+Shift+0…9# leütésével
+ #Könyvjelzők mentése#
+ Elmenti és visszatölti az utoljára szerkesztett fájlokban a #JobbCtrl+0…9# vagy a #Ctrl+Shift+0…9# leütésével
 elhelyezett könyvjelzőinket.
 
- #Automatikus behúzás#     ^<wrap>Szöveg beírásánál engedélyezi az
-önműködő behúzást.
+ #Írásra megnyitott fájlok szerkeszthetők#
+ Lehetővé teszi a más programokban írásra megnyitott fájlok szerkesztését. Ez a funkció praktikus,
+ha hosszú időre megnyitott fájlt szeretnénk szerkeszteni, de veszélyessé válhat, ha a fájl szerkesztés közben módosul.
 
- #Kurzor a sorvégjel#      A szerkesztőben a kurzor a sorvégjel
- #után is#                 mögé is vihető.
-
- #Tabulátor mérete#        A tabulátor hossza, szóközökben.
-
- #Gördítősáv mutatva#      ^<wrap>Az oldalsó gördítősáv megjelenítése a
-a belső szerkesztőben.
-
- #Show white space#        Make while space characters (spaces, tabulations,
-                         line breaks) visible.
-
- #Select found#            Found text is selected
-
- #Cursor at the end#       Place the cursor at the end of the found block.
-
- #Kódlap automatikus#      ~Automatikusan felismeri~@CodePageAuto@ a
- #felismerése#             szerkesztendő szöveg kódlapját.
-
- #Írásra megnyitott fáj-#  Lehetővé teszi a más programokban írásra
- #lok szerkeszthetők#      ^<wrap>megnyitott fájlok szerkesztését. Ez a
-funkció praktikus, ha hosszú időre megnyitott fájlt szeretnénk szerkeszteni,
-de veszélyessé válhat, ha a fájl szerkesztés közben módosul.
-
- #Csak olvasható fájlok#   Ha "csak olvasható" attribútumú fájlt
- #szerkesztése tiltva#     ^<wrap>nyitottunk meg szerkesztésre, a
+ #Csak olvasható fájlok szerkesztése tiltva#
+ Ha "csak olvasható" attribútumú fájlt nyitottunk meg szerkesztésre, a
 szerkesztő ugyanúgy letiltja a szöveg módosítását, mintha #Ctrl+L#-t ütnénk.
 
- #Figyelmeztet csak#       Ha "csak olvasható" attribútumú fájlt
- #olvasható fájl#          próbálunk megnyitni szerkesztésre,
- #megnyitásakor#           előtte figyelmeztető üzenetet kapunk.
+ #Figyelmeztet csak olvasható fájl megnyitásakor#
+ Ha "csak olvasható" attribútumú fájlt próbálunk megnyitni szerkesztésre, előtte figyelmeztető üzenetet kapunk.
 
- #Fájlok eredeti megnyi-#  A fájlokat OEM helyett ANSI kódlappal
- #tása ANSI kódlappal#     nyitja meg.
+ #Kódlap automatikus felismerése#
+ ~Automatikusan felismeri~@CodePageAuto@ a szerkesztendő szöveg kódlapját.
+
+ #Default code page#
+ Select the default code page.
 
  Ha külső szerkesztőt rendeltünk az #F4# billentyűhöz, csak akkor indul el,
 ha az aktuális fájltípushoz nincs ~társítva~@FileAssoc@ szerkesztő.
 
- A párbeszédablakban a beállítások módosítása nincs hatással az előzőleg
-megnyitott belső szerkesztő ablakokra.
+ A párbeszédablakban a beállítások módosítása nincs hatással az előzőleg megnyitott belső szerkesztő ablakokra.
 
  A szerkesztő beállításainak párbeszédablakát meghívhatjuk úgy is, hogy a
 ~belső szerkesztőben~@Editor@ #Alt+Shift+F9#-et ütünk. Ebben az esetben a
-változtatások rögtön életbe lépnek, de csak az aktuális munkafolyamatra
-érvényesek.
+változtatások rögtön életbe lépnek, de csak az aktuális munkafolyamatra érvényesek.
 
 
 @CodePageAuto
@@ -4035,8 +4137,7 @@ garantálható, különösen, ha rövid vagy nem tipikus szövegfájlt nyitunk m
 $ #Fájl attribútumok párbeszédablak#
  A párbeszédablakban a fájlobjektumok attribútumait, valamint dátumát és
 idejét változtathatjuk meg. Használhatjuk egyetlen fájlra vagy fájlok
-csoportjára is. Ha nem szeretnénk, hogy a változtatások almappákban is
-végbemenjenek, "Az almappákon is" opciót ne kapcsoljuk be.
+csoportjára is.
 
  #Fájl attribútumok#
 
@@ -4214,9 +4315,15 @@ a szokott módon igyekszik frissíteni a megjegyzéseket.
 során frissíti a megjegyzéseket, de ha a művelet almappákban lévő fájlokon
 megy végbe, az almappák fájljainak megjegyzései nem frissülnek.
 
- Use ANSI code page by default
+ #Use ANSI code page by default#
+ By default Far uses the OEM codepage for file descriptions, both for reading and writing.
+This option changes it to ANSI.
 
- Save in UTF8
+ #Save in UTF-8#
+ If set, the description file will be read as OEM or ANSI, depending on the option above,
+but saved in UTF-8 after you add, remove or update the descriptions.
+
+ #Note#: these options are irrelevant when the file has the UTF-8 signature. In this case it is always read and written in UTF-8.
 
 
 @PanelViewModes
@@ -4249,7 +4356,7 @@ files will be listed on a single stripe.
  N[M[D],O,R[F],N] - fájlnév, ahol:
                     M - ^<wrap>jelölő karakter mutatva, ahol:
                         D - dynamic selection marks;
-                    O - ^<wrap>nevek, elérési út nélkül (elsősorban pluginekhez);
+                    O - ^<wrap>nevek, elérési út nélkül (elsősorban ~pluginekhez~@Plugins@);
                     R - ^<wrap>jobbra igazított nevek, ahol:
                         F - right align all names;
                     N - ^<wrap>do not show extensions in name column;
@@ -4322,7 +4429,6 @@ Az attribútumok oszlopa alapértelmezés szerint 6 karakter széles.
 A többi attribútum megjelenítéséhez (T, I, O és V) kézzel kell 10
 karakteresre állítani az oszlopszélességet.
 
-
  #Oszlopszélességek# - a panelek oszlopszélességét állíthatjuk be vele.
 A "0" szélesség az alapértelmezett szélességet jelenti. Ha a Név, a
 Megjegyzés vagy a Tulajdonos oszlop értéke "0", a Far automatikusan állítja be
@@ -4369,6 +4475,130 @@ említett betűméret beállítás csak a megjelenítésre hat, mivel a Far ered
  See also: common ~menu~@MenuCmd@ keyboard commands.
 
 
+@ColorGroups
+$ #Color groups#
+ Ez a menü kiválasztható minden egyes képernyőelem színe vagy visszaállítható az eredeti színkombináció.
+
+ #Set default colors#
+ Set the colors to default values, expressed as indices in the console palette.
+
+ #Set default colors (RGB)#
+ Set the colors to default values, expressed as colors in RGB space, normally used for the corresponding console palette indices.
+ Unlike the indices in the console palette, the RGB values are device-independent and will look the same in any terminal.
+ For example, the default #index# value of panels background is #1#, which is usually, but not necessarily, mapped to some unspecified shade of blue.
+ The default #RGB# value of panels background, on the contrary, is always exactly #000080#.
+
+ #Note#: RGB colors require Virtual Terminal-based rendering, which can be enabled in ~Interface settings~@InterfSettings@.
+If it is not enabled or if your terminal does not support RGB colors, they will be approximated to the closest console palette indices.
+
+ This is the current palette:
+
+ \00  \10  \20  \30  \40  \50  \60  \70  \-
+ \80  \90  \A0  \B0  \C0  \D0  \E0  \F0  \-
+
+ This is the default RGB representation:
+
+ \(T0:T000000)  \(T0:T000080)  \(T0:T008000)  \(T0:T008080)  \(T0:T800000)  \(T0:T800080)  \(T0:T808000)  \(T0:TC0C0C0)  \-
+ \(T0:T808080)  \(T0:T0000FF)  \(T0:T00FF00)  \(T0:T00FFFF)  \(T0:TFF0000)  \(T0:TFF00FF)  \(T0:TFFFF00)  \(T0:TFFFFFF)  \-
+
+
+@ColorPicker
+$ #Color Picker#
+ This dialog allows to define a foreground color, a background color and a text style.
+
+ The foreground and the background colors can be either:
+ - one of the 16 colors from the standard Windows Console pallete,
+ - one of the 256 colors from the Xterm pallette, or
+ - one of the 16 million colors from the RGB color space.
+
+ The standard 16-color palette is available in the dialog.
+ To access the ~256-color palette~@ColorPicker256@ and the ~RGB color space~@ColorPickerRGB@ use the corresponding buttons.
+
+ #Default# is the color used by your terminal when no colors are specified explicitly, e.g. \(800000:800000) C:\> \-.
+ Usually it is one of the palette colors, e.g. \(7:0)silver on black\-, but not necessarily: some terminals could handle it differently, e.g. render as translucent.
+
+ The color value is also represented in the hexadecimal form for convenience, where:
+ - #AA______# - the alpha channel, representing the degree of transparency from fully transparent (00) to fully opaque (FF).
+ - #______##### - the palette index from 00 to FF.
+ - #__RRGGBB# - the red, green and blue channels in the RGB color space, from 00 to FF each.
+
+ When the color is not fully opaque, the previous color in the logical Z-order is taken into account.
+
+ The foreground text style can include ANSI/VT100-like attributes listed in the right section.
+ When #Inherit# is checked, the previous foreground text style in the logical Z-order is taken into account.
+
+ Default:   \(7:0) Example \-
+ Bold:      \(7:0:bold) Example \-
+ Italic:    \(7:0:italic) Example \-
+ Overline:  \(7:0:overline) Example \-
+ Strikeout: \(7:0:strikeout) Example \-
+ Faint:     \(7:0:faint) Example \-
+ Blink:     \(7:0:blink) Example \-
+ Inverse:   \(7:0:inverse) Example \-
+ Invisible: \(7:0:invisible) Example \-
+ Underline:
+   Single:  \(7:0:underline) Example \-
+   Double:  \(7:0:underline_double) Example \-
+   Curly:   \(7:0:underline_curly) Example \-
+   Dotted:  \(7:0:underline_dot) Example \-
+   Dashed:  \(7:0:underline_dash) Example \-
+
+ The preview section below displays the final result.
+
+ #Attention#
+ Only the standard 16-color palette is guaranteed to work everywhere.
+ Support for everything else is conditional and defined by your terminal.
+
+ Extended colors and styles require Virtual Terminal-based rendering, which can be enabled in ~Interface settings~@InterfSettings@.
+You can find more about it ~here~@https://docs.microsoft.com/en-us/windows/console/classic-vs-vt@.
+
+
+@ColorPicker256
+$ #256 Color Picker#
+ This dialog allows to pick a color from the 256-color Xterm pallette.
+
+ The first 16 colors are the same as the standard palette and are available in the ~main dialog~@ColorPicker@.
+
+ \00  \10  \20  \30  \40  \50  \60  \70  \-
+ \80  \90  \A0  \B0  \C0  \D0  \E0  \F0  \-
+
+ The next 216 colors are represented as a 6x6x6 cube. The palette usually has 6 levels for every primary color and forms a homogeneous RGB cube.
+ Use the buttons on the right to rotate the cube, access its inner levels or mix the primary colors directly.
+
+ \(:10)  \(:11)  \(:12)  \(:13)  \(:14)  \(:15)  \-  \(:34)  \(:35)  \(:36)  \(:37)  \(:38)  \(:39)  \-  \(:58)  \(:59)  \(:5A)  \(:5B)  \(:5C)  \(:5D)  \-
+ \(:16)  \(:17)  \(:18)  \(:19)  \(:1A)  \(:1B)  \-  \(:3A)  \(:3B)  \(:3C)  \(:3D)  \(:3E)  \(:3F)  \-  \(:5E)  \(:5F)  \(:60)  \(:61)  \(:62)  \(:63)  \-
+ \(:1C)  \(:1D)  \(:1E)  \(:1F)  \(:20)  \(:21)  \-  \(:40)  \(:41)  \(:42)  \(:43)  \(:44)  \(:45)  \-  \(:64)  \(:65)  \(:66)  \(:67)  \(:68)  \(:69)  \-
+ \(:22)  \(:23)  \(:24)  \(:25)  \(:26)  \(:27)  \-  \(:46)  \(:47)  \(:48)  \(:49)  \(:4A)  \(:4B)  \-  \(:6A)  \(:6B)  \(:6C)  \(:6D)  \(:6E)  \(:6F)  \-
+ \(:28)  \(:29)  \(:2A)  \(:2B)  \(:2C)  \(:2D)  \-  \(:4C)  \(:4D)  \(:4E)  \(:4F)  \(:50)  \(:51)  \-  \(:70)  \(:71)  \(:72)  \(:73)  \(:74)  \(:75)  \-
+ \(:2E)  \(:2F)  \(:30)  \(:31)  \(:32)  \(:33)  \-  \(:52)  \(:53)  \(:54)  \(:55)  \(:56)  \(:57)  \-  \(:76)  \(:77)  \(:78)  \(:79)  \(:7A)  \(:7B)  \-
+
+ \(:7C)  \(:7D)  \(:7E)  \(:7F)  \(:80)  \(:81)  \-  \(:A0)  \(:A1)  \(:A2)  \(:A3)  \(:A4)  \(:A5)  \-  \(:C4)  \(:C5)  \(:C6)  \(:C7)  \(:C8)  \(:C9)  \-
+ \(:82)  \(:83)  \(:84)  \(:85)  \(:86)  \(:87)  \-  \(:A6)  \(:A7)  \(:A8)  \(:A9)  \(:AA)  \(:AB)  \-  \(:CA)  \(:CB)  \(:CC)  \(:CD)  \(:CE)  \(:CF)  \-
+ \(:88)  \(:89)  \(:8A)  \(:8B)  \(:8C)  \(:8D)  \-  \(:AC)  \(:AD)  \(:AE)  \(:AF)  \(:B0)  \(:B1)  \-  \(:D0)  \(:D1)  \(:D2)  \(:D3)  \(:D4)  \(:D5)  \-
+ \(:8E)  \(:8F)  \(:90)  \(:91)  \(:92)  \(:93)  \-  \(:B2)  \(:B3)  \(:B4)  \(:B5)  \(:B6)  \(:B7)  \-  \(:D6)  \(:D7)  \(:D8)  \(:D9)  \(:DA)  \(:DB)  \-
+ \(:94)  \(:95)  \(:96)  \(:97)  \(:98)  \(:99)  \-  \(:B8)  \(:B9)  \(:BA)  \(:BB)  \(:BC)  \(:BD)  \-  \(:DC)  \(:DD)  \(:DE)  \(:DF)  \(:E0)  \(:E1)  \-
+ \(:9A)  \(:9B)  \(:9C)  \(:9D)  \(:9E)  \(:9F)  \-  \(:BE)  \(:BF)  \(:C0)  \(:C1)  \(:C2)  \(:C3)  \-  \(:E2)  \(:E3)  \(:E4)  \(:E5)  \(:E6)  \(:E7)  \-
+
+ The last 24 colors are usually defined as a grayscale ramp.
+
+ \(:E8)  \(:E9)  \(:EA)  \(:EB)  \(:EC)  \(:ED)  \(:EE)  \(:EF)  \(:F0)  \(:F1)  \(:F2)  \(:F3)  \(:F4)  \(:F5)  \(:F6)  \(:F7)  \(:F8)  \(:F9)  \(:FA)  \(:FB)  \(:FC)  \(:FD)  \(:FE)  \(:FF)  \-
+
+
+@ColorPickerRGB
+$ #RGB Color Picker#
+ This dialog allows to pick a color from the RGB color space.
+
+ The 16 777 216 RGB colors are represented as a 16x16x16 hypercube.
+
+ Use the buttons on the right to rotate the cube, access its inner levels or mix the primary colors directly.
+
+ Each of the 4096 cells in the hypercube represents a 16x16x16 cube with RGB colors. To switch between the cubes use the #↔# button.
+
+ The #«# button allows to save the selected color to the custom palette for quick access.
+
+ The #System# button opens the system RGB color picker.
+
+
 @SortGroups
 $ #Rendezési csoportok#
  A fájlok akkor rendezhetők csoportba, ha a ~fájlpanel~@FilePanel@
@@ -4382,9 +4612,12 @@ alacsonyabb egy másikénál, a fájlcsoport tagjai a fájlpanelen szintén felj
 vagy lejjebb kerülnek, ugyanazt a hierarchiát követve, ahogyan helyzetük a
 rendezési menüben az alattuk és fölöttük lévő csoportokhoz viszonyul.
 
- A rendezési szabályokat szerkeszthetjük, rendezhetjük, törölhetjük vagy új
-szabályokat hozhatunk létre a ~Beállítások menü~@OptMenu@
-~Fájlkiemelések, rendezési csoportok~@Highlight@ almenüjében.
+ The command #Edit sort groups# from the ~Commands menu~@CmdMenu@ is used to
+delete, create and edit sort groups, using #Del#, #Ins# and #F4#. The groups
+above the menu separator are applicable to the file panel start, and included
+files will be placed higher than those not included to any group. The groups
+below the menu separator are applicable to the file panel end, and included
+files will be placed lower than those not included.
 
 
 @FileMasks
@@ -4477,8 +4710,10 @@ kijelölést levesz.
 
  A #Ctrl+<Szürke *># megfordítja a kijelöléseket a mappákon is.
 
- A #Jelölést visszatesz# parancs (#Ctrl+M#) visszaállítja az előző kijelölést.
+ #Alt+<<Szürke *># inverts the current selection on files only,
+folders are deselected.
 
+ A #Jelölést visszatesz# parancs (#Ctrl+M#) visszaállítja az előző kijelölést.
 
  #Mouse Selection#
 
@@ -4574,8 +4809,7 @@ felülírás előtt újabb megerősítést kér.
  A ~Rendszer beállítások~@SystemSettings@ menü "Másoláshoz a rendszerrutin
 használata" opciójával a Far a Windows operációs rendszer CopyFileEx nevű másolórutinját fogja
 használni a saját másolórutinja helyett. Ez előnyökkel járhat NTFS
-fájlrendszernél, mert a CopyFileEx ésszerűbb lemezfoglalási metódust használ
-és a fájlokat bővített attribútumkészletükkel együtt másolja át. A rendszer
+fájlrendszernél, mert a CopyFileEx a fájlokat bővített attribútumkészletükkel együtt másolja át. A rendszer
 másolórutinja nem használható akkor, ha a fájl titkosított és nem az
 aktuális meghajtóra másolunk fájlt.
 
@@ -4819,6 +5053,11 @@ aktív panel ~pluginnel~@Plugins@ emulált fájlrendszert mutat, a "CD" paranccs
 plugin fájlrendszerének mappái között mozoghatunk. A "CD" parancstól eltérően
 a "CHDIR" mindig valódi mappaként kezeli az utána álló paramétert, a fájlpanel
 jellegétől függetlenül.
+ The #CD ~~# command changes to the home directory (if there is no
+real “~~” file or directory in the current directory). The home
+directory is specified in the #Use home dir# option of the
+~Command line settings~@CmdlineSettings@ dialog. By default, it is the
+string “%FARHOME%” denoting the Far Manager home directory.
 
  #CHCP [nnn]#
  Megjeleníti vagy beállítja az aktív kódlap számát (értéke "nnn"). A
@@ -4843,9 +5082,9 @@ nevű parancsa csak akkor hajtódik végre, ha "fájl1" fájl létezik, "fájl2"
 létezik és a "változó" nevű környezeti változó létezik:
  #if exist fájl1 if not exist fájl2 if defined változó parancs#
 
- #PUSHD path#
- Stores the current path for use by the “POPD” command, then changes
-the current path on the active panel to the specified “path”.
+ #PUSHD [path]#
+ Stores the current path for use by the “POPD” command.
+If “path” is specified, changes the current path on the active panel to it.
 
  #POPD#
  Changes the current path on the active panel to that stored by the “PUSHD” command.
@@ -4903,7 +5142,7 @@ $ #Regular expressions#
 
  #Options#:
  #i# - ignore character case;
- #s# - ^<wrap>consider the whole text as one line, ‘.’ matches any character;
+ #s# - ^<wrap>consider the whole text as one line, ‘#.#’ matches any character;
  #m# - ^<wrap>consider the whole text as multiple lines. ‘#^#’ and ‘#$#’ match the
 beginning and the end of any "inner" string;
  #x# - ^<wrap>ignore space characters (unescaped ones, i.e. without backslash before).
@@ -4948,8 +5187,7 @@ zero-size expression.
  #(?<=pattern)# - ^<wrap>the backward lookup. Unfortunately, the pattern must have fixed length.
  #(?<!pattern)# - ^<wrap>the negation of backward lookup. The same restriction.
 
- #(?{name}pattern)# - group with a name. The name can be empty (in such case you
-cannot refer to this group) or must contain only word characters (#\w#) and spaces (#\s#).
+ #(?{name}pattern)# - group with a name. The name must contain only word characters (#\w#) and spaces (#\s#).
 
  #Quantifiers#
 
@@ -5025,13 +5263,12 @@ big amounts of data are processed.
         ^<wrap>Strings containing "name=", but not containing "value=", are processed (in fact, skipped) faster.
 
  #\NN#  - ^<wrap>reference to earlier matched parentheses. NN is a positive integer.
-Each parentheses except (?:pattern), (?=pattern), (?!pattern), (?<=pattern), (?<!pattern) and (?{name}pattern)
+Each parentheses except (?:pattern), (?=pattern), (?!pattern), (?<=pattern) and (?<!pattern)
 have a number (in the order of appearance).
         Example:
         "(['"])hello\1" matches to "hello" or 'hello'.
 
  #\p{name}# - ^<wrap>inner regexp reference to it's parsed bracket with specified #name#.
-
 
  #Examples:#
 
@@ -5287,16 +5524,16 @@ jelenik meg a képernyőn.
  [ ] - csak ha nincs kijelölt blokk
  [?] - a kijelöléstől függetlenül
 
-
  Megjegyzések:
 
  1. ^<wrap>A makró végrehajtása előtt a Far minden fenti feltételt ellenőriz.
+
  2. ^<wrap>Egyes billentyűkombinációkat, például az #Enter#, #Esc#, #F1# és
 a #Ctrl+F5#; az #MsWheelUp# (EgérGörgőFel). az #MsWheelDown# (EgérGörgőLe),
 valamint más egérgomb műveleteket a #Ctrl#, #Shift# és #Alt# módosítóval
 együtt nem vihetünk be közvetlenül gyorsbillentyűként, a párbeszédablakban
 betöltött speciális szerepük miatt. Ezeket a billentyűkombinációkat
-legördülő listából választhatjuk ki és rendelhetjük makrókhoz.
+legördülő listából választhatjuk ki és ~rendelhetjük makrókhoz~@KeyMacroAssign@.
 
 
 @KeyMacroList
@@ -5537,6 +5774,41 @@ $ #Version information#
  - names and versions of the active plugins
 
 
+@CustomizingUI
+$ #Customizing UI elements#
+ All Far user interface elements are defined in #.lng# files (e.g., #FarEng.lng#).
+You can customize these elements to your needs. For example, you can
+change hotkeys or labels on a certain Far dialog. To override
+UI elements, create a file with the name #Far<Lng>.lng.custom#
+in #%FARHOME%# or #%FARPROFILE%# directory and provide new values for
+the UI IDs you want to customize.
+
+ For example, to make file system link types on Far panels look like
+in the listing of DIR DOS command, you can create file #FarEng.lng.custom#
+in the #%FARPROFILE%# directory with the following content:
+
+@-
+ \0A┌────────────────────────────┐\-
+ \0A│\30│  │UTF-8│Ln 1/7│Col│8:34 PM\0A│\-
+ \0A│\1b//[MListUp]                 \0A│\-
+ \0A│\1b"..↑"                       \0A│\-
+ \0A│\1b                            \0A│\-
+ \0A│\1bMListFolder   = "<DIR>"     \0A│\-
+ \0A│\1bMListSymlink  = "<SYMLINK>" \0A│\-
+ \0A│\1bMListJunction = "<JUNCTION>"\0A│\-
+ \0A│\071\30Help  \07 2\30Save  \07 3\30      \07 \30    \0A│\-
+ \0A└────────────────────────────┘\-
+@+
+
+ You can specify replacement UI elements in two ways, on two separate
+lines or on a single line. The new value should always be enclosed
+in double quotation marks. You can find UI IDs you want to redefine
+in the original #Far<Lng>.lng# file.
+
+ If custom UI language files exist in both directories, the file
+in #%FARPROFILE%# has precedence over the file in #%FARHOME%#.
+
+
 @FarConfig
 $ #Configuration editor#
  Starts with the command #far:config#
@@ -5549,43 +5821,39 @@ If current value of an option is other than the default, the option is marked wi
 
  Besides the list navigation keys, the following key combinations are supported:
 
- #Enter# or #F4#   Change option value
-               boolean and 3-state are changed in place,
-               for integer and string a dialog is opened.
+ #Enter# or #F4#
+ Toggle or edit the value.
 
- #Shift+F4#      For the integer type, hexadecimal editor dialog is opened,
-               for other types works as #F4#.
+ #Shift+F4#
+ Edit the integer value as a hexadecimal number. For other types works as #F4#.
 
- #Ctrl+H#        Hide/show options having default values.
+ #Alt+F4#
+ Edit the integer value as a binary number. For other types works as #F4#.
 
- #Shift+F1#      Show option help, if available.
+ #Del#
+ Reset the option to its default value.
 
- #Ctrl+Alt+F#    Toggle quick filtering mode.
+ #Ctrl+H#
+ Toggle display of unchanged options.
+
+ #Shift+F1#
+ Show the help for the current option, if available.
+
+ #Ctrl+Alt+F#
+ Toggle quick filtering mode.
 
 
 @Codepages.NoAutoDetectCP
 $ #far:config Codepages.NoAutoDetectCP#
- This string parameter defines the code pages which will be excluded
-from Universal Codepage Detector (UCD) autodetect. Sometimes, especially
-on small files, UCD annoyingly chooses wrong code pages.
+ This parameter allows to exclude specific code pages from the heuristic code page detection results.
+Such detection is unreliable by definition: it depends on statistical data and could guess wrong, especially when the amount of input data is small.
 
- The default value is empty string #""#. In this case all code pages
-detectable by UCD (about 20, much less than there is usually available
-in the system) are enabled.
+ By default the parameter is empty and there are no restrictions which code pages could be detected heuristically.
 
- If this parameter is set to string #"-1"# and the #Other# section
-of the ~Code pages~@CodePagesMenu@ menu is hidden (#Ctrl+H# key
-combination), only #System# (ANSI, OEM), #Unicode#, and #Favorites# code
-pages will be enabled for UCD. If the #Other# section is visible, all
-code pages are enabled.
+ If this parameter is set to #-1#, only the code pages, currenltly visible in the ~Code pages~@CodePagesMenu@ menu, will be accepted.
+You can control which code pages are visible there with the #Ctrl+H# key combination and the #Favorites# section.
 
- Otherwise, this parameter should contain comma separated list
-of code page numbers disabled for UCD. For example,
-#"1250,1252,1253,1255,855,10005,28592,28595,28597,28598,38598"#.
-
- Since Unicode code pages (1200, 1201, 65001) are detected outside
-of UCD, they cannot be disabled even if they appear on the exclusions
-list.
+ If this parameter contains a comma-separated list of code page numbers, all the specified code pages will be excluded from the heuristic detection.
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
@@ -5796,7 +6064,7 @@ is not listed in this parameter and the program “date.exe” exists
 in one of the #PATH# directories, the internal command processor’s
 command can never be executed.
 
- Ready-made settings for CMD.EXE, COMMAND.COM, and other well-known
+ Ready-made settings for CMD.EXE and other well-known
 command processors can be found in the
 #Addons\SetUp\Executor.*.farconfig# files.
 
@@ -6039,25 +6307,6 @@ of the parameter. If the parameter is set to #-1#, random values will
 be used.
 
  Default value: 0.
-
- This parameter can be changed via ~far:config~@FarConfig@ only.
-
-
-@System.FlagPosixSemantics
-$ #far:config System.FlagPosixSemantics#
- This Boolean parameter specifies whether inserting files into
-~view and edit history~@HistoryViews@ is case sensitive.
-
- If a file being added already exists in the history, it is not inserted
-again; instead, the existing history entry is moved to the most recent
-position.
-
- False - ^<wrap>Case insensitive comparison is used to search the
-history for duplicates.
- True  - Case sensitive comparison is used to search the history for
-duplicates.
-
- Default value: True (the search is case sensitive).
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
@@ -6339,7 +6588,7 @@ horizontally (Windows Vista and above):
  System.MsHWheelDeltaEdit - in the internal Editor
  System.MsHWheelDelta     - in other areas
 
- Default value: 1 (for all parameters).
+ Default value for all parameters: 0 (use system settings).
 
  Note: Rolling or tilting mouse wheel while holding #Alt# key always
 scrolls one line or character at a time.

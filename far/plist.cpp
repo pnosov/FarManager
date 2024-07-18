@@ -46,14 +46,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "message.hpp"
 #include "interf.hpp"
 #include "imports.hpp"
-#include "string_sort.hpp"
-#include "exception.hpp"
 #include "exception_handler.hpp"
 #include "console.hpp"
 #include "keyboard.hpp"
+#include "log.hpp"
 
 // Platform:
-#include "platform.fs.hpp"
+#include "platform.hpp"
+#include "platform.process.hpp"
 
 // Common:
 #include "common/scope_exit.hpp"
@@ -72,9 +72,30 @@ struct menu_data
 
 struct ProcInfo
 {
-	std::vector<std::pair<HWND, DWORD>> Windows;
+	struct proc_item
+	{
+		HWND Window;
+		DWORD Pid;
+	};
+
+	std::vector<proc_item> Windows;
 	std::exception_ptr ExceptionPtr;
 };
+
+static bool is_cloaked_window(HWND const Window)
+{
+	if (!imports.DwmGetWindowAttribute)
+		return false;
+
+	int Cloaked = 0;
+	if (const auto Result = imports.DwmGetWindowAttribute(Window, DWMWA_CLOAKED, &Cloaked, sizeof(Cloaked)); FAILED(Result))
+	{
+		LOGWARNING(L"DwmGetWindowAttribute"sv, os::format_error(Result));
+		return false;
+	}
+
+	return Cloaked != 0;
+}
 
 // https://blogs.msdn.microsoft.com/oldnewthing/20071008-00/?p=24863/
 static bool is_alttab_window(HWND const Window)
@@ -98,19 +119,12 @@ static bool is_alttab_window(HWND const Window)
 	if (GetWindowLongPtr(Window, GWL_EXSTYLE) & WS_EX_TOOLWINDOW)
 		return false;
 
-	if (IsWindows8OrGreater())
-	{
-		int Cloaked = 0;
-		if (SUCCEEDED(imports.DwmGetWindowAttribute(Window, DWMWA_CLOAKED, &Cloaked, sizeof(Cloaked))) && Cloaked)
-			return false;
-	}
-
-	return true;
+	return !is_cloaked_window(Window);
 }
 
 static BOOL CALLBACK EnumWindowsProc(HWND const Window, LPARAM const Param)
 {
-	auto& Info = *reinterpret_cast<ProcInfo*>(Param);
+	auto& Info = edit_as<ProcInfo>(Param);
 
 	return cpp_try(
 	[&]
@@ -119,16 +133,14 @@ static BOOL CALLBACK EnumWindowsProc(HWND const Window, LPARAM const Param)
 			return true;
 
 		DWORD Pid;
-		GetWindowThreadProcessId(Window, &Pid);
+		if (!GetWindowThreadProcessId(Window, &Pid))
+			return true;
 
 		Info.Windows.emplace_back(Window, Pid);
 		return true;
 	},
-	[&]
-	{
-		SAVE_EXCEPTION_TO(Info.ExceptionPtr);
-		return false;
-	});
+	save_exception_and_return<false>(Info.ExceptionPtr)
+	);
 }
 
 static void AddMenuItem(HWND const Window, DWORD const Pid, size_t const PidWidth, bool const ShowImage, vmenu2_ptr const& Menu)
@@ -140,9 +152,7 @@ static void AddMenuItem(HWND const Window, DWORD const Pid, size_t const PidWidt
 
 	if (ShowImage)
 	{
-		if (const auto Process = os::handle(OpenProcess(imports.QueryFullProcessImageNameW? PROCESS_QUERY_LIMITED_INFORMATION : PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, Pid)))
-			// BUGBUG check result
-			(void)os::fs::GetModuleFileName(Process.native_handle(), nullptr, MenuItem);
+		MenuItem = os::process::get_process_name(Pid);
 
 		if (MenuItem.empty())
 			MenuItem = L"???"sv;
@@ -154,8 +164,7 @@ static void AddMenuItem(HWND const Window, DWORD const Pid, size_t const PidWidt
 
 	const auto Self = Pid == GetCurrentProcessId() || Window == console.GetWindow();
 
-	MenuItemEx NewItem(format(FSTR(L"{0:{1}} {2} {3}"), Pid, PidWidth, BoxSymbols[BS_V1], MenuItem), Self? MIF_CHECKED : MIF_NONE);
-	// for sorting
+	MenuItemEx NewItem(far::format(L"{:{}} {} {}"sv, Pid, PidWidth, BoxSymbols[BS_V1], MenuItem), Self? MIF_CHECKED : MIF_NONE);
 	NewItem.ComplexUserData = menu_data{ WindowTitle, Pid, Window };
 	Menu->AddItem(NewItem);
 }
@@ -183,24 +192,19 @@ void ShowProcessList()
 		ProcList->clear();
 		Info.Windows.clear();
 
-		if (!EnumWindows(EnumWindowsProc, reinterpret_cast<LPARAM>(&Info)))
+		if (!EnumWindows(EnumWindowsProc, std::bit_cast<LPARAM>(&Info)))
 		{
 			rethrow_if(Info.ExceptionPtr);
 			return false;
 		}
 
-		const auto MaxPid = std::max_element(ALL_CONST_RANGE(Info.Windows), [](const auto& a, const auto& b) { return a.second < b.second; })->second;
+		const auto MaxPid = std::ranges::max_element(Info.Windows, {}, &ProcInfo::proc_item::Pid)->Pid;
 		const auto PidWidth = static_cast<size_t>(std::log10(MaxPid)) + 1;
 
-		for (const auto& [Window, Pid]: Info.Windows)
+		for (const auto& i: Info.Windows)
 		{
-			AddMenuItem(Window, Pid, PidWidth, ShowImage, ProcList);
+			AddMenuItem(i.Window, i.Pid, PidWidth, ShowImage, ProcList);
 		}
-
-		ProcList->SortItems([](const MenuItemEx& a, const MenuItemEx& b, SortItemParam&)
-		{
-			return string_sort::less(std::any_cast<const menu_data&>(a.ComplexUserData).Title, std::any_cast<const menu_data&>(b.ComplexUserData).Title);
-		});
 
 		return true;
 	};
@@ -233,12 +237,11 @@ void ShowProcessList()
 							MenuData->Title,
 							msg(lng::MKillProcessWarning)
 						},
-						{ lng::MKillProcessKill, lng::MCancel }) == Message::first_button)
+						{ lng::MKillProcessKill, lng::MCancel }) == message_result::first_button)
 					{
-						const os::handle Process(OpenProcess(PROCESS_TERMINATE, FALSE, MenuData->Pid));
-						if (!Process || !TerminateProcess(Process.native_handle(), ERROR_PROCESS_ABORTED))
+						if (!os::process::terminate_other(MenuData->Pid))
 						{
-							const auto ErrorState = error_state::fetch();
+							const auto ErrorState = os::last_error();
 
 							Message(MSG_WARNING, ErrorState,
 								msg(lng::MKillProcessTitle),

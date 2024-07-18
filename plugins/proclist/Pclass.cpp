@@ -17,6 +17,8 @@
 #include <DlgBuilder.hpp>
 #include <PluginSettings.hpp>
 
+#include <winperf.h>
+
 using namespace std::literals;
 
 const auto FarSortModeSlot = SM_CHTIME;
@@ -28,7 +30,11 @@ public:
 		tok(token)
 	{
 		buf.reset(wcsdup(str));
+#if defined(_UCRT)
+		ptr = std::wcstok(buf.get(), token, &pt);
+#else
 		ptr = std::wcstok(buf.get(), token);
+#endif
 	}
 
 	operator wchar_t*() const
@@ -38,7 +44,11 @@ public:
 
 	void operator++()
 	{
+#if defined(_UCRT)
+		ptr = std::wcstok({}, tok, &pt);
+#else
 		ptr = std::wcstok({}, tok);
+#endif
 	}
 
 	explicit operator bool() const
@@ -50,6 +60,9 @@ private:
 	const wchar_t* tok;
 	wchar_t* ptr;
 	malloc_ptr<wchar_t> buf;
+#if defined(_UCRT)
+	wchar_t* pt;
+#endif
 };
 
 // Far: FileSizeToStr
@@ -72,7 +85,7 @@ static std::wstring ui64toa_width(uint64_t value, unsigned width, bool bThousand
 	if (!UnitIndex)
 		return ValueStr;
 
-	const auto SizeInUnits = value / std::pow(Divider.first, UnitIndex);
+	const auto SizeInUnits = static_cast<double>(value) / std::pow(Divider.first, UnitIndex);
 
 	double Parts[2];
 	Parts[1] = std::modf(SizeInUnits, &Parts[0]);
@@ -80,16 +93,16 @@ static std::wstring ui64toa_width(uint64_t value, unsigned width, bool bThousand
 
 	if (const auto NumDigits = Integral < 10? 2 : Integral < 100? 1 : 0)
 	{
-		const auto AjustedParts = [&]
+		const auto AdjustedParts = [&]
 		{
 			const auto Multiplier = static_cast<unsigned long long>(std::pow(10, NumDigits));
-			const auto Value = Parts[1] * Multiplier;
+			const auto Value = Parts[1] * static_cast<double>(Multiplier);
 			const auto UseRound = true;
 			const auto Fractional = static_cast<unsigned long long>(UseRound? std::round(Value) : Value);
 			return Fractional == Multiplier? std::make_pair(Integral + 1, 0ull) : std::make_pair(Integral, Fractional);
 		}();
 
-		ValueStr = format(FSTR(L"{0}.{1:0{2}}"), AjustedParts.first, AjustedParts.second, NumDigits);
+		ValueStr = far::format(L"{0}.{1:0{2}}"sv, AdjustedParts.first, AdjustedParts.second, NumDigits);
 	}
 	else
 	{
@@ -101,7 +114,7 @@ static std::wstring ui64toa_width(uint64_t value, unsigned width, bool bThousand
 
 static std::wstring PrintTitle(std::wstring_view const Msg)
 {
-	return format(FSTR(L"{0:<21} "), format(FSTR(L"{0}:"), Msg));
+	return far::format(L"{0:<21} "sv, far::format(L"{0}:"sv, Msg));
 }
 
 static std::wstring PrintTitle(int MsgId)
@@ -113,7 +126,7 @@ Plist::Plist():
 	dwPluginThread(GetCurrentThreadId())
 {
 	{
-		PluginSettings settings(MainGuid, Info.SettingsControl);
+		PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 		SortMode = settings.Get(0, L"SortMode", SM_UNSORTED); //SM_CUSTOM;
 		StartPanelMode = settings.Get(0, L"StartPanelMode", 1) + L'0';
 	}
@@ -123,12 +136,12 @@ Plist::Plist():
 
 	InitializePanelModes();
 
-	pPerfThread = std::make_unique<PerfThread>();
+	pPerfThread = std::make_unique<PerfThread>(this);
 }
 
-int Plist::Menu(unsigned int Flags, const wchar_t* Title, const wchar_t* Bottom, const wchar_t* HelpTopic, const struct FarKey* BreakKeys, const FarMenuItem* Items, size_t ItemsNumber)
+int Plist::Menu(unsigned int Flags, const wchar_t* Title, const wchar_t* Bottom, const wchar_t* HelpTopic, const FarKey* BreakKeys, const FarMenuItem* Items, size_t ItemsNumber)
 {
-	return static_cast<int>((*Info.Menu)(&MainGuid, {}, -1, -1, 0, Flags, Title, Bottom, HelpTopic, BreakKeys, {}, Items, ItemsNumber));
+	return static_cast<int>((*PsInfo.Menu)(&MainGuid, {}, -1, -1, 0, Flags, Title, Bottom, HelpTopic, BreakKeys, {}, Items, ItemsNumber));
 }
 
 static wchar_t upper(wchar_t Char)
@@ -240,7 +253,7 @@ void Plist::InitializePanelModes()
 		/*7*/ { { L"N,XP,X0S,X1S,X2S,X11S,X14FS,X18S",  L"0,2,3,2,2,3,4,3",    }, {}, PMFLAGS_NONE,       }, // Dynamic Performance
 		/*8*/ { { L"N,XI,O",                            L"0,6,15",             }, {}, PMFLAGS_NONE,       }, // Owners (not implemented)
 		/*9*/ { { L"N,XI,XT,X3,XG,XU",                  L"0,6,3,4,4,4",        }, {}, PMFLAGS_NONE,       }, // Resources
-	},
+	};
 
 	m_PanelModesDataRemote =
 	{
@@ -256,7 +269,7 @@ void Plist::InitializePanelModes()
 		/*9*/ { { L"N,XI,XT,X3",                        L"0,6,3,4",            }, {}, PMFLAGS_NONE,       }, // Resources
 	};
 
-	PluginSettings settings(MainGuid, Info.SettingsControl);
+	PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 
 	for (size_t i = 0; i != NPANELMODES; ++i)
 	{
@@ -266,7 +279,7 @@ void Plist::InitializePanelModes()
 		auto& ColsLocal = ModeLocal.panel_columns;
 		auto& ColsRemote = ModeRemote.panel_columns;
 
-		if (const auto Root = settings.OpenSubKey(0, format(FSTR(L"Mode{0}"), i).c_str()))
+		if (const auto Root = settings.OpenSubKey(0, far::format(L"Mode{0}"sv, i).c_str()))
 		{
 			if (settings.Get(Root, L"FullScreenLocal", (ModeLocal.Flags & PMFLAGS_FULLSCREEN) != 0))
 				ModeLocal.Flags |= PMFLAGS_FULLSCREEN;
@@ -310,11 +323,11 @@ Plist::~Plist()
 
 void Plist::SavePanelModes()
 {
-	PluginSettings settings(MainGuid, Info.SettingsControl);
+	PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 
 	for (size_t i = 0; i != NPANELMODES; ++i)
 	{
-		const auto Root = settings.CreateSubKey(0, format(FSTR(L"Mode{0}"), i).c_str());
+		const auto Root = settings.CreateSubKey(0, far::format(L"Mode{0}"sv, i).c_str());
 
 		auto& ModeLocal = m_PanelModesDataLocal[i];
 		auto& ModeRemote = m_PanelModesDataRemote[i];
@@ -433,20 +446,22 @@ PanelMode* Plist::PanelModes(size_t& nModes)
 
 void Plist::GetOpenPanelInfo(OpenPanelInfo* Info)
 {
+	const std::scoped_lock b(m_RefreshLock);
+
 	Info->StructSize = sizeof(*Info);
 	Info->Flags = OPIF_ADDDOTS | OPIF_SHOWNAMESONLY | OPIF_USEATTRHIGHLIGHTING;
 	Info->CurDir = L"";
 	static std::wstring Title;
 
 	if (HostName.empty())
-		Title = format(FSTR(L" {0} "), GetMsg(MPlistPanel));
+		Title = far::format(L" {} "sv, GetMsg(MPlistPanel));
 	else
-		Title = format(FSTR(L"{0}: {1} "), HostName, GetMsg(MPlistPanel));
+		Title = far::format(L"{}: {} "sv, HostName, GetMsg(MPlistPanel));
 
 	Info->PanelTitle = Title.c_str();
 	Info->PanelModesArray = PanelModes(Info->PanelModesNumber);
 	Info->StartPanelMode = StartPanelMode;
-	Info->StartSortMode = (OPENPANELINFO_SORTMODES)(SortMode >= SM_PROCLIST_CUSTOM? FarSortModeSlot : SortMode); //SM_UNSORTED;
+	Info->StartSortMode = SortMode >= SM_PROCLIST_CUSTOM? FarSortModeSlot : static_cast<OPENPANELINFO_SORTMODES>(SortMode); //SM_UNSORTED;
 
 
 	static WORD FKeys[] =
@@ -464,8 +479,8 @@ void Plist::GetOpenPanelInfo(OpenPanelInfo* Info)
 		VK_F8,SHIFT_PRESSED,MFKill,
 	};
 
-	static struct KeyBarLabel kbl[std::size(FKeys) / 3];
-	static struct KeyBarTitles kbt = { std::size(kbl), kbl };
+	static KeyBarLabel kbl[std::size(FKeys) / 3];
+	static KeyBarTitles kbt = { std::size(kbl), kbl };
 
 	for (size_t j = 0, i = 0; i < std::size(FKeys); i += 3, ++j)
 	{
@@ -485,7 +500,7 @@ void Plist::GetOpenPanelInfo(OpenPanelInfo* Info)
 	Info->KeyBar = &kbt;
 }
 
-BOOL CALLBACK EnumWndProc(HWND hWnd, LPARAM lParam)
+static BOOL CALLBACK EnumWndProc(HWND hWnd, LPARAM lParam)
 {
 	DWORD dwProcID;
 	GetWindowThreadProcessId(hWnd, &dwProcID);
@@ -536,13 +551,14 @@ private:
 
 int Plist::GetFindData(PluginPanelItem*& pPanelItem, size_t& ItemsNumber, OPERATION_MODES OpMode)
 {
+	const std::scoped_lock b(m_RefreshLock);
 	const std::scoped_lock l(*pPerfThread);
 
 	if (!GetList(pPanelItem, ItemsNumber, *pPerfThread))
 		return FALSE;
 
 	PanelInfo pi = { sizeof(PanelInfo) };
-	Info.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
+	PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
 	auto& ProcPanelModes = HostName.empty()? m_PanelModesDataLocal : m_PanelModesDataRemote;
 	wchar_t cDescMode = 0;
 
@@ -610,9 +626,9 @@ int Plist::GetFindData(PluginPanelItem*& pPanelItem, size_t& ItemsNumber, OPERAT
 		int nCols = 0;
 
 		{
-			const size_t Size = Info.PanelControl(this, FCTL_GETCOLUMNWIDTHS, 0, {});
+			const size_t Size = PsInfo.PanelControl(this, FCTL_GETCOLUMNWIDTHS, 0, {});
 			const auto ColumnWidths = std::make_unique<wchar_t[]>(Size);
-			Info.PanelControl(this, FCTL_GETCOLUMNWIDTHS, Size, ColumnWidths.get());
+			PsInfo.PanelControl(this, FCTL_GETCOLUMNWIDTHS, Size, ColumnWidths.get());
 
 			for (StrTok tokn(ColumnWidths.get(), L","); tokn && nCols < MAX_CUSTOM_COLS; ++tokn)
 			{
@@ -813,7 +829,7 @@ static auto window_ex_style(HWND Hwnd)
 
 #undef CODE_STR
 
-void DumpNTCounters(HANDLE InfoFile, PerfThread& Thread, DWORD dwPid, DWORD dwThreads)
+static void DumpNTCounters(HANDLE InfoFile, PerfThread& Thread, DWORD dwPid, DWORD dwThreads)
 {
 	WriteToFile(InfoFile, L'\n');
 	const std::scoped_lock l(Thread);
@@ -835,19 +851,19 @@ void DumpNTCounters(HANDLE InfoFile, PerfThread& Thread, DWORD dwPid, DWORD dwTh
 		case PERF_COUNTER_RAWCOUNT:
 		case PERF_COUNTER_LARGE_RAWCOUNT:
 			// Display as is.  No Display Suffix.
-			WriteToFile(InfoFile, format(FSTR(L"{0:20}\n"), pdata->qwResults[i]));
+			WriteToFile(InfoFile, far::format(L"{:20}\n"sv, pdata->qwResults[i]));
 			break;
 
 		case PERF_100NSEC_TIMER:
 			// 64-bit Timer in 100 nsec units. Display delta divided by delta time. Display suffix: "%"
-			WriteToFile(InfoFile, format(FSTR(L"{0:>20} {1:7}%\n"), DurationToText(pdata->qwCounters[i]), pdata->qwResults[i]));
+			WriteToFile(InfoFile, far::format(L"{:>20} {:7}%\n"sv, DurationToText(pdata->qwCounters[i]), pdata->qwResults[i]));
 			break;
 
 		case PERF_COUNTER_COUNTER:
 			// 32-bit Counter.  Divide delta by delta time.  Display suffix: " / sec"
 		case PERF_COUNTER_BULK_COUNT:
 			// 64-bit Counter.  Divide delta by delta time. Display Suffix: " / sec"
-			WriteToFile(InfoFile, format(FSTR(L"{0:20}  {1:7}{2}\n"), pdata->qwCounters[i], pdata->qwResults[i], GetMsg(MPerSec)));
+			WriteToFile(InfoFile, far::format(L"{:20}  {:7}{}\n"sv, pdata->qwCounters[i], pdata->qwResults[i], GetMsg(MPerSec)));
 			break;
 
 		default:
@@ -857,8 +873,10 @@ void DumpNTCounters(HANDLE InfoFile, PerfThread& Thread, DWORD dwPid, DWORD dwTh
 	}
 }
 
-int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, const wchar_t** DestPath, OPERATION_MODES OpMode, options& Opt)
+int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, const wchar_t** DestPath, OPERATION_MODES OpMode, options& LocalOpt)
 {
+	const std::scoped_lock b(m_RefreshLock);
+
 	static const wchar_t invalid_chars[] = L":*?\\/\"<>;|";
 
 	if (ItemsNumber == 0)
@@ -909,15 +927,15 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 
 		WriteToFile(InfoFile.get(), L'\xfeff');
 
-		WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}, {2}{3}\n"), PrintTitle(MTitleModule), CurItem.FileName, pdata->Bitness, GetMsg(MBits)));
+		WriteToFile(InfoFile.get(), far::format(L"{}{}, {}{}\n"sv, PrintTitle(MTitleModule), CurItem.FileName, pdata->Bitness, GetMsg(MBits)));
 
 		if (!pdata->FullPath.empty())
 		{
-			WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleFullPath), pdata->FullPath));
+			WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitleFullPath), pdata->FullPath));
 			PrintVersionInfo(InfoFile.get(), pdata->FullPath.c_str());
 		}
 
-		WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitlePID), pdata->dwPID));
+		WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitlePID), pdata->dwPID));
 		WriteToFile(InfoFile.get(), PrintTitle(MTitleParentPID));
 
 		{
@@ -926,13 +944,13 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 			const auto pName = pdata->dwParentPID && pParentData? pParentData->ProcessName.c_str() : nullptr;
 
 			if (pName)
-				WriteToFile(InfoFile.get(), format(FSTR(L"{0}  ({1})\n"), pdata->dwParentPID, pName));
+				WriteToFile(InfoFile.get(), far::format(L"{}  ({})\n"sv, pdata->dwParentPID, pName));
 			else
-				WriteToFile(InfoFile.get(), format(FSTR(L"{0}\n"), pdata->dwParentPID));
+				WriteToFile(InfoFile.get(), far::format(L"{}\n"sv, pdata->dwParentPID));
 		}
 
-		WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitlePriority), pdata->dwPrBase));
-		WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleThreads), CurItem.NumberOfLinks));
+		WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitlePriority), pdata->dwPrBase));
+		WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitleThreads), CurItem.NumberOfLinks));
 
 		PrintOwnerInfo(InfoFile.get(), pdata->dwPID);
 
@@ -951,28 +969,28 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 
 			if (Current.wYear != Compare.wYear || Current.wMonth != Compare.wMonth || Current.wDay != Compare.wDay)
 			{
-				WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}{1} {2}\n"), PrintTitle(MTitleStarted), DateText, TimeText));
+				WriteToFile(InfoFile.get(), far::format(L"\n{}{} {}\n"sv, PrintTitle(MTitleStarted), DateText, TimeText));
 			}
 			else
 			{
-				WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}{1}\n"), PrintTitle(MTitleStarted), TimeText));
+				WriteToFile(InfoFile.get(), far::format(L"\n{}{}\n"sv, PrintTitle(MTitleStarted), TimeText));
 			}
 
-			WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleUptime), FileTimeDifferenceToText(CurFileTime, CurItem.CreationTime)));
+			WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitleUptime), FileTimeDifferenceToText(CurFileTime, CurItem.CreationTime)));
 		}
 
 		if (HostName.empty()) // local only
 		{
 			if (!pdata->CommandLine.empty())
 			{
-				WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}:\n{1}\n"), GetMsg(MCommandLine), pdata->CommandLine));
+				WriteToFile(InfoFile.get(), far::format(L"\n{}:\n{}\n"sv, GetMsg(MCommandLine), pdata->CommandLine));
 			}
 
 			DebugToken token;
 
 			if (const auto Process = handle(OpenProcessForced(&token, PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | READ_CONTROL, pdata->dwPID)))
 			{
-				PrintNTCurDirAndEnv(InfoFile.get(), Process.get(), Opt.ExportEnvironment);
+				PrintNTCurDirAndEnv(InfoFile.get(), Process.get(), LocalOpt.ExportEnvironment);
 
 				const std::scoped_lock l(*pPerfThread);
 
@@ -980,36 +998,36 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 				{
 					if (pd->dwGDIObjects)
 					{
-						WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}{1}\n"), PrintTitle(MTitleGDIObjects), pd->dwGDIObjects));
+						WriteToFile(InfoFile.get(), far::format(L"\n{}{}\n"sv, PrintTitle(MTitleGDIObjects), pd->dwGDIObjects));
 					}
 
 					if (pd->dwUSERObjects)
 					{
-						WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleUSERObjects), pd->dwUSERObjects));
+						WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(MTitleUSERObjects), pd->dwUSERObjects));
 					}
 				}
 			}
 		}
 
-		if (Opt.ExportPerformance)
+		if (LocalOpt.ExportPerformance)
 			DumpNTCounters(InfoFile.get(), *pPerfThread, pdata->dwPID, (DWORD)CurItem.NumberOfLinks);
 
 		if (HostName.empty() && pdata->hwnd)
 		{
 			wchar_t Title[MAX_PATH]; *Title = 0;
 			GetWindowText(pdata->hwnd, Title, static_cast<int>(std::size(Title)));
-			WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}{1}\n"), PrintTitle(MTitleWindow), Title));
-			WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1}\n"), PrintTitle(L"HWND"sv), static_cast<const void*>(pdata->hwnd)));
+			WriteToFile(InfoFile.get(), far::format(L"\n{}{}\n"sv, PrintTitle(MTitleWindow), Title));
+			WriteToFile(InfoFile.get(), far::format(L"{}{}\n"sv, PrintTitle(L"HWND"sv), static_cast<const void*>(pdata->hwnd)));
 
 			const auto& [Style, StyleStr] = window_style(pdata->hwnd);
-			WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1:08X} {2}\n"), PrintTitle(MTitleStyle), Style, StyleStr));
+			WriteToFile(InfoFile.get(), far::format(L"{}{:08X} {}\n"sv, PrintTitle(MTitleStyle), Style, StyleStr));
 			const auto& [ExStyle, ExStyleStr] = window_ex_style(pdata->hwnd);
-			WriteToFile(InfoFile.get(), format(FSTR(L"{0}{1:08X} {2}\n"), PrintTitle(MTitleExtStyle), ExStyle, ExStyleStr));
+			WriteToFile(InfoFile.get(), far::format(L"{}{:08X} {}\n"sv, PrintTitle(MTitleExtStyle), ExStyle, ExStyleStr));
 		}
 
-		if (HostName.empty() && Opt.ExportModuleInfo && pdata->dwPID != 8)
+		if (HostName.empty() && LocalOpt.ExportModuleInfo && pdata->dwPID != 8)
 		{
-			WriteToFile(InfoFile.get(), format(FSTR(L"\n{0}:\n{1:<{2}} {3:<8} {4}\n"),
+			WriteToFile(InfoFile.get(), far::format(L"\n{}:\n{:<{}} {:<8} {}\n"sv,
 				GetMsg(MTitleModules),
 				GetMsg(MColBase),
 #ifdef _WIN64
@@ -1019,14 +1037,14 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 #endif
 
 				GetMsg(MColSize),
-				GetMsg(Opt.ExportModuleVersion? MColPathVerDesc : MColPathVerDescNotShown)
+				GetMsg(LocalOpt.ExportModuleVersion? MColPathVerDesc : MColPathVerDescNotShown)
 			));
 
-			PrintModules(InfoFile.get(), pdata->dwPID, Opt);
+			PrintModules(InfoFile.get(), pdata->dwPID, LocalOpt);
 		}
 
-		if (HostName.empty() && (Opt.ExportHandles | Opt.ExportHandlesUnnamed) && pdata->dwPID /*&& pdata->dwPID!=8*/)
-			PrintHandleInfo(pdata->dwPID, InfoFile.get(), Opt.ExportHandlesUnnamed? true : false, pPerfThread.get());
+		if (HostName.empty() && (LocalOpt.ExportHandles | LocalOpt.ExportHandlesUnnamed) && pdata->dwPID /*&& pdata->dwPID!=8*/)
+			PrintHandleInfo(pdata->dwPID, InfoFile.get(), LocalOpt.ExportHandlesUnnamed? true : false, pPerfThread.get());
 	}
 
 	return true;
@@ -1035,6 +1053,8 @@ int Plist::GetFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, int Move, co
 
 int Plist::DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION_MODES OpMode)
 {
+	const std::scoped_lock b(m_RefreshLock);
+
 	if (ItemsNumber == 0)
 		return false;
 
@@ -1059,7 +1079,7 @@ int Plist::DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION
 
 		if (ItemsNumber == 1)
 		{
-			Msg = format(GetMsg(MDeleteProcess), PanelItem[0].FileName);
+			Msg = far::vformat(GetMsg(MDeleteProcess), PanelItem[0].FileName);
 			MsgItems[1] = Msg.c_str();
 		}
 
@@ -1068,7 +1088,7 @@ int Plist::DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION
 
 		if (ItemsNumber > 1)
 		{
-			Msg = format(GetMsg(MDeleteNumberOfProcesses), ItemsNumber);
+			Msg = far::vformat(GetMsg(MDeleteNumberOfProcesses), ItemsNumber);
 			MsgItems[1] = Msg.c_str();
 
 			if (Message(FMSG_WARNING, {}, MsgItems, std::size(MsgItems), 2) != 0)
@@ -1113,7 +1133,7 @@ int Plist::DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION
 
 		if (!Success)
 		{
-			const auto Msg = format(GetMsg(MCannotDelete), CurItem.FileName);
+			const auto Msg = far::vformat(GetMsg(MCannotDelete), CurItem.FileName);
 			const wchar_t* MsgItems[]
 			{
 				GetMsg(MDeleteTitle),
@@ -1144,17 +1164,16 @@ int Plist::DeleteFiles(PluginPanelItem* PanelItem, size_t ItemsNumber, OPERATION
 
 int Plist::ProcessEvent(intptr_t Event, void* Param)
 {
-	if (Event == FE_IDLE && (pPerfThread->Updated() /*|| !pPerfThread&&GetTickCount()-LastUpdateTime>1000*/))
-		Reread();
+	const std::scoped_lock b(m_RefreshLock);
 
 	if (Event == FE_CLOSE)
 	{
 		PanelInfo pi = { sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
-		PluginSettings settings(MainGuid, Info.SettingsControl);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
+		PluginSettings settings(MainGuid, PsInfo.SettingsControl);
 
 		settings.Set(0, L"StartPanelMode", pi.ViewMode);
-		settings.Set(0, L"SortMode", pi.SortMode == FarSortModeSlot? SortMode : pi.SortMode);
+		settings.Set(0, L"SortMode", pi.SortMode == FarSortModeSlot? static_cast<OPENPANELINFO_SORTMODES>(SortMode) : pi.SortMode);
 	}
 
 	if (Event == FE_CHANGEVIEWMODE)
@@ -1168,15 +1187,15 @@ int Plist::ProcessEvent(intptr_t Event, void* Param)
 
 void Plist::Reread()
 {
-	Info.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
-	Info.PanelControl(this, FCTL_REDRAWPANEL, 0, {});
+	PsInfo.PanelControl(this, FCTL_UPDATEPANEL, 1, {});
+	PsInfo.PanelControl(this, FCTL_REDRAWPANEL, 0, {});
 	PanelInfo PInfo = { sizeof(PanelInfo) };
-	Info.PanelControl(PANEL_PASSIVE, FCTL_GETPANELINFO, 0, &PInfo);
+	PsInfo.PanelControl(PANEL_PASSIVE, FCTL_GETPANELINFO, 0, &PInfo);
 
 	if (PInfo.PanelType == PTYPE_QVIEWPANEL)
 	{
-		Info.PanelControl(PANEL_PASSIVE, FCTL_UPDATEPANEL, 1, {});
-		Info.PanelControl(PANEL_PASSIVE, FCTL_REDRAWPANEL, 0, {});
+		PsInfo.PanelControl(PANEL_PASSIVE, FCTL_UPDATEPANEL, 1, {});
+		PsInfo.PanelControl(PANEL_PASSIVE, FCTL_REDRAWPANEL, 0, {});
 	}
 }
 
@@ -1194,8 +1213,8 @@ void Plist::PutToCmdLine(const wchar_t* tmp)
 		tmp = Buffer.get();
 	}
 
-	Info.PanelControl(this, FCTL_INSERTCMDLINE, 0, const_cast<wchar_t*>(tmp));
-	Info.PanelControl(this, FCTL_INSERTCMDLINE, 0, const_cast<wchar_t*>(L" "));
+	PsInfo.PanelControl(this, FCTL_INSERTCMDLINE, 0, const_cast<wchar_t*>(tmp));
+	PsInfo.PanelControl(this, FCTL_INSERTCMDLINE, 0, const_cast<wchar_t*>(L" "));
 }
 
 bool Plist::Connect(const wchar_t* pMachine, const wchar_t* pUser, const wchar_t* pPasw)
@@ -1210,14 +1229,14 @@ bool Plist::Connect(const wchar_t* pMachine, const wchar_t* pUser, const wchar_t
 
 	//Try to connect...
 	const wchar_t* ConnectItems[] = { L"",GetMsg(MConnect) };
-	const auto hScreen = Info.SaveScreen(0, 0, -1, -1);
+	const auto hScreen = PsInfo.SaveScreen(0, 0, -1, -1);
 	Message(0, {}, ConnectItems, 2, 0);
 
 	if (pUser && *pUser)
 	{
 		static NETRESOURCE nr =
 		{ RESOURCE_GLOBALNET, RESOURCETYPE_DISK, RESOURCEDISPLAYTYPE_SERVER,
-		  RESOURCEUSAGE_CONTAINER, {}, {}, (wchar_t*)L"", {}
+		  RESOURCEUSAGE_CONTAINER, {}, {}, const_cast<wchar_t*>(L""), {}
 		};
 		nr.lpRemoteName = const_cast<wchar_t*>(Machine.c_str());
 		DWORD dwErr = WNetAddConnection2(&nr, pPasw, pUser, 0);
@@ -1236,16 +1255,16 @@ bool Plist::Connect(const wchar_t* pMachine, const wchar_t* pUser, const wchar_t
 		}
 	}
 
-	auto pNewPerfThread = std::make_unique<PerfThread>(Machine.c_str(), pUser? pUser : nullptr, pUser? pPasw : nullptr);
+	auto pNewPerfThread = std::make_unique<PerfThread>(this, Machine.c_str(), pUser? pUser : nullptr, pUser? pPasw : nullptr);
 
 	if (!pNewPerfThread->IsOK())
 	{
 		WinError();
-		Info.RestoreScreen(hScreen);
+		PsInfo.RestoreScreen(hScreen);
 	}
 	else
 	{
-		Info.RestoreScreen(hScreen);
+		PsInfo.RestoreScreen(hScreen);
 		pPerfThread = std::move(pNewPerfThread);
 		DisconnectWMI();
 		HostName = std::move(Machine);
@@ -1287,38 +1306,72 @@ static bool is_alttab_window(HWND const Window)
 	return true;
 }
 
+static constexpr auto
+	none_pressed = 0,
+	any_ctrl_pressed = LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED,
+	any_alt_pressed = LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED,
+	any_shift_pressed = SHIFT_PRESSED;
+
+constexpr auto check_control(unsigned const ControlState, unsigned const Mask)
+{
+	constexpr auto ValidMask = any_ctrl_pressed | any_alt_pressed | any_shift_pressed;
+
+	const auto FilteredControlState = ControlState & ValidMask;
+	const auto OtherKeys = ValidMask & ~Mask;
+
+	return ((FilteredControlState & Mask) || !Mask) && !(FilteredControlState & OtherKeys);
+};
+
+static_assert(check_control(0, 0));
+static_assert(check_control(NUMLOCK_ON, 0));
+static_assert(check_control(NUMLOCK_ON | SHIFT_PRESSED, any_shift_pressed));
+static_assert(check_control(NUMLOCK_ON | SHIFT_PRESSED | LEFT_ALT_PRESSED, any_shift_pressed | any_alt_pressed));
+static_assert(!check_control(NUMLOCK_ON | SHIFT_PRESSED | LEFT_ALT_PRESSED, any_shift_pressed));
+static_assert(!check_control(0, SHIFT_PRESSED));
+static_assert(!check_control(NUMLOCK_ON, SHIFT_PRESSED));
+static_assert(!check_control(NUMLOCK_ON | SHIFT_PRESSED, 0));
+
+
 int Plist::ProcessKey(const INPUT_RECORD* Rec)
 {
+	const std::scoped_lock b(m_RefreshLock);
+
 	if (Rec->EventType != KEY_EVENT)
 		return FALSE;
 
-	int Key = Rec->Event.KeyEvent.wVirtualKeyCode;
-	unsigned int ControlState = Rec->Event.KeyEvent.dwControlKeyState;
+	const auto Key = Rec->Event.KeyEvent.wVirtualKeyCode;
+	const auto ControlState = Rec->Event.KeyEvent.dwControlKeyState;
 
-	if ((ControlState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) && Key == L'R')
+	const auto
+		NonePressed = check_control(ControlState, none_pressed),
+		OnlyAnyCtrlPressed = check_control(ControlState, any_ctrl_pressed),
+		//OnlyAnyAltPressed = check_control(ControlState, any_alt_pressed),
+		OnlyAnyShiftPressed = check_control(ControlState, any_shift_pressed);
+
+	if (OnlyAnyCtrlPressed && Key == L'R')
 	{
 		pPerfThread->SmartReread();
 		return FALSE;
 	}
 
-	if (ControlState == 0 && Key == VK_RETURN)
+	if (NonePressed && Key == VK_RETURN)
 	{
 		//check for the command line; if it's not empty, don't process Enter
-		if (Info.PanelControl(this, FCTL_GETCMDLINE, 0, {}) > 1)
+		if (PsInfo.PanelControl(this, FCTL_GETCMDLINE, 0, {}) > 1)
 			return false;
 
 		PanelInfo PInfo = { sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &PInfo);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &PInfo);
 
 		if (PInfo.CurrentItem < PInfo.ItemsNumber)
 		{
-			const size_t Size = Info.PanelControl(this, FCTL_GETPANELITEM, PInfo.CurrentItem, {});
+			const size_t Size = PsInfo.PanelControl(this, FCTL_GETPANELITEM, PInfo.CurrentItem, {});
 			const auto CurItem = make_malloc<PluginPanelItem>(Size);
 			if (!CurItem)
 				return false;
 
 			FarGetPluginPanelItem gpi{ sizeof(FarGetPluginPanelItem), Size, CurItem.get() };
-			Info.PanelControl(this, FCTL_GETPANELITEM, PInfo.CurrentItem, &gpi);
+			PsInfo.PanelControl(this, FCTL_GETPANELITEM, PInfo.CurrentItem, &gpi);
 
 			if (!CurItem->UserData.Data)
 				return false;
@@ -1334,16 +1387,17 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 
 		return TRUE;
 	}
-	else if (ControlState == SHIFT_PRESSED && Key == VK_F3)
+
+	if (OnlyAnyShiftPressed && Key == VK_F3)
 	{
 		PanelInfo pi{ sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
 
-		size_t Size = Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
+		size_t Size = PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
 		if (const auto PPI = make_malloc<PluginPanelItem>(Size))
 		{
 			FarGetPluginPanelItem gpi = { sizeof(FarGetPluginPanelItem), Size, PPI.get() };
-			Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
+			PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
 			bool Exit = pi.CurrentItem >= pi.ItemsNumber || !lstrcmp(PPI->FileName, L"..");
 
 			if (Exit)
@@ -1355,7 +1409,7 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 
 		auto LocalOpt = Opt;
 
-		PluginDialogBuilder Builder(Info, MainGuid, ConfigDialogGuid, MViewWithOptions, L"Config");
+		PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MViewWithOptions, L"Config");
 		Builder.AddText(MIncludeAdditionalInfo);
 		Builder.AddCheckbox(MInclEnvironment, &LocalOpt.ExportEnvironment);
 		Builder.AddCheckbox(MInclModuleInfo, &LocalOpt.ExportModuleInfo);
@@ -1371,16 +1425,16 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 		wchar_t FileName[MAX_PATH];
 		FSF.MkTemp(FileName, std::size(FileName), L"prc");
 		const wchar_t* lpFileName = FileName;
-		Size = Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
+		Size = PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
 		if (const auto PPI = make_malloc<PluginPanelItem>(Size))
 		{
 			FarGetPluginPanelItem gpi{ sizeof(FarGetPluginPanelItem), Size, PPI.get() };
-			Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
+			PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
 
 			if (GetFiles(PPI.get(), 1, 0, &lpFileName, OPM_VIEW | 0x10000, LocalOpt))
 			{
 				//TODO: viewer crashed on exit!
-				Info.Viewer(FileName, PPI->FileName, 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE, CP_DEFAULT);
+				PsInfo.Viewer(FileName, PPI->FileName, 0, 0, -1, -1, VF_NONMODAL | VF_DELETEONCLOSE, CP_DEFAULT);
 			}
 		}
 		else
@@ -1389,14 +1443,15 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 
 		return TRUE;
 	}
-	else if (ControlState == 0 && Key == VK_F6)
+
+	if (NonePressed && Key == VK_F6)
 	{
 		{
 			wchar_t Host[1024] = {};
 			std::wcsncpy(Host, HostName.c_str(), std::size(Host));
 			wchar_t Username[1024] = {};
 			wchar_t Password[1024] = {};
-			PluginDialogBuilder Builder(Info, MainGuid, ConfigDialogGuid, MSelectComputer, L"Contents"); // ConfigDialogGuid ???
+			PluginDialogBuilder Builder(PsInfo, MainGuid, ConfigDialogGuid, MSelectComputer, L"Contents"); // ConfigDialogGuid ???
 			Builder.AddText(MComputer);
 			Builder.AddEditField(Host, static_cast<int>(std::size(Host)), 65, L"ProcessList.Computer");
 			Builder.AddText(MEmptyForLocal);
@@ -1424,7 +1479,7 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 						//go to local computer
 						pPerfThread = {};
 						DisconnectWMI();
-						pPerfThread = std::make_unique<PerfThread>();
+						pPerfThread = std::make_unique<PerfThread>(this);
 						HostName.clear();
 						stop = true;
 					}
@@ -1442,19 +1497,20 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 		Reread();
 		return TRUE;
 	}
-	else if (ControlState == SHIFT_PRESSED && Key == VK_F6)
+
+	if (OnlyAnyShiftPressed && Key == VK_F6)
 	{
 		// go to local host
 		pPerfThread = {};
 		DisconnectWMI();
-		pPerfThread = std::make_unique<PerfThread>();
+		pPerfThread = std::make_unique<PerfThread>(this);
 		HostName.clear();
 		Reread();
 		return TRUE;
 	}
 
 #if 0
-	else if ((ControlState & (RIGHT_ALT_PRESSED | LEFT_ALT_PRESSED)) && Key == VK_F6)
+	if (OnlyAnyAltPressed && Key == VK_F6)
 	{
 		if (!Opt.EnableWMI)
 			return TRUE;
@@ -1496,11 +1552,12 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 	}
 
 #endif
-	else if (ControlState == SHIFT_PRESSED && (Key == VK_F1 || Key == VK_F2) && (HostName.empty() || Opt.EnableWMI))
+
+	if (OnlyAnyShiftPressed && (Key == VK_F1 || Key == VK_F2) && (HostName.empty() || Opt.EnableWMI))
 	{
 		//lower/raise priority class
 		PanelInfo PInfo = { sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &PInfo);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &PInfo);
 
 		if (PInfo.SelectedItemsNumber > 1)
 		{
@@ -1528,7 +1585,7 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 
 		for (size_t i = 0; i < PInfo.SelectedItemsNumber; i++)
 		{
-			const size_t Size = Info.PanelControl(PANEL_ACTIVE, FCTL_GETSELECTEDPANELITEM, 0, {});
+			const size_t Size = PsInfo.PanelControl(PANEL_ACTIVE, FCTL_GETSELECTEDPANELITEM, 0, {});
 			if (!Size)
 				continue;
 
@@ -1537,7 +1594,7 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 				continue;
 
 			FarGetPluginPanelItem gpi{ sizeof(FarGetPluginPanelItem), Size, PPI.get() };
-			Info.PanelControl(PANEL_ACTIVE, FCTL_GETSELECTEDPANELITEM, i, &gpi);
+			PsInfo.PanelControl(PANEL_ACTIVE, FCTL_GETSELECTEDPANELITEM, i, &gpi);
 			SetLastError(ERROR_SUCCESS);
 
 			if (static_cast<ProcessData*>(PPI->UserData.Data)->dwPID)
@@ -1640,19 +1697,20 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 		Config();
 		return TRUE;*/
 	}
-	else if ((ControlState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) && Key == L'F')
+
+	if (OnlyAnyCtrlPressed && Key == L'F')
 	{
 		PanelInfo pi = { sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
 
 		if (pi.CurrentItem < pi.ItemsNumber)
 		{
-			const size_t Size = Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
+			const size_t Size = PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, {});
 			const auto PPI = make_malloc<PluginPanelItem>(Size);
 			if (PPI)
 			{
 				FarGetPluginPanelItem gpi{ sizeof(FarGetPluginPanelItem), Size, PPI.get() };
-				Info.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
+				PsInfo.PanelControl(this, FCTL_GETPANELITEM, pi.CurrentItem, &gpi);
 
 				if (const auto pData = static_cast<ProcessData*>(PPI->UserData.Data))
 					PutToCmdLine(pData->FullPath.c_str());
@@ -1664,45 +1722,68 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 
 		return TRUE;
 	}
-	else if ((ControlState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) && Key == VK_F12)
+
+	if (OnlyAnyCtrlPressed && (Key >= VK_F3 && Key <= VK_F12))
 	{
-		struct
+		if (
+			Key == VK_F5 || // Write time
+			Key == VK_F9    // Access time
+			)
+			return TRUE;
+
+		static const struct
 		{
 			unsigned id;
 			unsigned SortMode;
+			unsigned Key;
 			bool InvertByDefault;
 		}
 		StaticItems[]
 		{
-			{MSortByName,           SM_NAME,                 false, },
-			{MSortByExt,            SM_EXT,                  false, },
-			{MSortBySize,           SM_SIZE,                 true,  },
-			{MSortByUnsorted,       SM_UNSORTED,             false, },
-			{MSortByTime,           SM_CTIME,                true,  },
-			{MSortByDescriptions,   SM_DESCR,                false, },
-			{MSortByOwner,          SM_OWNER,                false, },
-			//{MPageFileBytes,        SM_COMPRESSEDSIZE        true,  },
-			{MTitlePID,             SM_PROCLIST_PID,         true,  },
-			{MTitleParentPID,       SM_PROCLIST_PARENTPID,   true,  },
-			{MTitleThreads,         SM_NUMLINKS,             true,  },
-			{MTitlePriority,        SM_PROCLIST_PRIOR,       true   },
+			{MSortByName,           SM_NAME,                 VK_F3,  false, },
+			{MSortByExt,            SM_EXT,                  VK_F4,  false, },
+			{MSortBySize,           SM_SIZE,                 VK_F6,  true,  },
+			{MSortByUnsorted,       SM_UNSORTED,             VK_F7,  false, },
+			{MSortByTime,           SM_CTIME,                VK_F8,  true,  },
+			{MSortByDescriptions,   SM_DESCR,                VK_F10, false, },
+			{MSortByOwner,          SM_OWNER,                VK_F11, false, },
+			//{MPageFileBytes,        SM_COMPRESSEDSIZE,       0,      true,  },
+			{MTitlePID,             SM_PROCLIST_PID,         0,      true,  },
+			{MTitleParentPID,       SM_PROCLIST_PARENTPID,   0,      true,  },
+			{MTitleThreads,         SM_NUMLINKS,             0,      true,  },
+			{MTitlePriority,        SM_PROCLIST_PRIOR,       0,      true   },
 			//{0,-1},
 			//{MUseSortGroups,0},
 			//{MShowSelectedFirst,-1}
 		};
 
 		PanelInfo pi{ sizeof(PanelInfo) };
-		Info.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
+		PsInfo.PanelControl(this, FCTL_GETPANELINFO, 0, &pi);
 
 		const auto Reversed = (pi.Flags & PFLAGS_REVERSESORTORDER) != 0;
+
+		if (Key != VK_F12)
+		{
+			const auto CurrentSortMode = SortMode;
+			const auto& StaticItem = std::find_if(std::cbegin(StaticItems), std::cend(StaticItems), [Key](const auto& i) { return i.Key == Key; });
+
+			SortMode = StaticItem->SortMode;
+			PsInfo.PanelControl(this, FCTL_SETSORTMODE, SortMode, {});
+
+			const auto SameSelected = SortMode == CurrentSortMode;
+			PsInfo.PanelControl(this, FCTL_SETSORTORDER, SameSelected? !Reversed : StaticItem->InvertByDefault, {});
+
+			return TRUE;
+		}
+
 		const auto cIndicator = Reversed? L'▼' : L'▲';
 		const auto KnownSortingSlot =
 			pi.SortMode == FarSortModeSlot ||
-			std::any_of(std::cbegin(StaticItems), std::cend(StaticItems), [&](const auto& i){ return pi.SortMode == i.SortMode; });
+			std::any_of(std::cbegin(StaticItems), std::cend(StaticItems), [&](const auto& i){ return static_cast<unsigned>(pi.SortMode) == i.SortMode; });
 
 		const auto CheckFlag = [&](size_t const Value)
 		{
-			return KnownSortingSlot && SortMode == Value? MIF_CHECKED | cIndicator : 0;
+			return KnownSortingSlot && SortMode == Value? MIF_SELECTED | MIF_CHECKED | cIndicator : 0;
 		};
 
 		std::vector<FarMenuItem> Items;
@@ -1736,8 +1817,8 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 				continue;
 
 			PerSecMessages.emplace_back(i < 3?
-				format(FSTR(L"% {0}"), GetMsg(Counters[i].idName)) :
-				format(FSTR(L"{0}{1}"), GetMsg(Counters[i].idName), GetMsg(MPerSec))
+				far::format(L"% {}"sv, GetMsg(Counters[i].idName)) :
+				far::format(L"{}{}"sv, GetMsg(Counters[i].idName), GetMsg(MPerSec))
 			);
 
 			Items.push_back({ CheckFlag(SM_PROCLIST_PERSEC | (SM_PROCLIST_PERFCOUNTER + i)), PerSecMessages.back().c_str() });
@@ -1751,22 +1832,20 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 		if (rc >= 0)
 		{
 			const auto IsStatic = static_cast<size_t>(rc) < std::size(StaticItems);
+			const auto CurrentSortMode = SortMode;
 
 			SortMode = IsStatic?
 				StaticItems[rc].SortMode :
 				SM_PROCLIST_PERFCOUNTER + static_cast<unsigned>(DynamicSortModes[rc - std::size(StaticItems) - 1]);
 
-			auto FarSortMode = SortMode < SM_PROCLIST_CUSTOM? SortMode : FarSortModeSlot;
+			auto FarSortMode = SortMode < SM_PROCLIST_CUSTOM? static_cast<OPENPANELINFO_SORTMODES>(SortMode) : FarSortModeSlot;
 
-			Info.PanelControl(this, FCTL_SETSORTMODE, FarSortMode, {});
+			PsInfo.PanelControl(this, FCTL_SETSORTMODE, FarSortMode, {});
 
 			const auto InvertByDefault = !IsStatic || StaticItems[rc].InvertByDefault;
-			const auto SameSelected = FarSortMode == LastFarSortMode && SortMode == LastInternalSortMode;
+			const auto SameSelected = SortMode == CurrentSortMode;
 
-			Info.PanelControl(this, FCTL_SETSORTORDER, SameSelected? !InvertByDefault : InvertByDefault, {});
-
-			LastFarSortMode = FarSortMode;
-			LastInternalSortMode = SortMode;
+			PsInfo.PanelControl(this, FCTL_SETSORTORDER, SameSelected? !Reversed : InvertByDefault, {});
 			/*
 			else if(rc==std::size(StaticItems)-2)
 			Control(FCTL_SETSORTORDER, &items[rc].mode);
@@ -1779,6 +1858,14 @@ int Plist::ProcessKey(const INPUT_RECORD* Rec)
 	}
 
 	return FALSE;
+}
+
+void Plist::ProcessSynchroEvent()
+{
+	if (m_RefreshLock.is_busy())
+		return;
+
+	Reread();
 }
 
 std::wstring DurationToText(uint64_t Duration)
@@ -1797,9 +1884,9 @@ std::wstring DurationToText(uint64_t Duration)
 		Ticks   = Duration % TicksPerD % TicksPerH % TicksPerM % TicksPerS / 1;
 
 	if (Days > 0)
-		return format(FSTR(L"{0} {1:02}:{2:02}:{3:02}.{4:07}"), Days, Hours, Minutes, Seconds, Ticks);
+		return far::format(L"{} {:02}:{:02}:{:02}.{:07}"sv, Days, Hours, Minutes, Seconds, Ticks);
 	else
-		return format(FSTR(L"{0:02}:{1:02}:{2:02}.{3:07}"), Hours, Minutes, Seconds, Ticks);
+		return far::format(L"{:02}:{:02}:{:02}.{:07}"sv, Hours, Minutes, Seconds, Ticks);
 }
 
 std::wstring FileTimeDifferenceToText(const FILETIME& CurFileTime, const FILETIME& SrcTime)
@@ -1839,7 +1926,7 @@ bool Plist::GetVersionInfo(const wchar_t* pFullPath, std::unique_ptr<char[]>& Bu
 	if (!Translation)
 		return false;
 
-	const auto BlockPath = format(FSTR(L"\\StringFileInfo\\{0:04X}{1:04X}\\"), LOWORD(*Translation), HIWORD(*Translation));
+	const auto BlockPath = far::format(L"\\StringFileInfo\\{:04X}{:04X}\\"sv, LOWORD(*Translation), HIWORD(*Translation));
 
 	pVersion = GetValue<wchar_t>(Buffer.get(), (BlockPath + L"FileVersion"s).c_str());
 	pDesc = GetValue<wchar_t>(Buffer.get(), (BlockPath + L"FileDescription"s).c_str());
@@ -1857,12 +1944,12 @@ void Plist::PrintVersionInfo(HANDLE InfoFile, const wchar_t* pFullPath)
 
 	if (pVersion)
 	{
-		WriteToFile(InfoFile, format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleFileVersion), pVersion));
+		WriteToFile(InfoFile, far::format(L"{}{}\n"sv, PrintTitle(MTitleFileVersion), pVersion));
 	}
 
 	if (pDesc)
 	{
-		WriteToFile(InfoFile, format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleFileDesc), pDesc));
+		WriteToFile(InfoFile, far::format(L"{}{}\n"sv, PrintTitle(MTitleFileDesc), pDesc));
 	}
 }
 
@@ -1906,18 +1993,18 @@ void Plist::PrintOwnerInfo(HANDLE InfoFile, DWORD dwPid)
 		WriteToFile(InfoFile, PrintTitle(MTitleUsername));
 
 		if (!Domain.empty())
-			WriteToFile(InfoFile, format(FSTR(L"{0}\\"), Domain));
+			WriteToFile(InfoFile, far::format(L"{}\\"sv, Domain));
 
 		if (!User.empty())
 			WriteToFile(InfoFile, User);
 
 		if (!Sid.empty())
-			WriteToFile(InfoFile, format(FSTR(L" ({0})"), Sid));
+			WriteToFile(InfoFile, far::format(L" ({})"sv, Sid));
 
 		WriteToFile(InfoFile, L'\n');
 	}
 
-	WriteToFile(InfoFile, format(FSTR(L"{0}{1}\n"), PrintTitle(MTitleSessionId), pWMI->GetProcessSessionId(dwPid)));
+	WriteToFile(InfoFile, far::format(L"{}{}\n"sv, PrintTitle(MTitleSessionId), pWMI->GetProcessSessionId(dwPid)));
 }
 
 template<typename T>
@@ -1928,6 +2015,8 @@ auto compare_numbers(T const First, T const Second)
 
 int Plist::Compare(const PluginPanelItem* Item1, const PluginPanelItem* Item2, unsigned int Mode) const
 {
+	const std::scoped_lock b(m_RefreshLock);
+
 	if (Mode != FarSortModeSlot || SortMode < SM_PROCLIST_CUSTOM)
 		return -2;
 
@@ -1939,15 +2028,24 @@ int Plist::Compare(const PluginPanelItem* Item1, const PluginPanelItem* Item2, u
 	switch (SortMode)
 	{
 	case SM_PROCLIST_PID:
-		diff = compare_numbers(pd1.dwPID, pd2.dwPID);
+		diff = compare_numbers(
+			pd1.dwPID,
+			pd2.dwPID
+		);
 		break;
 
 	case SM_PROCLIST_PARENTPID:
-		diff = compare_numbers(pd1.dwParentPID, pd2.dwParentPID);
+		diff = compare_numbers(
+			pd1.dwParentPID,
+			pd2.dwParentPID
+		);
 		break;
 
 	case SM_PROCLIST_PRIOR:
-		diff = compare_numbers(pd2.dwPrBase, pd1.dwPrBase);
+		diff = compare_numbers(
+			pd1.dwPrBase,
+			pd2.dwPrBase
+		);
 		break;
 
 	default:
@@ -1957,10 +2055,10 @@ int Plist::Compare(const PluginPanelItem* Item1, const PluginPanelItem* Item2, u
 			const auto data2 = pPerfThread->GetProcessData(pd2.dwPID, static_cast<DWORD>(Item2->NumberOfLinks));
 
 			if (!data1)
-				return data2? 1 : 0;
+				return data2? -1 : 0;
 
 			if (!data2)
-				return -1;
+				return 1;
 
 			bool bPerSec = false;
 			auto smode = SortMode;
@@ -1976,13 +2074,24 @@ int Plist::Compare(const PluginPanelItem* Item1, const PluginPanelItem* Item2, u
 			//  i=0; //????
 			//}
 
-			diff = bPerSec? compare_numbers(data2->qwResults[i], data1->qwResults[i]) : compare_numbers(data2->qwCounters[i], data1->qwCounters[i]);
+			diff = bPerSec?
+				compare_numbers(
+					data1->qwResults[i],
+					data2->qwResults[i]
+				) :
+				compare_numbers(
+					data1->qwCounters[i],
+					data2->qwCounters[i]
+			);
 		}
 		break;
 	}
 
 	if (diff == 0)
-		diff = compare_numbers(reinterpret_cast<uintptr_t>(Item1->UserData.Data), reinterpret_cast<uintptr_t>(Item2->UserData.Data)); // unsorted
+		diff = compare_numbers(
+			reinterpret_cast<uintptr_t>(Item1->UserData.Data),
+			reinterpret_cast<uintptr_t>(Item2->UserData.Data)
+		); // unsorted
 
 	return diff;
 }
@@ -1996,7 +2105,7 @@ return false;
 
 DWORD dwCtrlR = KEY_CTRL | L'R';
 KeySequence ks = { 0, 1, &dwCtrlR };
-(*Info.AdvControl)(Info.ModuleNumber, ACTL_POSTKEYSEQUENCE, &ks);
+(*PsInfo.AdvControl)(PsInfo.ModuleNumber, ACTL_POSTKEYSEQUENCE, &ks);
 Control(FCTL_REDRAWPANEL, nullptr);
 return true;
 }

@@ -70,8 +70,9 @@ static string expand_title_variables(string_view const Str)
 
 	static const auto Version = version_to_string(build::version());
 	static const auto Platform = build::platform();
-	static const auto IsAdmin = os::security::is_admin() ? msg(lng::MFarTitleAddonsAdmin) : L""sv;
 	static const auto Pid = str(GetCurrentProcessId());
+
+	const auto IsAdmin = os::security::is_admin()? msg(lng::MFarTitleAddonsAdmin) : L""sv;
 
 	auto ExpandedStr = os::env::expand(Str);
 
@@ -117,7 +118,7 @@ static os::critical_section TitleCS;
 
 void ConsoleTitle::SetFarTitle(string_view const Title, bool Flush)
 {
-	SCOPED_ACTION(std::lock_guard)(TitleCS);
+	SCOPED_ACTION(std::scoped_lock)(TitleCS);
 
 	far_title() = Title;
 	Global->ScrBuf->SetTitle(bake_title(Title));

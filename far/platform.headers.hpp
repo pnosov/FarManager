@@ -34,27 +34,34 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "common/compiler.hpp"
+
 #include "disable_warnings_in_std_begin.hpp"
 //----------------------------------------------------------------------------
 
-#ifdef __GNUC__
+#if !IS_MICROSOFT_SDK()
 #include <w32api.h>
-#define _W32API_VER (100*(__W32API_MAJOR_VERSION) + (__W32API_MINOR_VERSION))
-#if _W32API_VER < 314
+
+#if (100*(__W32API_MAJOR_VERSION) + (__W32API_MINOR_VERSION)) < 314
 #error w32api-3.14 (or higher) required
 #endif
-#undef WINVER
-#undef _WIN32_WINNT
-#undef _WIN32_IE
-#define WINVER       0x0603
-#define _WIN32_WINNT 0x0603
-#define _WIN32_IE    0x0700
-#endif // __GNUC__
 
-#define WIN32_LEAN_AND_MEAN
-#define VC_EXTRALEAN
-#ifndef NOMINMAX
-#define NOMINMAX
+#include <winsdkver.h>
+
+#undef _WIN32_
+#undef _WIN32_IE
+#undef _WIN32_WINNT
+#undef _WIN32_WINDOWS_
+#undef NTDDI
+#undef WINVER
+
+#define _WIN32_          _WIN32_MAXVER
+#define _WIN32_IE        _WIN32_IE_MAXVER
+#define _WIN32_WINNT     _WIN32_WINNT_MAXVER
+#define _WIN32_WINDOWS_  _WIN32_WINDOWS_MAXVER
+#define NTDDI            NTDDI_MAXVER
+#define WINVER           WINVER_MAXVER
+
 #endif
 
 #define WIN32_NO_STATUS //exclude ntstatus.h macros from winnt.h
@@ -89,30 +96,17 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <ntddmmc.h>
 #include <ntddscsi.h>
 #include <lmdfs.h>
+#include <dbgeng.h>
+#include <mlang.h>
 
 #define _NTSCSI_USER_MODE_
 
-#ifdef _MSC_VER
+#if IS_MICROSOFT_SDK()
 #include <scsi.h>
-#endif // _MSC_VER
-
-#ifdef __GNUC__
+#else
 #include <ntdef.h>
-// Workaround for MinGW, see a66e40
-// Their loony headers are unversioned,
-// so the only way to make it compatible
-// with both old and new is this madness:
-#include <netfw.h>
-#ifndef __INetFwProduct_FWD_DEFINED__
-#define _LBA
-#define _MSF
-#endif
 #include <ddk/scsi.h>
-#ifndef __INetFwProduct_FWD_DEFINED__
-#undef _MSF
-#undef _LBA
 #endif
-#endif // __GNUC__
 
 #include "platform.sdk.hpp"
 
@@ -121,5 +115,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #undef far
 #undef near
+#undef FAR
+#undef NEAR
+#define FAR
+#define NEAR
 
 #endif // PLATFORM_HEADERS_HPP_28623022_12EB_4D53_A153_16CAC90C0710

@@ -36,6 +36,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "codepage_selection.hpp"
 
 // Internal:
+#include "codepage.hpp"
 #include "encoding.hpp"
 #include "vmenu2.hpp"
 #include "keys.hpp"
@@ -54,7 +55,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/algorithm.hpp"
 #include "common/enum_tokens.hpp"
 #include "common/from_string.hpp"
 #include "common/preprocessor.hpp"
@@ -140,15 +140,15 @@ void codepages::AddCodePage(string_view codePageName, uintptr_t codePage, size_t
 	if (CallbackCallSource == CodePagesFill)
 	{
 		// Вычисляем позицию вставляемого элемента
-		if (position == size_t(-1))
+		if (position == static_cast<size_t>(-1))
 		{
-			FarListInfo info = { sizeof(FarListInfo) };
+			FarListInfo info{ sizeof(info) };
 			dialog->SendMessage(DM_LISTINFO, control, &info);
 			position = info.ItemsNumber;
 		}
 
 		// Вставляем элемент
-		FarListInsert item = { sizeof(FarListInsert), static_cast<intptr_t>(position) };
+		FarListInsert item{ sizeof(item), static_cast<intptr_t>(position) };
 
 		const auto name = FormatCodePageString(codePage, codePageName, IsCodePageNameCustom);
 		item.Item.Text = name.c_str();
@@ -181,10 +181,10 @@ void codepages::AddCodePage(string_view codePageName, uintptr_t codePage, size_t
 			ItemFlags |= LIF_GRAYED;
 		}
 
-		DialogBuilderListItem item(FormatCodePageString(codePage, codePageName, IsCodePageNameCustom), static_cast<int>(codePage), ItemFlags);
+		DialogBuilderListItem item(FormatCodePageString(codePage, codePageName, IsCodePageNameCustom), codePage, ItemFlags);
 
 		// Вычисляем позицию вставляемого элемента
-		if (position == size_t(-1) || position >= DialogBuilderList->size())
+		if (position == static_cast<size_t>(-1) || position >= DialogBuilderList->size())
 		{
 			DialogBuilderList->emplace_back(item);
 		}
@@ -200,7 +200,7 @@ void codepages::AddCodePage(string_view codePageName, uintptr_t codePage, size_t
 		item.SimpleUserData = codePage;
 
 		// Добавляем новый элемент в меню
-		if (position == size_t(-1))
+		if (position == static_cast<size_t>(-1))
 			CodePagesMenu->AddItem(item);
 		else
 			CodePagesMenu->AddItem(item, static_cast<int>(position));
@@ -210,7 +210,7 @@ void codepages::AddCodePage(string_view codePageName, uintptr_t codePage, size_t
 		{
 			if ((CodePagesMenu->GetSelectPos() == -1 || GetMenuItemCodePage() != codePage))
 			{
-				CodePagesMenu->SetSelectPos(static_cast<int>(position == size_t(-1)? CodePagesMenu->size() - 1 : position), 1);
+				CodePagesMenu->SetSelectPos(static_cast<int>(position == static_cast<size_t>(-1)? CodePagesMenu->size() - 1 : position), 1);
 			}
 		}
 	}
@@ -235,14 +235,14 @@ void codepages::AddSeparator(const string& Label, size_t position) const
 {
 	if (CallbackCallSource == CodePagesFill)
 	{
-		if (position == size_t(-1))
+		if (position == static_cast<size_t>(-1))
 		{
-			FarListInfo info = { sizeof(FarListInfo) };
+			FarListInfo info{ sizeof(info) };
 			dialog->SendMessage(DM_LISTINFO, control, &info);
 			position = info.ItemsNumber;
 		}
 
-		FarListInsert item = { sizeof(FarListInsert), static_cast<intptr_t>(position) };
+		FarListInsert item{ sizeof(item), static_cast<intptr_t>(position) };
 		item.Item = {};
 		item.Item.Text = Label.c_str();
 		item.Item.Flags = LIF_SEPARATOR;
@@ -251,7 +251,7 @@ void codepages::AddSeparator(const string& Label, size_t position) const
 	else if (CallbackCallSource == CodePagesFill2)
 	{
 		// Вычисляем позицию вставляемого элемента
-		if (position == size_t(-1) || position >= DialogBuilderList->size())
+		if (position == static_cast<size_t>(-1) || position >= DialogBuilderList->size())
 		{
 			DialogBuilderList->emplace_back(Label, 0, LIF_SEPARATOR);
 		}
@@ -264,7 +264,7 @@ void codepages::AddSeparator(const string& Label, size_t position) const
 	{
 		const MenuItemEx item(Label, MIF_SEPARATOR);
 
-		if (position == size_t(-1))
+		if (position == static_cast<size_t>(-1))
 			CodePagesMenu->AddItem(item);
 		else
 			CodePagesMenu->AddItem(item, static_cast<int>(position));
@@ -280,13 +280,13 @@ size_t codepages::size() const
 	if (CallbackCallSource == CodePagesFill2)
 		return DialogBuilderList->size();
 
-	FarListInfo info = { sizeof(FarListInfo) };
+	FarListInfo info{ sizeof(info) };
 	dialog->SendMessage(DM_LISTINFO, control, &info);
 	return info.ItemsNumber;
 }
 
 // Получаем позицию для вставки таблицы с учётом сортировки по номеру кодовой страницы
-size_t codepages::GetCodePageInsertPosition(uintptr_t codePage, size_t start, size_t length)
+size_t codepages::GetCodePageInsertPosition(uintptr_t codePage, size_t start, size_t length) const
 {
 	const auto GetCodePage = [this](size_t position) -> uintptr_t
 	{
@@ -298,9 +298,20 @@ size_t codepages::GetCodePageInsertPosition(uintptr_t codePage, size_t start, si
 		}
 	};
 
-	const auto iRange = irange(start, start + length);
-	const auto Pos = std::find_if(CONST_RANGE(iRange, i) { return GetCodePage(i) >= codePage; });
-	return Pos != iRange.cend()? *Pos : start + length;
+	const auto iRange = std::views::iota(start, start + length);
+	const auto Pos = std::ranges::find_if(iRange, [&](size_t const i){ return GetCodePage(i) >= codePage; });
+	return Pos != iRange.end()? *Pos : start + length;
+}
+
+static string_view unicode_codepage_name(uintptr_t const Codepage)
+{
+	switch (Codepage)
+	{
+	case CP_UTF8:       return L"UTF-8"sv;
+	case CP_UTF16LE:    return L"UTF-16 (Little endian)"sv;
+	case CP_UTF16BE:    return L"UTF-16 (Big endian)"sv;
+	default:            return {};
+	}
 }
 
 // Добавляем все необходимые таблицы символов
@@ -309,7 +320,7 @@ void codepages::AddCodePages(DWORD codePages)
 	// default & re-detect
 	//
 	uintptr_t cp_auto = CP_DEFAULT;
-	if (0 != (codePages & ::DefaultCP))
+	if (0 != (codePages & DefaultCP))
 	{
 		AddStandardCodePage(msg(lng::MDefaultCP), CP_DEFAULT);
 		cp_auto = CP_REDETECT;
@@ -320,19 +331,18 @@ void codepages::AddCodePages(DWORD codePages)
 	if (codePages & SearchAll)
 		AddStandardCodePage(msg(lng::MFindFileAllCodePages), CP_ALL);
 
-	const auto GetSystemCodepageName = [](uintptr_t const Cp, string_view const SystemName)
+	// system codepages
 	{
-		const auto Info = GetCodePageInfo(Cp);
-		if (!Info)
-			return str(Cp);
-		if (starts_with(Info->Name, SystemName))
-			return Info->Name;
-		return concat(SystemName, L" - "sv, Info->Name);
-	};
+		const auto GetSystemCodepageName = [](uintptr_t const Cp, string_view const SystemName)
+		{
+			const auto Info = GetCodePageInfo(Cp);
+			if (!Info)
+				return str(Cp);
+			if (Info->Name.starts_with(SystemName))
+				return Info->Name;
+			return concat(SystemName, L" - "sv, Info->Name);
+		};
 
-	{
-		// system codepages
-		//
 		const auto AnsiCp = encoding::codepage::ansi();
 
 		bool SeparatorAdded = false;
@@ -359,12 +369,13 @@ void codepages::AddCodePages(DWORD codePages)
 			AddStandardCodePage(GetSystemCodepageName(OemCp, L"OEM"sv), OemCp);
 		}
 	}
+
 	// unicode codepages
 	//
 	AddSeparator(msg(lng::MGetCodePageUnicode));
-	AddStandardCodePage(L"UTF-8"sv, CP_UTF8, -1, true);
-	AddStandardCodePage(L"UTF-16 (Little endian)"sv, CP_UNICODE);
-	AddStandardCodePage(L"UTF-16 (Big endian)"sv, CP_REVERSEBOM);
+	AddStandardCodePage(unicode_codepage_name(CP_UTF8), CP_UTF8, -1, true);
+	AddStandardCodePage(unicode_codepage_name(CP_UTF16LE), CP_UTF16LE);
+	AddStandardCodePage(unicode_codepage_name(CP_UTF16BE), CP_UTF16BE);
 
 	// other codepages
 	//
@@ -373,14 +384,10 @@ void codepages::AddCodePages(DWORD codePages)
 		if (IsStandardCodePage(cp))
 			continue;
 
-		// VS2017 spurious const bug
-		// auto [len, CodepageName] = Info;
-		const auto len = Info.MaxCharSize;
-		auto CodepageName = Info.Name;
-
-		if (!len || (len > 2 && (codePages & ::VOnly)))
+		if (!Info.MaxCharSize || (Info.MaxCharSize > 2 && (codePages & VOnly)))
 			continue;
 
+		auto CodepageName = Info.Name;
 		const auto IsCodePageNameCustom = GetCodePageCustomName(cp, CodepageName);
 		const auto selectType = GetFavorite(cp);
 
@@ -541,8 +548,8 @@ void codepages::FillCodePagesVMenu(bool bViewOnly, bool bShowAutoDetect)
 
 	// Добавляем таблицы символов
 	AddCodePages(
-		(bViewOnly? ::VOnly : 0) |
-		(bShowAutoDetect? ::AutoCP : 0)
+		(bViewOnly? VOnly : 0) |
+		(bShowAutoDetect? AutoCP : 0)
 	);
 	// Восстанавливаем оригинальную таблицу символов
 	currentCodePage = codePage;
@@ -592,7 +599,7 @@ intptr_t codepages::EditDialogProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, v
 
 			if (Param1 == EDITCP_OK)
 			{
-				strCodePageName = reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, EDITCP_EDIT, nullptr));
+				strCodePageName = std::bit_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, EDITCP_EDIT, nullptr));
 			}
 			// Если имя кодовой страницы пустое, то считаем, что имя не задано
 			if (strCodePageName.empty())
@@ -641,7 +648,7 @@ void codepages::EditCodePageName()
 
 	EditDialog[EDITCP_EDIT].strHistory = L"CodePageName"sv;
 
-	const auto Dlg = Dialog::create(EditDialog, &codepages::EditDialogProc, this);
+	const auto Dlg = Dialog::create(EditDialog, std::bind_front(&codepages::EditDialogProc, this));
 	Dlg->SetPosition({ -1, -1, 54, 7 });
 	Dlg->SetHelp(L"EditCodePageNameDlg"sv);
 	Dlg->Process();
@@ -721,10 +728,10 @@ void codepages::FillCodePagesList(std::vector<DialogBuilderListItem> &List, bool
 	selectedCodePages = allowChecked;
 	// Добавляем стандартные элементы в список
 	AddCodePages(
-		(allowDefault? ::DefaultCP : 0) |
-		(allowAuto? ::AutoCP : 0) |
-		(allowAll? ::SearchAll : 0) |
-		(bViewOnly? ::VOnly : 0)
+		(allowDefault? DefaultCP : 0) |
+		(allowAuto? AutoCP : 0) |
+		(allowAll? SearchAll : 0) |
+		(bViewOnly? VOnly : 0)
 	);
 	DialogBuilderList = nullptr;
 }
@@ -742,26 +749,26 @@ size_t codepages::FillCodePagesList(Dialog* Dlg, size_t controlId, uintptr_t cod
 	selectedCodePages = allowChecked;
 	// Добавляем стандартные элементы в список
 	AddCodePages(
-		(allowDefault? ::DefaultCP : 0) |
-		(allowAuto? ::AutoCP : 0) |
-		(allowAll? ::SearchAll : 0) |
-		(bViewOnly? ::VOnly : 0)
+		(allowDefault? DefaultCP : 0) |
+		(allowAuto? AutoCP : 0) |
+		(allowAll? SearchAll : 0) |
+		(bViewOnly? VOnly : 0)
 	);
 
 	if (CallbackCallSource == CodePagesFill)
 	{
 		// Если надо выбираем элемент
-		FarListInfo info = { sizeof(FarListInfo) };
+		FarListInfo info{ sizeof(info) };
 		Dlg->SendMessage(DM_LISTINFO, control, &info);
 
-		for (size_t i = 0; i != info.ItemsNumber; ++i)
+		for (const auto i: std::views::iota(0uz, info.ItemsNumber))
 		{
 			if (GetListItemCodePage(i) == codePage)
 			{
-				FarListGetItem Item = { sizeof(FarListGetItem), static_cast<intptr_t>(i) };
+				FarListGetItem Item{ sizeof(Item), static_cast<intptr_t>(i) };
 				dialog->SendMessage(DM_LISTGETITEM, control, &Item);
 				dialog->SendMessage(DM_SETTEXTPTR, control, const_cast<wchar_t*>(Item.Item.Text));
-				FarListPos Pos = { sizeof(FarListPos), static_cast<intptr_t>(i), -1 };
+				FarListPos Pos{ sizeof(Pos), static_cast<intptr_t>(i), -1 };
 				dialog->SendMessage(DM_LISTSETCURPOS, control, &Pos);
 				break;
 			}
@@ -770,15 +777,6 @@ size_t codepages::FillCodePagesList(Dialog* Dlg, size_t controlId, uintptr_t cod
 
 	// Возвращаем число избранных таблиц символов
 	return favoriteCodePages;
-}
-
-bool codepages::IsCodePageSupported(uintptr_t CodePage, size_t MaxCharSize)
-{
-	if (CodePage == CP_DEFAULT || IsStandardCodePage(CodePage))
-		return true;
-
-	const auto Info = GetCodePageInfo(CodePage);
-	return Info && Info->MaxCharSize <= MaxCharSize;
 }
 
 std::optional<cp_info> codepages::GetInfo(uintptr_t CodePage)
@@ -791,6 +789,28 @@ std::optional<cp_info> codepages::GetInfo(uintptr_t CodePage)
 	GetCodePageCustomName(CodePage, Copy.Name);
 
 	return Copy;
+}
+
+string codepages::FormatName(uintptr_t const CodePage)
+{
+	const auto get_name = [&]
+	{
+		if (const auto Name = unicode_codepage_name(CodePage); !Name.empty())
+			return string(Name);
+
+		const auto Info = GetCodePageInfo(CodePage);
+		auto Name = Info? Info->Name : L"Unknown"s;
+		GetCodePageCustomName(CodePage, Name);
+		return Name;
+	};
+
+	return far::format(L"{}: {}"sv, CodePage, get_name());
+}
+
+string codepages::UnsupportedCharacterMessage(wchar_t const Char)
+{
+	const auto UnicodeNotation = far::format(L"U+{0:04X}"sv, Char);
+	return far::vformat(msg(lng::MCharacterIsNotSupportedByTheCodepage), Char, UnicodeNotation);
 }
 
 long long codepages::GetFavorite(uintptr_t cp)
@@ -816,7 +836,7 @@ F8CP::F8CP(bool viewer):
 	m_OemName(msg(viewer? lng::MViewF8DOS : lng::MEditF8DOS)),
 	m_UtfName(L"UTF-8"sv)
 {
-	uintptr_t defcp = viewer? Global->Opt->ViOpt.DefaultCodePage : Global->Opt->EdOpt.DefaultCodePage;
+	uintptr_t defcp = encoding::codepage::normalise(viewer? Global->Opt->ViOpt.DefaultCodePage : Global->Opt->EdOpt.DefaultCodePage);
 
 	const auto& cps = (viewer? Global->Opt->ViOpt.strF8CPs : Global->Opt->EdOpt.strF8CPs).Get();
 	if (cps != L"-1"sv)
@@ -824,6 +844,9 @@ F8CP::F8CP(bool viewer):
 		std::unordered_set<uintptr_t> used_cps;
 		for(const auto& i: enum_tokens(cps, L",;"sv))
 		{
+			if (i.empty())
+				continue;
+
 			uintptr_t cp;
 			if (equal_icase(i, L"ansi"sv) || equal_icase(i, L"acp"sv) || equal_icase(i, L"win"sv))
 				cp = encoding::codepage::ansi();
@@ -839,7 +862,7 @@ F8CP::F8CP(bool viewer):
 					cp = 0;
 			}
 
-			if (cp && codepages::IsCodePageSupported(cp, viewer ? 2:20) && !contains(used_cps, cp))
+			if (cp && IsCodePageSupported(cp, viewer? 2 : 20) && !used_cps.contains(cp))
 			{
 				m_F8CpOrder.emplace_back(cp);
 				used_cps.emplace(cp);
@@ -863,7 +886,7 @@ F8CP::F8CP(bool viewer):
 
 uintptr_t F8CP::NextCP(uintptr_t cp) const
 {
-	auto curr = std::find(ALL_CONST_RANGE(m_F8CpOrder), cp);
+	auto curr = std::ranges::find(m_F8CpOrder, cp);
 	return curr != m_F8CpOrder.cend() && ++curr != m_F8CpOrder.cend()? *curr : *m_F8CpOrder.cbegin();
 }
 

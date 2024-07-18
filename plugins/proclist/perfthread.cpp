@@ -6,10 +6,11 @@
 #include "Proclist.hpp"
 #include "Proclng.hpp"
 #include "perfthread.hpp"
+#include "guid.hpp"
 
-#define INITIAL_SIZE        51200
-#define INITIAL_SIZE        51200
-#define EXTEND_SIZE         25600
+#include <utility.hpp>
+
+#include <winperf.h>
 
 const counters Counters[]
 {
@@ -77,7 +78,8 @@ static bool Is64BitWindows()
 #endif
 }
 
-PerfThread::PerfThread(const wchar_t* hostname, const wchar_t* pUser, const wchar_t* pPasw) :
+PerfThread::PerfThread(Plist* const Owner, const wchar_t* hostname, const wchar_t* pUser, const wchar_t* pPasw) :
+	m_Owner(Owner),
 	DefaultBitness(Is64BitWindows()? 64 : 32)
 {
 	if (pUser && *pUser)
@@ -156,13 +158,15 @@ PerfThread::PerfThread(const wchar_t* hostname, const wchar_t* pUser, const wcha
 	hEvtRefresh.reset(CreateEvent({}, 0, 0, {}));
 	hEvtRefreshDone.reset(CreateEvent({}, 0, 0, {}));
 	Refresh();
-	hThread.reset(CreateThread({}, 0, ThreadProc, this, 0, &dwThreadId));
+	hThread.reset(CreateThread({}, 0, ThreadProc, this, 0, {}));
+	hWmiThread.reset(CreateThread({}, 0, WmiThreadProc, this, 0, {}));
 	bOK = true;
 }
 PerfThread::~PerfThread()
 {
 	SetEvent(hEvtBreak.get());
 	WaitForSingleObject(hThread.get(), INFINITE);
+	WaitForSingleObject(hWmiThread.get(), INFINITE);
 
 	if (hHKLM)
 		RegCloseKey(hHKLM);
@@ -186,26 +190,15 @@ ProcessPerfData* PerfThread::GetProcessData(DWORD dwPid, DWORD dwThreads)
 	std::pair<ProcessPerfData*, size_t> ZeroPid[10];
 	auto ZeroPidIterator = std::begin(ZeroPid);
 
-	for (auto& i: pData)
-	{
-		if (i.dwProcessId == dwPid)
-		{
-			if (dwPid)
-				return &i;
-
-			if (ZeroPidIterator == std::end(ZeroPid))
-			{
-				assert(false);
-				continue;
-			}
-
-			ZeroPidIterator->first = &i;
-			++ZeroPidIterator;
-		}
-	}
-
 	if (dwPid)
+	{
+		if (const auto Iterator = m_ProcessesData.find(dwPid); Iterator != m_ProcessesData.end())
+		{
+			return &Iterator->second;
+		}
+
 		return {};
+	}
 
 	if (ZeroPidIterator == ZeroPid + 1)
 		return ZeroPidIterator->first;
@@ -223,54 +216,67 @@ ProcessPerfData* PerfThread::GetProcessData(DWORD dwPid, DWORD dwThreads)
 	})->first;
 }
 
-template<typename T>
-static const T* view_as(const void* const Address, size_t const Offset)
-{
-	return static_cast<const T*>(static_cast<const void*>(static_cast<const char*>(Address) + Offset));
-}
-
-void PerfThread::Refresh()
+bool PerfThread::RefreshImpl()
 {
 	DebugToken token;
 	const auto dwTicksBeforeRefresh = GetTickCount();
-	// allocate the initial buffer for the performance data
-	std::vector<BYTE> buf(INITIAL_SIZE);
-	const PERF_DATA_BLOCK* pPerf;
-	DWORD dwDeltaTickCount;
+	std::vector<BYTE> buf(512 * 1024);
+	DWORD dwDeltaTickCount{};
 
-	for (;;)
+	for (bool Read = false; !Read;)
 	{
 		auto dwSize = static_cast<DWORD>(buf.size());
-		DWORD dwType;
 		dwDeltaTickCount = GetTickCount() - dwLastTickCount;
-		DWORD rc;
 
-		while ((rc = RegQueryValueEx(hPerf, pf.SubKey.c_str(), {}, &dwType, buf.data(), &dwSize)) == ERROR_LOCK_FAILED)
-			; //Just retry
-
-		pPerf = view_as<PERF_DATA_BLOCK>(buf.data(), 0);
-
-		// check for success and valid perf data block signature
-		if (rc == ERROR_SUCCESS && !std::wmemcmp(pPerf->Signature, L"PERF", 4))
+		switch (RegQueryValueEx(hPerf, pf.SubKey.c_str(), {}, {}, buf.data(), &dwSize))
 		{
+		case ERROR_SUCCESS:
+			Read = true;
 			break;
-		}
 
-		if (rc == ERROR_MORE_DATA)
-			buf.resize(buf.size() + EXTEND_SIZE);
-		else if (rc < 0x100000)  // ??? sometimes we receive garbage in rc
-		{
-			bOK = false;
-			return;
+		case ERROR_LOCK_FAILED:
+			continue;
+
+		case ERROR_MORE_DATA:
+			/*
+			https://learn.microsoft.com/en-us/windows/win32/api/winreg/nf-winreg-regqueryvalueexw
+			If hKey specifies HKEY_PERFORMANCE_DATA and the lpData buffer is not large enough
+			to contain all of the returned data, RegQueryValueEx returns ERROR_MORE_DATA
+			and the value returned through the lpcbData parameter is undefined.
+			This is because the size of the performance data can change from one call to the next.
+			In this case, you must increase the buffer size and call RegQueryValueEx again
+			passing the updated buffer size in the lpcbData parameter.
+			Repeat this until the function succeeds.
+			*/
+			buf.resize(buf.size() + (buf.size() + 2) / 2);
+			continue;
+
+		default:
+			return false;
 		}
 	}
 
+	const auto DataEnd = buf.data() + buf.size();
+	const auto pPerf = view_as_opt<PERF_DATA_BLOCK>(buf);
+	if (!pPerf)
+		return false;
+
+	// check for a valid perf data block signature
+	if (std::wmemcmp(pPerf->Signature, L"PERF", std::size(pPerf->Signature)))
+		return false;
+
 	const auto bDeltaValid = dwLastTickCount && dwDeltaTickCount;
+
 	// set the perf_object_type pointer
-	const auto pObj = view_as<PERF_OBJECT_TYPE>(pPerf, pPerf->HeaderLength);
+	const auto pObj = view_as_opt<PERF_OBJECT_TYPE>(pPerf, DataEnd, pPerf->HeaderLength);
+	if (!pObj)
+		return false;
+
 	// loop thru the performance counter definition records looking
 	// for the process id counter and then save its offset
-	const auto pCounterDef = view_as<PERF_COUNTER_DEFINITION>(pObj, pObj->HeaderLength);
+	const auto pCounterDef = view_as_opt<PERF_COUNTER_DEFINITION>(pObj, DataEnd, pObj->HeaderLength);
+	if (!pCounterDef)
+		return false;
 
 	if (!pf.CounterTypes[0] && !pf.CounterTypes[1])
 	{
@@ -303,26 +309,35 @@ void PerfThread::Refresh()
 					dwCounterOffsets[ii] = Def.CounterOffset;
 	}
 
-	std::vector<ProcessPerfData> NewPData(pObj->NumInstances);
-	auto pInst = view_as<PERF_INSTANCE_DEFINITION>(pObj, pObj->DefinitionLength);
+	decltype(m_ProcessesData) NewPData;
 
-	// loop thru the performance instance data extracting each process name
-	// and process id
-	//
-	for (size_t i = 0; i != static_cast<size_t>(pObj->NumInstances); ++i)
+	const auto process_counter = [&](PERF_COUNTER_BLOCK const* pCounter, std::wstring_view const ProcessName)
 	{
-		auto& Task = NewPData[i];
 		// get the process id
-		const auto pCounter = view_as<PERF_COUNTER_BLOCK>(pInst, pInst->ByteLength);
+		const auto pProcessId = view_as_opt<DWORD>(pCounter, DataEnd, dwProcessIdCounter);
+		if (!pProcessId)
+			return false;
 
+		auto& Task = NewPData.emplace(*pProcessId, ProcessPerfData{})->second;
+
+		Task.dwProcessId = *pProcessId;
 		Task.Bitness = DefaultBitness;
 
-		Task.dwProcessId = *view_as<DWORD>(pCounter, dwProcessIdCounter);
+		if (const auto Ptr = view_as_opt<DWORD>(pCounter, DataEnd, dwProcessIdCounter))
+			Task.dwProcessId = *Ptr;
+		else
+			return false;
+
 		if (dwThreadCounter)
-			Task.dwThreads = *view_as<DWORD>(pCounter, dwThreadCounter);
+		{
+			if (const auto Ptr = view_as_opt<DWORD>(pCounter, DataEnd, dwThreadCounter))
+				Task.dwThreads = *Ptr;
+			else
+				return false;
+		}
 
 		ProcessPerfData* pOldTask = {};
-		if (!pData.empty())  // Use prev data if any
+		if (!m_ProcessesData.empty())  // Use prev data if any
 		{
 			//Get the pointer to the previous instance of this process
 			pOldTask = GetProcessData(Task.dwProcessId, Task.dwThreads);
@@ -332,12 +347,26 @@ void PerfThread::Refresh()
 			}
 		}
 
-		Task.dwProcessPriority = *view_as<DWORD>(pCounter, dwPriorityCounter);
-		if (dwCreatingPIDCounter)
-			Task.dwCreatingPID = *view_as<DWORD>(pCounter, dwCreatingPIDCounter);
+		if (const auto Ptr = view_as_opt<DWORD>(pCounter, DataEnd, dwPriorityCounter))
+			Task.dwProcessPriority = *Ptr;
+		else
+			return false;
 
-		if (const auto Value = *view_as<LONGLONG>(pCounter, dwElapsedCounter); Value && pObj->PerfFreq.QuadPart)
-			Task.dwElapsedTime = ((pObj->PerfTime.QuadPart - Value) / pObj->PerfFreq.QuadPart);
+		if (dwCreatingPIDCounter)
+		{
+			if (const auto Ptr = view_as_opt<DWORD>(pCounter, DataEnd, dwCreatingPIDCounter))
+				Task.dwCreatingPID = *Ptr;
+			else
+				return false;
+		}
+
+		if (const auto Ptr = view_as_opt<LONGLONG>(pCounter, DataEnd, dwElapsedCounter))
+		{
+			if (*Ptr && pObj->PerfFreq.QuadPart)
+				Task.dwElapsedTime = ((pObj->PerfTime.QuadPart - *Ptr) / pObj->PerfFreq.QuadPart);
+		}
+		else
+			return false;
 
 		// Store new qwCounters
 		for (int ii = 0; ii < NCOUNTERS; ii++)
@@ -345,9 +374,20 @@ void PerfThread::Refresh()
 			if (!dwCounterOffsets[ii])
 				continue;
 
-			Task.qwCounters[ii] = (pf.CounterTypes[ii] & 0x300) == PERF_SIZE_LARGE?
-				*view_as<LONGLONG>(pCounter, dwCounterOffsets[ii]) :
-				*view_as<DWORD>(pCounter, dwCounterOffsets[ii]); // PERF_SIZE_DWORD
+			if ((pf.CounterTypes[ii] & 0x300) == PERF_SIZE_LARGE)
+			{
+				if (const auto Ptr = view_as_opt<LONGLONG>(pCounter, DataEnd, dwCounterOffsets[ii]))
+					Task.qwCounters[ii] = *Ptr;
+				else
+					return false;
+			}
+			else
+			{
+				if (const auto Ptr = view_as_opt<DWORD>(pCounter, DataEnd, dwCounterOffsets[ii])) // PERF_SIZE_DWORD
+					Task.qwCounters[ii] = *Ptr;
+				else
+					return false;
+			}
 		}
 
 		//get the rest of the counters
@@ -370,7 +410,12 @@ void PerfThread::Refresh()
 			case PERF_100NSEC_TIMER:
 				// 64-bit Timer in 100 nsec units. Display suffix: "%"
 				if (pOldTask)
-					Task.qwResults[ii] = (*view_as<LONGLONG>(pCounter, dwCounterOffsets[ii]) - pOldTask->qwCounters[ii]) / (dwDeltaTickCount * 100);
+				{
+					if (const auto Ptr = view_as_opt<LONGLONG>(pCounter, DataEnd, dwCounterOffsets[ii]))
+						Task.qwResults[ii] = (*Ptr - pOldTask->qwCounters[ii]) / (dwDeltaTickCount * 100);
+					else
+						return false;
+				}
 				break;
 
 			case PERF_COUNTER_COUNTER:
@@ -398,41 +443,115 @@ void PerfThread::Refresh()
 			}
 		}
 
-		if (Task.ProcessName.empty())  // if after all this it's still unfilled...
+		if (Task.ProcessName.empty() && !ProcessName.empty())  // if after all this it's still unfilled...
 		{
 			// pointer to the process name
-			// convert it to ascii
-			Task.ProcessName.assign(reinterpret_cast<const wchar_t*>(reinterpret_cast<DWORD_PTR>(pInst) + pInst->NameOffset), pInst->NameLength / sizeof(wchar_t) - 1);
+			Task.ProcessName.assign(ProcessName);
 
 			if (Task.dwProcessId > 8)
 				Task.ProcessName += L".exe";
 		}
 
-		pInst = view_as<PERF_INSTANCE_DEFINITION>(pCounter, pCounter->ByteLength);
+		return true;
+	};
+
+	if (pObj->NumInstances >= 0)
+	{
+		// If set to a value from 0 to 0x7fffffff, indicates that this is data collected from an object that supports 0 or more named instances.
+		// The PERF_COUNTER_DEFINITION block should be followed by the specified number of PERF_INSTANCE_DEFINITION blocks.
+
+		NewPData.reserve(pObj->NumInstances);
+
+		auto pInst = view_as_opt<PERF_INSTANCE_DEFINITION>(pObj, DataEnd, pObj->DefinitionLength);
+		if (!pInst)
+			return false;
+
+		for (size_t i = 0; i != static_cast<size_t>(pObj->NumInstances); ++i)
+		{
+			if (!pInst)
+				return false;
+
+			const auto pCounter = view_as_opt<PERF_COUNTER_BLOCK>(pInst, DataEnd, pInst->ByteLength);
+			if (!pCounter)
+				return false;
+
+			const auto NamePtr = view_as_opt<wchar_t>(pInst, DataEnd, pInst->NameOffset);
+			if (!NamePtr)
+				return false;
+
+			const auto NameSize = pInst->NameLength / sizeof(wchar_t) - 1;
+			if (static_cast<void const*>(NamePtr + NameSize) > DataEnd)
+				return false;
+
+			if (!process_counter(pCounter, { NamePtr, NameSize }))
+				return false;
+
+			pInst = view_as_opt<PERF_INSTANCE_DEFINITION>(pCounter, DataEnd, pCounter->ByteLength);
+		}
+	}
+	else if (pObj->NumInstances == PERF_NO_INSTANCES)
+	{
+		// If set to the value PERF_NO_INSTANCES, indicates that this is data collected from an object that always has exactly one unnamed instance.
+		// The PERF_COUNTER_DEFINITION block should be followed by exactly one PERF_COUNTER_BLOCK block.
+
+		// Supposedly it should not happen, but just in case: there were reports about NumInstances set to some unholy value.
+		const auto pCounter = view_as_opt<PERF_COUNTER_BLOCK>(pObj, DataEnd, pObj->DefinitionLength);
+		if (!pCounter)
+			return false;
+
+		if (!process_counter(pCounter, {}))
+			return false;
+	}
+	else
+	{
+		// If set to the value PERF_METADATA_MULTIPLE_INSTANCES, indicates that this is metadata for an object that supports 0 or more named instances.
+		// The result contains no PERF_INSTANCE_DEFINITION blocks.
+
+		// If set to the value PERF_METADATA_NO_INSTANCES, indicates that this is metadata for an object that always has exactly one unnamed instance.
+		// The result contains no PERF_COUNTER_BLOCK.
+
+		return false;
 	}
 
 	dwLastTickCount += dwDeltaTickCount;
 	{
 		const std::scoped_lock l(*this);
-		pData = std::move(NewPData);
+		m_ProcessesData = std::move(NewPData);
 	}
 
-	bUpdated = true;
 	dwLastRefreshTicks = GetTickCount() - dwTicksBeforeRefresh;
+
+	return true;
+}
+
+void PerfThread::Refresh()
+{
+	bOK = RefreshImpl();
 	SetEvent(hEvtRefreshDone.get());
 }
 
 void PerfThread::RefreshWMIData()
 {
-	for (auto& i: pData)
+	std::vector<ProcessPerfData> DataCopy;
+	DataCopy.reserve(m_ProcessesData.size());
+
+	{
+		const std::scoped_lock l(*this);
+		std::transform(m_ProcessesData.cbegin(), m_ProcessesData.cend(), std::back_inserter(DataCopy), [](const auto& i) { return i.second; });
+	}
+
+	for (auto& i: DataCopy)
 	{
 		if (WaitForSingleObject(hEvtBreak.get(), 0) == WAIT_OBJECT_0)
 			break;
+
+		auto AnythingRead = false;
 
 		if (!m_HostName.empty() && !i.FullPathRead)
 		{
 			i.FullPath = WMI.GetProcessExecutablePath(i.dwProcessId);
 			i.FullPathRead = true;
+			AnythingRead = true;
 		}
 
 		if (!i.OwnerRead)
@@ -446,12 +565,22 @@ void PerfThread::RefreshWMIData()
 			}
 
 			i.OwnerRead = true;
+			AnythingRead = true;
 		}
 
 		if (!i.CommandLineRead)
 		{
 			i.CommandLine = WMI.GetProcessCommandLine(i.dwProcessId);
 			i.CommandLineRead = true;
+			AnythingRead = true;
+		}
+
+		if (AnythingRead)
+		{
+			const std::scoped_lock l(*this);
+
+			if (auto* Data = GetProcessData(i.dwProcessId, i.dwThreads))
+				*Data = i;
 		}
 	}
 }
@@ -463,12 +592,28 @@ void PerfThread::ThreadProc()
 		hEvtBreak.get(), hEvtRefresh.get()
 	};
 
-	const auto CoInited = SUCCEEDED(CoInitialize({}));
-
 	for (;;)
 	{
 		Refresh();
 
+		if (WaitForMultipleObjects(static_cast<DWORD>(std::size(handles)), handles, 0, dwRefreshMsec) == WAIT_OBJECT_0)
+			break;
+
+		PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, m_Owner);
+	}
+}
+
+void PerfThread::WmiThreadProc()
+{
+	const HANDLE handles[]
+	{
+		hEvtBreak.get(), hEvtRefresh.get()
+	};
+
+	const auto CoInited = SUCCEEDED(CoInitialize({}));
+
+	for (;;)
+	{
 		if (!bConnectAttempted && Opt.EnableWMI)
 		{
 			WMI.Connect(
@@ -484,6 +629,8 @@ void PerfThread::ThreadProc()
 
 		if (WaitForMultipleObjects(static_cast<DWORD>(std::size(handles)), handles, 0, dwRefreshMsec) == WAIT_OBJECT_0)
 			break;
+
+		PsInfo.AdvControl(&MainGuid, ACTL_SYNCHRO, 0, m_Owner);
 	}
 
 	WMI.Disconnect();
@@ -492,9 +639,15 @@ void PerfThread::ThreadProc()
 		CoUninitialize();
 }
 
-DWORD WINAPI PerfThread::ThreadProc(void* Parm)
+DWORD WINAPI PerfThread::ThreadProc(void* Param)
 {
-	static_cast<PerfThread*>(Parm)->ThreadProc();
+	static_cast<PerfThread*>(Param)->ThreadProc();
+	return 0;
+}
+
+DWORD WINAPI PerfThread::WmiThreadProc(void* Param)
+{
+	static_cast<PerfThread*>(Param)->WmiThreadProc();
 	return 0;
 }
 

@@ -40,13 +40,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/range.hpp"
+#include "common/function_ref.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
 void xlat_initialize();
-void Xlat(span<wchar_t> Data, unsigned long long Flags);
+void Xlat(std::span<wchar_t> Data, unsigned long long Flags);
+void xlat_observe_tables(function_ref<void(wchar_t, wchar_t)> Observer);
 
 #endif // XLAT_HPP_F8CD041F_AB4B_42F8_B2AE_D117C0A8A848

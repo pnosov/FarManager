@@ -5,9 +5,9 @@
 
 static const wchar_t empty_wstr[] = {0};
 
-CFarMenu::CFarMenu(LPCWSTR szHelp/*=NULL*/, const GUID* MenuId/*= nullptr*/, unsigned nMaxItems/*=40*/)
+CFarMenu::CFarMenu(COORD MousePositionFromFar, LPCWSTR szHelp/*={}*/, const GUID* MenuId/*= {}*/, unsigned nMaxItems/*=40*/)
   : m_szHelp(szHelp)
-  , m_pfmi(NULL)
+  , m_MousePositionFromFar(MousePositionFromFar)
   , m_nItemCnt(0)
   , m_szArrow(L"  \x25BA")
   , m_bArrowsAdded(false)
@@ -30,7 +30,7 @@ CFarMenu::~CFarMenu()
 
 void CFarMenu::AddSeparator()
 {
-  AddItem(NULL, false);
+  AddItem({}, false);
 }
 
 unsigned CFarMenu::AddItem(LPCWSTR szText, bool bHasSubMenu/*=false*/, ECheck enChecked/*=UNCHECKED*/, bool bDisabled/*=false*/)
@@ -59,7 +59,7 @@ unsigned CFarMenu::InsertItem(unsigned nIndex, LPCWSTR szText, bool bHasSubMenu/
     else
 	{
       m_pfmi[nIndex].Text = new wchar_t[lstrlen(szText)+1];
-      lstrcpy((wchar_t *)m_pfmi[nIndex].Text,szText);
+      lstrcpy(const_cast<wchar_t*>(m_pfmi[nIndex].Text),szText);
     }
   }
   else
@@ -103,13 +103,16 @@ void CFarMenu::AddArrows()
       unsigned nLen=MenuItemLen(m_pfmi[i].Text);
       if (nLen>nMaxLen) nMaxLen=nLen;
     }
+
+    const auto ArrowLength = lstrlen(m_szArrow);
+
     for (i=0; i<m_nItemCnt; i++)
     {
       unsigned nLen=MenuItemLen(m_pfmi[i].Text);
       if (m_pbHasSubMenu[i])
       {
         {
-          size_t  len=lstrlen(m_pfmi[i].Text)+lstrlen(m_szArrow)+(nMaxLen-nLen);
+          size_t len = lstrlen(m_pfmi[i].Text) + ArrowLength + (nMaxLen - nLen);
           wchar_t *pn = new wchar_t[len+1];
           wcscpy(pn, m_pfmi[i].Text);
           if (m_pfmi[i].Text != empty_wstr)  // paranoya
@@ -118,9 +121,9 @@ void CFarMenu::AddArrows()
         }
         for (unsigned n=0; n<nMaxLen-nLen; n++)
         {
-          lstrcat((wchar_t*)m_pfmi[i].Text, L" ");
+          lstrcat(const_cast<wchar_t*>(m_pfmi[i].Text), L" ");
         }
-        lstrcat((wchar_t*)m_pfmi[i].Text, m_szArrow);
+        lstrcat(const_cast<wchar_t*>(m_pfmi[i].Text), m_szArrow);
       }
     }
   }
@@ -146,56 +149,56 @@ void CFarMenu::SetSelectedItem(unsigned nIndex)
   }
 }
 
-void CFarMenu::GetCursorXY(int* pnX, int* pnY)
+static bool GetCursorXY(int* pnX, int* pnY)
 {
-  POINT pt={0};
-  if (!GetCursorPos(&pt))
-  {
-    assert(0);
-  }
-  else
-  {
-    HWND hFarWnd=(HWND)thePlug->AdvControl(&MainGuid, ACTL_GETFARHWND, 0, NULL);
-    if (!ScreenToClient(hFarWnd, &pt))
-    {
-      assert(0);
-    }
-    else
-    {
-      RECT rc;
-      if (!GetClientRect(hFarWnd, &rc))
-        assert(0);
-      else {
-        bool success=false;
-        COORD console_size;
-        SMALL_RECT console_rect;
-        if (thePlug->AdvControl(&MainGuid, ACTL_GETFARRECT, 0, &console_rect))
-        {
-          success=true;
-          console_size.X=console_rect.Right-console_rect.Left+1;
-          console_size.Y=console_rect.Bottom-console_rect.Top+1;
-        }
-        if (!success)
-        {
-          assert(0);
-        }
-        else
-        {
-          if (pt.x>=rc.left && pt.x<=rc.right && pt.y>=rc.top && pt.y<=rc.bottom)
-          {
-            *pnX=int(console_size.X*pt.x/(rc.right-rc.left));
-            *pnY=int(console_size.Y*pt.y/(rc.bottom-rc.top));
-          }
-        }
-      }
-    }
-  }
+	POINT pt={0};
+	if (!GetCursorPos(&pt))
+		return false;
+
+	const auto hFarWnd = reinterpret_cast<HWND>(thePlug->AdvControl(&MainGuid, ACTL_GETFARHWND, 0, {}));
+	if (!ScreenToClient(hFarWnd, &pt))
+		return false;
+
+	RECT rc;
+	if (!GetClientRect(hFarWnd, &rc))
+		return false;
+
+	if (rc.left >= rc.right || rc.top >= rc.bottom)
+		return false;
+
+	SMALL_RECT console_rect;
+	if (!thePlug->AdvControl(&MainGuid, ACTL_GETFARRECT, 0, &console_rect))
+		return false;
+
+	COORD const console_size
+	{
+		static_cast<SHORT>(console_rect.Right - console_rect.Left + 1),
+		static_cast<SHORT>(console_rect.Bottom - console_rect.Top + 1),
+	};
+
+	if (pt.x < rc.left || pt.x > rc.right || pt.y < rc.top || pt.y > rc.bottom)
+		return false;
+
+	*pnX = static_cast<int>(console_size.X * pt.x / (rc.right - rc.left));
+	*pnY = static_cast<int>(console_size.Y * pt.y / (rc.bottom - rc.top));
+
+	return true;
 }
 
 int CFarMenu::Show(LPCWSTR szTitle, int nSelItem/*=0*/, bool bAtCursorPos/*=false*/)
 {
   int nX=-1, nY=-1;
-  if (bAtCursorPos) GetCursorXY(&nX, &nY);
+  if (bAtCursorPos)
+  {
+    if (!GetCursorXY(&nX, &nY))
+    {
+      if (m_MousePositionFromFar.X && m_MousePositionFromFar.Y)
+      {
+        nX = m_MousePositionFromFar.X;
+        nY = m_MousePositionFromFar.Y;
+      }
+    }
+  }
   AddArrows();
   FarKey pBreakKeys[]={{VK_RIGHT,0},
                        {VK_LEFT,0},
@@ -211,20 +214,19 @@ int CFarMenu::Show(LPCWSTR szTitle, int nSelItem/*=0*/, bool bAtCursorPos/*=fals
   while (1)
   {
     SetSelectedItem(nSelItem);
-    nSelItem=(int)thePlug->Menu(&MainGuid, m_Id, nX, nY, MAX_HEIGHT, FMENU_WRAPMODE, szTitle, NULL, m_szHelp, pBreakKeys, &nBreakCode, m_pfmi, m_nItemCnt);
+    nSelItem=(int)thePlug->Menu(&MainGuid, m_Id, nX, nY, MAX_HEIGHT, FMENU_WRAPMODE, szTitle, {}, m_szHelp, pBreakKeys, &nBreakCode, m_pfmi, m_nItemCnt);
     if (-1==nBreakCode) return nSelItem;
-    assert(-1!=nSelItem);
     switch (pBreakKeys[nBreakCode].VirtualKeyCode)
     {
     case VK_RIGHT:
     case VK_NEXT:
+      assert(-1!=nSelItem);
       if (m_pbHasSubMenu[nSelItem]) return nSelItem;
       break;
     case VK_BACK:
     case VK_LEFT:
     case VK_PRIOR:
       return SHOW_BACK;
-      break;
     case VK_SPACE:
     case VK_RETURN:
       return nSelItem;

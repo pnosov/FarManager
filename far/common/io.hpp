@@ -33,8 +33,12 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "range.hpp"
-#include "scope_exit.hpp"
+#include "preprocessor.hpp"
+
+#include <bit>
+#include <istream>
+#include <span>
+#include <streambuf>
 
 //----------------------------------------------------------------------------
 
@@ -66,31 +70,43 @@ namespace io
 	using wstreambuf_override = basic_streambuf_override<wchar_t>;
 
 	[[nodiscard]]
-	inline size_t read(std::istream& Stream, span<std::byte> const Buffer)
+	inline size_t read(std::istream& Stream, std::span<std::byte> const Buffer)
 	{
+		try
 		{
-			const auto Exceptions = Stream.exceptions();
-			Stream.exceptions(Exceptions & ~(Stream.failbit | Stream.eofbit));
-			SCOPE_SUCCESS{ Stream.exceptions(Exceptions); };
-
-			Stream.read(static_cast<char*>(static_cast<void*>(Buffer.data())), Buffer.size());
-			if (!Stream.bad() && Stream.eof())
-				Stream.clear(Stream.eofbit);
+			Stream.read(std::bit_cast<char*>(Buffer.data()), Buffer.size());
 		}
+		catch (std::ios::failure const&)
+		{
+			if (Stream.bad())
+				throw;
+		}
+
+		if (Stream.eof())
+			Stream.clear(Stream.eofbit);
 
 		return Stream.gcount();
 	}
 
-	template<typename container>
-	void write(std::ostream& Stream, const container& Container)
+	namespace detail
 	{
-		static_assert(std::is_trivially_copyable_v<VALUE_TYPE(Container)>);
+		template<typename T>
+		void write(std::ostream& Stream, std::span<T const> const Container)
+		{
+			static_assert(std::is_trivially_copyable_v<T>);
 
-		const auto Size = std::size(Container);
-		if (!Size)
-			return;
+			if (Container.empty())
+				return;
 
-		Stream.write(view_as<char const*>(std::data(Container)), Size * sizeof(*std::data(Container)));
+			const auto Bytes = std::as_bytes(Container);
+			// design by committee
+			Stream.write(static_cast<char const*>(static_cast<void const*>(Bytes.data())), Bytes.size());
+		}
+	}
+
+	void write(std::ostream& Stream, std::ranges::contiguous_range auto const& Container)
+	{
+		return detail::write(Stream, std::span(Container));
 	}
 }
 

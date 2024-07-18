@@ -52,7 +52,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "lockscrn.hpp"
 #include "macroopcode.hpp"
 #include "refreshwindowmanager.hpp"
-#include "TPreRedrawFunc.hpp"
 #include "taskbar.hpp"
 #include "interf.hpp"
 #include "message.hpp"
@@ -70,6 +69,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "colormix.hpp"
 #include "plugins.hpp"
 #include "manager.hpp"
+#include "mix.hpp"
 #include "lang.hpp"
 #include "keybar.hpp"
 #include "strmix.hpp"
@@ -77,11 +77,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cvtname.hpp"
 #include "global.hpp"
 #include "network.hpp"
+#include "dialog.hpp"
+#include "stddlg.hpp"
+#include "datetime.hpp"
 #if defined(TREEFILE_PROJECT)
 #include "drivemix.hpp"
 #endif
 
 // Platform:
+#include "platform.hpp"
 #if defined(TREEFILE_PROJECT)
 #include "platform.env.hpp"
 #endif
@@ -91,9 +95,11 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common/enum_tokens.hpp"
 #include "common/function_ref.hpp"
 #include "common/scope_exit.hpp"
+#include "common/view/enumerate.hpp"
 
 // External:
 #include "format.hpp"
+#include "log.hpp"
 
 //----------------------------------------------------------------------------
 
@@ -138,7 +144,7 @@ string ConvertTemplateTreeName(string_view const strTemplate, string_view const 
 	string Str(strTemplate);
 
 	replace(Str, L"%D"sv, D);
-	replace(Str, L"%SN"sv, format(FSTR(L"{0:04X}-{1:04X}"), HIWORD(SN), LOWORD(SN)));
+	replace(Str, L"%SN"sv, far::format(L"{:04X}-{:04X}"sv, extract_integer<WORD, 1>(SN), extract_integer<WORD, 0>(SN)));
 	replace(Str, L"%L"sv, L);
 	replace(Str, L"%SR"sv, SR);
 	replace(Str, L"%SH"sv, SH);
@@ -287,9 +293,16 @@ static bool GetCacheTreeName(string_view const Root, string& strName, bool const
 	if (CreateDir)
 	{
 		// BUGBUG check result
-		(void)os::fs::create_directory(strFolderName);
+		if (!os::fs::create_directory(strFolderName))
+		{
+			LOGWARNING(L"create_directory({}): {}"sv, strFolderName, os::last_error());
+		}
+
 		// BUGBUG check result
-		(void)os::fs::set_file_attributes(strFolderName, Global->Opt->Tree.TreeFileAttr);
+		if (!os::fs::set_file_attributes(strFolderName, Global->Opt->Tree.TreeFileAttr))
+		{
+			LOGWARNING(L"set_file_attributes({}): {}"sv, strFolderName, os::last_error());
+		}
 	}
 
 	string strRemoteName;
@@ -305,8 +318,8 @@ static bool GetCacheTreeName(string_view const Root, string& strName, bool const
 			AddEndSlash(strRemoteName);
 	}
 
-	std::replace(ALL_RANGE(strRemoteName), L'\\', L'_');
-	strName = format(FSTR(L"{0}\\{1}.{2:X}.{3}.{4}"), strFolderName, strVolumeName, dwVolumeSerialNumber, strFileSystemName, strRemoteName);
+	std::ranges::replace(strRemoteName, path::separator, L'_');
+	strName = far::format(L"{}\\{}.{:X}.{}.{}"sv, strFolderName, strVolumeName, dwVolumeSerialNumber, strFileSystemName, strRemoteName);
 	return true;
 }
 
@@ -332,7 +345,7 @@ public:
 	{
 		std::erase_if(m_Names, [&](const auto& i)
 		{
-			return starts_with_icase(i, Name) && (i.size() == Name.size() || (i.size() > Name.size() && IsSlash(i[Name.size()])));
+			return starts_with_icase(i, Name) && (i.size() == Name.size() || (i.size() > Name.size() && path::is_separator(i[Name.size()])));
 		});
 	}
 
@@ -350,7 +363,7 @@ public:
 	void SetTreeName(string_view const Name) { m_TreeName = Name; }
 
 private:
-	using cache_set = std::set<string, string_sort::less_t>;
+	using cache_set = std::set<string, string_sort::less_icase_t>;
 
 public:
 	using const_iterator = cache_set::const_iterator;
@@ -386,11 +399,7 @@ tree_panel_ptr TreeList::create(window_ptr Owner, int ModalMode)
 }
 
 TreeList::TreeList(private_tag, window_ptr Owner, int ModalMode):
-	Panel(std::move(Owner)),
-	m_WorkDir(0),
-	m_SavedWorkDir(0),
-	m_GetSelPosition(0),
-	m_ExitCode(1)
+	Panel(std::move(Owner))
 {
 	m_Type = panel_type::TREE_PANEL;
 	m_CurFile=m_CurTopFile=0;
@@ -437,12 +446,12 @@ string TreeList::GetTitle() const
 
 void TreeList::DisplayTree(bool Fast)
 {
-	wchar_t TreeLineSymbol[4][3]=
+	const wchar_t TreeLineSymbol[][3]
 	{
-		{L' ',                  L' ',             0},
-		{BoxSymbols[BS_V1],     L' ',             0},
-		{BoxSymbols[BS_LB_H1V1],BoxSymbols[BS_H1],0},
-		{BoxSymbols[BS_L_H1V1], BoxSymbols[BS_H1],0},
+		{ L' ',                   L' ',              0 },
+		{ BoxSymbols[BS_V1],      L' ',              0 },
+		{ BoxSymbols[BS_LB_H1V1], BoxSymbols[BS_H1], 0 },
+		{ BoxSymbols[BS_L_H1V1],  BoxSymbols[BS_H1], 0 },
 	};
 
 	std::optional<LockScreen> LckScreen;
@@ -494,7 +503,7 @@ void TreeList::DisplayTree(bool Fast)
 				}
 
 				strOutStr+=TreeLineSymbol[CurPtr.Last[CurPtr.Depth-1]?2:3];
-				BoxText(strOutStr);
+				Text(strOutStr);
 
 				const auto pos = FindLastSlash(CurPtr.strName);
 				if (pos != string::npos)
@@ -590,7 +599,7 @@ void TreeList::Update(int Mode)
 	if (RetFromReadTree && !m_ListData.empty() && (!(Mode & UPDATE_KEEP_SELECTION) || LastTreeCount != m_ListData.size()))
 	{
 		SyncDir();
-		auto& CurPtr=m_ListData[m_CurFile];
+		const auto& CurPtr = m_ListData[m_CurFile];
 
 		if (!os::fs::exists(CurPtr.strName))
 		{
@@ -612,65 +621,45 @@ void TreeList::Update(int Mode)
 	}
 }
 
-static void PR_MsgReadTree();
-
-struct TreePreRedrawItem: public PreRedrawItem
+class tree_progress: progress_impl
 {
-	TreePreRedrawItem():
-		PreRedrawItem(PR_MsgReadTree),
-		TreeCount()
-	{}
+	enum
+	{
+		DlgW = 76,
+		DlgH = 6,
+	};
 
-	size_t TreeCount;
+	enum items
+	{
+		pr_doublebox,
+		pr_message,
+		pr_dirs,
+
+		pr_count
+	};
+
+public:
+	tree_progress()
+	{
+		auto ProgressDlgItems = MakeDialogItems<items::pr_count>(
+		{
+			{ DI_DOUBLEBOX, {{ 3, 1 }, { DlgW - 4, DlgH - 2 }}, DIF_NONE,      msg(lng::MTreeTitle), },
+			{ DI_TEXT,      {{ 5, 2 }, { DlgW - 6,        2 }}, DIF_NONE,      msg(lng::MReadingTree) },
+			{ DI_TEXT,      {{ 5, 3 }, { DlgW - 6,        3 }}, DIF_SHOWAMPERSAND, {} },
+		});
+
+		init(ProgressDlgItems, { -1, -1, DlgW, DlgH });
+	}
+
+	void update(size_t const Count) const
+	{
+		m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_dirs, UNSAFE_CSTR(str(Count)));
+	}
 };
 
-static void MsgReadTreeImpl(size_t TreeCount)
+static auto OpenTreeFile(string_view const Name, bool const Writable)
 {
-	/* $ 24.09.2001 VVM
-	! Писать сообщение о чтении дерева только, если это заняло более 500 мсек. */
-	const auto IsChangeConsole = LastScrX != ScrX || LastScrY != ScrY;
-
-	if (IsChangeConsole)
-	{
-		LastScrX = ScrX;
-		LastScrY = ScrY;
-	}
-
-	if (IsChangeConsole || std::chrono::steady_clock::now() - TreeStartTime > 1s)
-	{
-		Message(0,
-			msg(lng::MTreeTitle),
-			{
-				msg(lng::MReadingTree),
-				str(TreeCount)
-			},
-			{});
-
-		TreeStartTime = std::chrono::steady_clock::now();
-	}
-}
-
-static void MsgReadTree(size_t TreeCount)
-{
-	MsgReadTreeImpl(TreeCount);
-
-	TPreRedrawFunc::instance()([&](TreePreRedrawItem& Item)
-	{
-		Item.TreeCount = TreeCount;
-	});
-}
-
-static void PR_MsgReadTree()
-{
-	TPreRedrawFunc::instance()([](const TreePreRedrawItem& Item)
-	{
-		MsgReadTreeImpl(Item.TreeCount);
-	});
-}
-
-static os::fs::file OpenTreeFile(string_view const Name, bool const Writable)
-{
-	return os::fs::file(Name, Writable? FILE_WRITE_DATA : FILE_READ_DATA, FILE_SHARE_READ, nullptr, Writable? OPEN_ALWAYS : OPEN_EXISTING);
+	return os::fs::file(Name, Writable? FILE_WRITE_DATA : FILE_READ_DATA, os::fs::file_share_read, nullptr, Writable? OPEN_ALWAYS : OPEN_EXISTING);
 }
 
 static bool MustBeCached(string_view const Root)
@@ -713,23 +702,24 @@ static void ReadLines(const os::fs::file& TreeFile, function_ref<void(string_vie
 	std::istream Stream(&StreamBuffer);
 	Stream.exceptions(Stream.badbit | Stream.failbit);
 
-	for (const auto& i: enum_lines(Stream, CP_UNICODE))
+	for (const auto& i: enum_lines(Stream, CP_UTF16LE))
 	{
-		if (i.Str.empty() || !IsSlash(i.Str.front()))
+		if (i.Str.empty() || !path::is_separator(i.Str.front()))
 			continue;
 
 		Inserter(i.Str);
 	}
 }
 
-template<class string_type, class container_type, class opener_type>
-static void WriteTree(string_type& Name, const container_type& Container, const opener_type& Opener, size_t offset)
+static void WriteTree(auto& Name, std::ranges::range auto const& Container, const auto& Opener, size_t offset)
 {
 	// получим и сразу сбросим атрибуты (если получится)
 	const auto SavedAttributes = os::fs::get_file_attributes(Name);
 
-	if (SavedAttributes != INVALID_FILE_ATTRIBUTES)
-		(void)os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL); //BUGBUG
+	if (SavedAttributes != INVALID_FILE_ATTRIBUTES && !os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+	{
+		LOGWARNING(L"set_file_attributes({}): {}"sv, Name, os::last_error());
+	}
 
 	std::optional<error_state_ex> ErrorState;
 
@@ -740,21 +730,22 @@ static void WriteTree(string_type& Name, const container_type& Container, const 
 			os::fs::filebuf StreamBuffer(TreeFile, std::ios::out);
 			std::ostream Stream(&StreamBuffer);
 			Stream.exceptions(Stream.badbit | Stream.failbit);
-			encoding::writer Writer(Stream, CP_UNICODE, false);
+			encoding::writer Writer(Stream, CP_UTF16LE, false);
 			const auto Eol = eol::system.str();
 
 			for (const auto& i: Container)
 			{
-				Writer.write(string_view(i).substr(offset));
-				Writer.write(Eol);
+				Writer.write(string_view(i).substr(offset), Eol);
 			}
 
 			Stream.flush();
 
-			if (SavedAttributes != INVALID_FILE_ATTRIBUTES) // вернем атрибуты (если получится :-)
-				(void)os::fs::set_file_attributes(Name, SavedAttributes); //BUGBUG
+			if (SavedAttributes != INVALID_FILE_ATTRIBUTES && !os::fs::set_file_attributes(Name, SavedAttributes)) //BUGBUG
+			{
+				LOGWARNING(L"set_file_attributes({}): {}"sv, Name, os::last_error());
+			}
 		}
-		catch (const far_exception& e)
+		catch (far_exception const& e)
 		{
 			ErrorState = e;
 		}
@@ -764,12 +755,16 @@ static void WriteTree(string_type& Name, const container_type& Container, const 
 	}
 	else
 	{
-		ErrorState = error_state::fetch();
+		ErrorState = os::last_error();
 	}
 
 	if (ErrorState)
 	{
-		(void)os::fs::delete_file(TreeCache().GetTreeName()); // BUGBUG
+		if (const auto CacheName = TreeCache().GetTreeName(); !os::fs::delete_file(CacheName)) // BUGBUG
+		{
+			LOGWARNING(L"delete_file({}): {}"sv, CacheName, os::last_error());
+		}
+
 		if (!Global->WindowManager->ManagerIsDown())
 			Message(MSG_WARNING, *ErrorState,
 				msg(lng::MError),
@@ -786,8 +781,7 @@ bool TreeList::ReadTree()
 	m_ReadingTree = true;
 	SCOPE_EXIT{ m_ReadingTree = false; };
 
-	SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<TreePreRedrawItem>());
-	ScanTree ScTree(false, true, -1, false);
+	ScanTree ScTree(false, true, -1);
 	os::fs::find_data fdata;
 	string strFullName;
 	FlushCache();
@@ -801,7 +795,7 @@ bool TreeList::ReadTree()
 
 	m_ListData.emplace_back(m_Root);
 
-	auto AscAbort = false;
+	auto Aborted = false;
 	TreeStartTime = std::chrono::steady_clock::now();
 	SCOPED_ACTION(RefreshWindowManager)(ScrX, ScrY);
 	ScTree.SetFindPath(m_Root, L"*"sv);
@@ -809,45 +803,49 @@ bool TreeList::ReadTree()
 	LastScrY = ScrY;
 	SCOPED_ACTION(taskbar::indeterminate);
 	SCOPED_ACTION(wakeful);
+	tree_progress const TreeProgress;
+	time_check TimeCheck;
+
 	while (ScTree.GetNextName(fdata,strFullName))
 	{
-		MsgReadTree(m_ListData.size());
-
-		if (CheckForEscSilent())
-		{
-			// BUGBUG, Dialog calls Commit, TreeList redraws and crashes.
-			AscAbort=ConfirmAbortOp();
-		}
-
-		if (AscAbort)
-			break;
-
 		if (!(fdata.Attributes & FILE_ATTRIBUTE_DIRECTORY))
 			continue;
 
 		m_ListData.emplace_back(strFullName);
+
+		if (TimeCheck)
+		{
+			// BUGBUG, Dialog calls Commit, TreeList redraws and crashes.
+			if (CheckForEscAndConfirmAbort())
+			{
+				Aborted = true;
+				break;
+			}
+
+			TreeProgress.update(m_ListData.size());
+		}
 	}
 
-	if (AscAbort && m_ModalMode)
+	if (Aborted && m_ModalMode)
 	{
 		m_ListData.clear();
 		RestoreState();
 		return false;
 	}
 
-	std::sort(ALL_RANGE(m_ListData), string_sort::less);
+	std::ranges::sort(m_ListData, string_sort::less);
 
 	if (!FillLastData())
 		return false;
 
-	if (!AscAbort)
+	if (!Aborted)
 		SaveTreeFile();
 
 	m_CurFile = PrevCurFile;
 	return true;
 }
 
-void TreeList::SaveTreeFile()
+void TreeList::SaveTreeFile() const
 {
 	if (m_ListData.size() < static_cast<size_t>(Global->Opt->Tree.MinTreeCount))
 		return;
@@ -921,16 +919,16 @@ void TreeList::SyncDir()
 
 bool TreeList::FillLastData()
 {
-	const auto CountSlash = [](const string& Str, size_t Offset)
+	const auto CountSlash = [](const string_view Str, size_t Offset)
 	{
-		return static_cast<size_t>(std::count_if(Str.cbegin() + Offset, Str.cend(), IsSlash));
+		return static_cast<size_t>(std::count_if(Str.cbegin() + Offset, Str.cend(), path::is_separator));
 	};
 
 	const auto RootLength = m_Root.empty()? 0 : m_Root.size()-1;
-	const range Range(m_ListData.begin() + 1, m_ListData.end());
+	const auto Range = m_ListData | std::views::drop(1);
 	FOR_RANGE(Range, i)
 	{
-		const auto Pos = i->strName.rfind(L'\\');
+		const auto Pos = i->strName.rfind(path::separator);
 		const auto PathLength = Pos != string::npos? static_cast<int>(Pos) + 1 : 0;
 		const auto Depth = i->Depth = CountSlash(i->strName, RootLength);
 
@@ -940,7 +938,7 @@ bool TreeList::FillLastData()
 		auto SubDirPos = i;
 		int Last = 1;
 
-		const range SubRange(i + 1, Range.end());
+		const std::ranges::subrange SubRange(i + 1, Range.end());
 		FOR_RANGE(SubRange, j)
 		{
 			if (CountSlash(j->strName, RootLength) > Depth)
@@ -956,13 +954,14 @@ bool TreeList::FillLastData()
 			}
 		}
 
-		for (auto j = i; j != SubDirPos + 1; ++j)
+		for (auto& j: std::ranges::subrange(i, SubDirPos + 1))
 		{
- 			if (Depth > j->Last.size())
+			if (Depth > j.Last.size())
 			{
-				j->Last.resize(j->Last.size() + MAX_PATH, 0);
+				j.Last.resize(j.Last.size() + MAX_PATH, 0);
 			}
-			j->Last[Depth-1]=Last;
+
+			j.Last[Depth - 1] = Last;
 		}
 	}
 	return true;
@@ -1036,23 +1035,26 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 		case KEY_CTRLRALTNUMPAD0:
 		case KEY_RCTRLALTNUMPAD0:
 		{
-			string strQuotedName=m_ListData[m_CurFile].strName;
-			QuoteSpace(strQuotedName);
-
 			if (any_of(LocalKey, KEY_CTRLALTINS, KEY_RCTRLRALTINS, KEY_CTRLRALTINS, KEY_RCTRLALTINS, KEY_CTRLALTNUMPAD0, KEY_RCTRLRALTNUMPAD0, KEY_CTRLRALTNUMPAD0, KEY_RCTRLALTNUMPAD0))
 			{
-				SetClipboardText(strQuotedName);
+				SetClipboardText(Global->Opt->QuotedName & QUOTEDNAME_CLIPBOARD?
+					QuoteSpace(m_ListData[m_CurFile].strName) :
+					m_ListData[m_CurFile].strName
+				);
 			}
 			else
 			{
 				if (any_of(LocalKey, KEY_SHIFTENTER, KEY_SHIFTNUMENTER))
 				{
-					OpenFolderInShell(strQuotedName);
+					OpenFolderInShell(m_ListData[m_CurFile].strName);
 				}
 				else
 				{
-					strQuotedName += L' ';
-					Parent()->GetCmdLine()->InsertString(strQuotedName);
+					Parent()->GetCmdLine()->InsertString((
+						Global->Opt->QuotedName & QUOTEDNAME_INSERT?
+							QuoteSpace(m_ListData[m_CurFile].strName) :
+							m_ListData[m_CurFile].strName
+					) + L' ');
 				}
 			}
 
@@ -1139,7 +1141,7 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 
 				if (ToPlugin)
 				{
-					PluginPanelItemHolder Item;
+					PluginPanelItemHolderHeap Item;
 					const auto hAnotherPlugin = AnotherPanel->GetPluginHandle();
 					if (FileList::FileNameToPluginItem(m_ListData[m_CurFile].strName, Item))
 					{
@@ -1209,36 +1211,30 @@ bool TreeList::ProcessKey(const Manager::Key& Key)
 		case(KEY_MSWHEEL_UP | KEY_ALT):
 		case(KEY_MSWHEEL_UP | KEY_RALT):
 		{
-			Scroll(LocalKey & (KEY_ALT | KEY_RALT)? -1 : static_cast<int>(-Global->Opt->MsWheelDelta));
+			Scroll(-static_cast<int>((LocalKey == KEY_MSWHEEL_UP? get_wheel_scroll_lines(Global->Opt->MsWheelDelta) : 1) * Key.NumberOfWheelEvents()));
 			return true;
 		}
 		case KEY_MSWHEEL_DOWN:
 		case(KEY_MSWHEEL_DOWN | KEY_ALT):
 		case(KEY_MSWHEEL_DOWN | KEY_RALT):
 		{
-			Scroll(LocalKey& (KEY_ALT | KEY_RALT)? 1 : static_cast<int>(Global->Opt->MsWheelDelta));
+			Scroll(static_cast<int>((LocalKey == KEY_MSWHEEL_DOWN? get_wheel_scroll_lines(Global->Opt->MsWheelDelta) : 1) * Key.NumberOfWheelEvents()));
 			return true;
 		}
 		case KEY_MSWHEEL_LEFT:
 		case(KEY_MSWHEEL_LEFT | KEY_ALT):
 		case(KEY_MSWHEEL_LEFT | KEY_RALT):
 		{
-			const auto Roll = LocalKey & (KEY_ALT | KEY_RALT)? 1 : static_cast<int>(Global->Opt->MsHWheelDelta);
-
-			for (int i=0; i<Roll; i++)
-				ProcessKey(Manager::Key(KEY_LEFT));
-
+			const auto Roll = (LocalKey == KEY_MSWHEEL_LEFT? get_wheel_scroll_chars(Global->Opt->MsHWheelDelta) : 1) * Key.NumberOfWheelEvents();
+			repeat(Roll, [&]{ ProcessKey(Manager::Key(KEY_LEFT));});
 			return true;
 		}
 		case KEY_MSWHEEL_RIGHT:
 		case(KEY_MSWHEEL_RIGHT | KEY_ALT):
 		case(KEY_MSWHEEL_RIGHT | KEY_RALT):
 		{
-			const auto Roll = LocalKey & (KEY_ALT | KEY_RALT)? 1 : static_cast<int>(Global->Opt->MsHWheelDelta);
-
-			for (int i=0; i<Roll; i++)
-				ProcessKey(Manager::Key(KEY_RIGHT));
-
+			const auto Roll = (LocalKey == KEY_MSWHEEL_RIGHT? get_wheel_scroll_chars(Global->Opt->MsHWheelDelta) : 1) * Key.NumberOfWheelEvents();
+			repeat(Roll, [&]{ ProcessKey(Manager::Key(KEY_RIGHT));});
 			return true;
 		}
 		case KEY_HOME:        case KEY_NUMPAD7:
@@ -1355,16 +1351,18 @@ int TreeList::GetNextNavPos() const
 {
 	int NextPos=m_CurFile;
 
-	if (static_cast<size_t>(m_CurFile) + 1 < m_ListData.size())
+	if (static_cast<size_t>(m_CurFile + 1) < m_ListData.size())
 	{
 		const auto CurDepth = m_ListData[m_CurFile].Depth;
 
-		for (size_t I=m_CurFile+1; I < m_ListData.size(); ++I)
+		for (const auto I: std::views::iota(static_cast<size_t>(m_CurFile + 1), m_ListData.size()))
+		{
 			if (m_ListData[I].Depth == CurDepth)
 			{
-				NextPos=static_cast<int>(I);
+				NextPos = static_cast<int>(I);
 				break;
 			}
+		}
 	}
 
 	return NextPos;
@@ -1474,16 +1472,16 @@ bool TreeList::SetCurDir(string_view const NewDir, bool const ClosePanel, bool c
 
 bool TreeList::SetDirPosition(string_view const NewDir)
 {
-	for (size_t i = 0; i < m_ListData.size(); ++i)
+	for (const auto& [Item, Index]: enumerate(m_ListData))
 	{
-		if (equal_icase(NewDir, m_ListData[i].strName))
-		{
-			m_WorkDir = i;
-			m_CurFile = static_cast<int>(i);
-			m_CurTopFile = m_CurFile - (m_Where.height() - 2) / 2;
-			CorrectPosition();
-			return true;
-		}
+		if (!equal_icase(NewDir, Item.strName))
+			continue;
+
+		m_WorkDir = Index;
+		m_CurFile = static_cast<int>(Index);
+		m_CurTopFile = m_CurFile - (m_Where.height() - 2) / 2;
+		CorrectPosition();
+		return true;
 	}
 
 	return false;
@@ -1584,11 +1582,11 @@ bool TreeList::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 		if (m_ListData.empty())
 			return true;
 
-		if (((MouseEvent->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) &&
-		        MouseEvent->dwEventFlags==DOUBLE_CLICK) ||
-		        ((MouseEvent->dwButtonState & RIGHTMOST_BUTTON_PRESSED) &&
-		         !MouseEvent->dwEventFlags) ||
-		        (OldFile!=m_CurFile && Global->Opt->Tree.AutoChangeFolder && !m_ModalMode))
+		if (
+			((MouseEvent->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED) && MouseEvent->dwEventFlags == DOUBLE_CLICK) ||
+			((MouseEvent->dwButtonState & RIGHTMOST_BUTTON_PRESSED) && IsMouseButtonEvent(MouseEvent->dwEventFlags)) ||
+			(OldFile!=m_CurFile && Global->Opt->Tree.AutoChangeFolder && !m_ModalMode)
+		)
 		{
 			const auto control = MouseEvent->dwControlKeyState & (SHIFT_PRESSED | LEFT_ALT_PRESSED | LEFT_CTRL_PRESSED | RIGHT_ALT_PRESSED | RIGHT_CTRL_PRESSED);
 
@@ -1641,7 +1639,8 @@ void TreeList::MoveToMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 
 void TreeList::ProcessEnter()
 {
-	auto& CurPtr=m_ListData[m_CurFile];
+	const auto& CurPtr = m_ListData[m_CurFile];
+
 	if (os::fs::is_directory(CurPtr.strName))
 	{
 		if (!m_ModalMode && FarChDir(CurPtr.strName))
@@ -1666,7 +1665,7 @@ bool TreeList::ReadTreeFile()
 	m_ReadingTree = true;
 	SCOPE_EXIT{ m_ReadingTree = false; };
 
-	size_t RootLength=m_Root.empty()?0:m_Root.size()-1;
+	const size_t RootLength = m_Root.empty()? 0 : m_Root.size() - 1;
 	//SaveState();
 	FlushCache();
 	auto strName = MkTreeFileName(m_Root);
@@ -1684,7 +1683,19 @@ bool TreeList::ReadTreeFile()
 
 	m_ListData.clear();
 
-	ReadLines(TreeFile, [&](const string_view Name) { m_ListData.emplace_back(string_view(m_Root).substr(0, RootLength) + Name); });
+	try
+	{
+		ReadLines(TreeFile, [&](const string_view Name)
+		{
+			m_ListData.emplace_back(string_view(m_Root).substr(0, RootLength) + Name);
+		});
+	}
+	catch (std::exception const& e)
+	{
+		m_ListData.clear();
+
+		LOGWARNING(L"{}"sv, e);
+	}
 
 	TreeFile.Close();
 
@@ -1841,12 +1852,10 @@ void TreeList::ReadSubTree(string_view const Path)
 	if (!os::fs::is_directory(Path))
 		return;
 
-	SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<TreePreRedrawItem>());
-	ScanTree ScTree(false, true, -1, false);
+	ScanTree ScTree(false, true, -1);
 
 	const auto strDirName = ConvertNameToFull(Path);
 	AddTreeName(strDirName);
-	auto AscAbort = false;
 	ScTree.SetFindPath(strDirName, L"*"sv);
 	LastScrX = ScrX;
 	LastScrY = ScrY;
@@ -1854,22 +1863,24 @@ void TreeList::ReadSubTree(string_view const Path)
 	os::fs::find_data fdata;
 	string strFullName;
 	int Count = 0;
+
+	tree_progress const TreeProgress;
+	time_check TimeCheck;
+
 	while (ScTree.GetNextName(fdata, strFullName))
 	{
-		if (fdata.Attributes & FILE_ATTRIBUTE_DIRECTORY)
+		if (!(fdata.Attributes & FILE_ATTRIBUTE_DIRECTORY))
+			continue;
+
+		AddTreeName(strFullName);
+		++Count;
+
+		if (TimeCheck)
 		{
-			MsgReadTree(Count + 1);
-
-			if (CheckForEscSilent())
-			{
-				AscAbort=ConfirmAbortOp();
-			}
-
-			if (AscAbort)
+			if (CheckForEscAndConfirmAbort())
 				break;
 
-			AddTreeName(strFullName);
-			++Count;
+			TreeProgress.update(Count);
 		}
 	}
 }
@@ -1900,7 +1911,19 @@ void TreeList::ReadCache(string_view const TreeRoot)
 
 	TreeCache().SetTreeName(TreeFile.GetName());
 
-	ReadLines(TreeFile, [](const string_view Name){ TreeCache().add(Name); });
+	try
+	{
+		ReadLines(TreeFile, [](const string_view Name)
+		{
+			TreeCache().add(Name);
+		});
+	}
+	catch (std::exception const& e)
+	{
+		ClearCache();
+		LOGERROR(L"{}"sv, e);
+		return;
+	}
 }
 
 void TreeList::FlushCache()
@@ -1910,7 +1933,7 @@ void TreeList::FlushCache()
 
 	if (!TreeCache().GetTreeName().empty())
 	{
-		const auto Opener = [&](const string& Name) { return OpenTreeFile(Name, true); };
+		const auto Opener = [&](const string_view Name) { return OpenTreeFile(Name, true); };
 
 		WriteTree(TreeCache().GetTreeName(), TreeCache(), Opener, 0);
 	}
@@ -1948,7 +1971,7 @@ bool TreeList::GoToFile(const string_view Name, const bool OnlyPartName)
 
 long TreeList::FindFile(const string_view Name, const bool OnlyPartName)
 {
-	const auto ItemIterator = std::find_if(CONST_RANGE(m_ListData, i)
+	const auto ItemIterator = std::ranges::find_if(m_ListData, [&](TreeItem const& i)
 	{
 		return equal_icase(Name, OnlyPartName? PointToName(i.strName) : i.strName);
 	});
@@ -1965,7 +1988,7 @@ long TreeList::FindNext(int StartPos, string_view const Name)
 {
 	if (static_cast<size_t>(StartPos) < m_ListData.size())
 	{
-		const auto ItemIterator = std::find_if(CONST_RANGE(m_ListData, i)
+		const auto ItemIterator = std::ranges::find_if(m_ListData, [&](TreeItem const& i)
 		{
 			return CmpName(Name, i.strName, true) && !IsParentDirectory(i.strName);
 		});

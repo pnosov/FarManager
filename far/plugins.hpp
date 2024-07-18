@@ -38,15 +38,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 #include "plclass.hpp"
 #include "mix.hpp"
-#include "notification.hpp"
 
 // Platform:
 #include "platform.fwd.hpp"
 
 // Common:
 #include "common/function_traits.hpp"
-#include "common/range.hpp"
+#include "common/noncopyable.hpp"
 #include "common/smart_ptr.hpp"
+#include "common/string_utils.hpp"
 
 // External:
 
@@ -131,44 +131,46 @@ class PluginManager: noncopyable
 {
 	struct plugin_less
 	{
-		bool operator()(const Plugin* a, const Plugin *b) const;
+		bool operator()(const Plugin* a, const Plugin* b) const;
 	};
 
 public:
 	PluginManager();
+	void NotifyExitLuaMacro() const;
 
 	// API functions
 	std::unique_ptr<plugin_panel> Open(Plugin* pPlugin, int OpenFrom, const UUID& Uuid, intptr_t Item) const;
-	std::unique_ptr<plugin_panel> OpenFilePlugin(const string* Name, OPERATION_MODES OpMode, OPENFILEPLUGINTYPE Type, bool* StopProcessingPtr = nullptr);
-	std::unique_ptr<plugin_panel> OpenFindListPlugin(span<const PluginPanelItem> PanelItems);
+	std::unique_ptr<plugin_panel> OpenFilePlugin(const string* Name, OPERATION_MODES OpMode, OPENFILEPLUGINTYPE Type, bool* StopProcessingPtr = nullptr) const;
+	std::unique_ptr<plugin_panel> OpenFindListPlugin(std::span<const PluginPanelItem> PanelItems) const;
 	static void ClosePanel(std::unique_ptr<plugin_panel>&& hPlugin);
 	static void GetOpenPanelInfo(const plugin_panel* hPlugin, OpenPanelInfo *Info);
-	static intptr_t GetFindData(const plugin_panel* hPlugin, span<PluginPanelItem>& PanelItems, int OpMode);
-	static void FreeFindData(const plugin_panel* hPlugin, span<PluginPanelItem>, bool FreeUserData);
-	static intptr_t GetVirtualFindData(const plugin_panel* hPlugin, span<PluginPanelItem>& PanelItems, const string& Path);
-	static void FreeVirtualFindData(const plugin_panel* hPlugin, span<PluginPanelItem> PanelItems);
+	static intptr_t GetFindData(const plugin_panel* hPlugin, std::span<PluginPanelItem>& PanelItems, int OpMode);
+	static void FreeFindData(const plugin_panel* hPlugin, std::span<PluginPanelItem>, bool FreeUserData);
+	static intptr_t GetVirtualFindData(const plugin_panel* hPlugin, std::span<PluginPanelItem>& PanelItems, const string& Path);
+	static void FreeVirtualFindData(const plugin_panel* hPlugin, std::span<PluginPanelItem> PanelItems);
 	static intptr_t SetDirectory(const plugin_panel* hPlugin, const string& Dir, int OpMode, const UserDataItem* UserData = nullptr);
 	static bool GetFile(const plugin_panel* hPlugin,PluginPanelItem *PanelItem,const string& DestPath,string &strResultName,int OpMode);
-	static intptr_t GetFiles(const plugin_panel* hPlugin, span<PluginPanelItem> PanelItems, bool Move, const wchar_t** DestPath, int OpMode);
-	static intptr_t PutFiles(const plugin_panel* hPlugin, span<PluginPanelItem> PanelItems, bool Move, int OpMode);
-	static intptr_t DeleteFiles(const plugin_panel* hPlugin, span<PluginPanelItem> PanelItems, int OpMode);
+	static intptr_t GetFiles(const plugin_panel* hPlugin, std::span<PluginPanelItem> PanelItems, bool Move, const wchar_t** DestPath, int OpMode);
+	static intptr_t PutFiles(const plugin_panel* hPlugin, std::span<PluginPanelItem> PanelItems, bool Move, int OpMode);
+	static intptr_t DeleteFiles(const plugin_panel* hPlugin, std::span<PluginPanelItem> PanelItems, int OpMode);
 	static intptr_t MakeDirectory(const plugin_panel* hPlugin,const wchar_t **Name,int OpMode);
-	static intptr_t ProcessHostFile(const plugin_panel* hPlugin, span<PluginPanelItem> PanelItems, int OpMode);
+	static intptr_t ProcessHostFile(const plugin_panel* hPlugin, std::span<PluginPanelItem> PanelItems, int OpMode);
 	static intptr_t ProcessKey(const plugin_panel* hPlugin,const INPUT_RECORD *Rec,bool Pred);
 	static intptr_t ProcessEvent(const plugin_panel* hPlugin,int Event,void *Param);
 	static intptr_t Compare(const plugin_panel* hPlugin,const PluginPanelItem *Item1,const PluginPanelItem *Item2,unsigned int Mode);
-	static bool GetPluginInfo(Plugin *pPlugin, PluginInfo* Info);
+	static bool GetPluginInfo(Plugin* pPlugin, PluginInfo* Info);
 	intptr_t ProcessEditorInput(const INPUT_RECORD *Rec) const;
 	intptr_t ProcessEditorEvent(int Event, void *Param, const Editor* EditorInstance) const;
 	intptr_t ProcessSubscribedEditorEvent(int Event, void *Param, const Editor* EditorInstance, const std::unordered_set<UUID>& PluginIds) const;
 	intptr_t ProcessViewerEvent(int Event, void *Param, const Viewer* ViewerInstance) const;
+	intptr_t ProcessSynchroEvent(intptr_t Event, void* Param) const;
 	intptr_t ProcessDialogEvent(int Event,FarDialogEvent *Param) const;
 	intptr_t ProcessConsoleInput(ProcessConsoleInputInfo *Info) const;
 	std::vector<Plugin*> GetContentPlugins(const std::vector<const wchar_t*>& ColNames) const;
-	void GetContentData(const std::vector<Plugin*>& Plugins, string_view FilePath, const std::vector<const wchar_t*>& ColNames, std::vector<const wchar_t*>& ColValues, std::unordered_map<string,string>& ContentData) const;
+	void GetContentData(const std::vector<Plugin*>& Plugins, string_view FilePath, const std::vector<const wchar_t*>& ColNames, std::vector<const wchar_t*>& ColValues, unordered_string_map<string>& ContentData) const;
 	Plugin* LoadPluginExternal(const string& ModuleName, bool LoadToMem);
 	bool UnloadPluginExternal(Plugin* pPlugin);
-	bool IsPluginUnloaded(const Plugin* pPlugin) const;
+	bool IsPluginUnloaded(Plugin* pPlugin) const;
 	void LoadPlugins();
 	void UnloadPlugins();
 
@@ -196,33 +198,33 @@ public:
 			const wchar_t *Command;
 		};
 		// Используется в функции CallPluginItem для внутренних нужд
-		Plugin *pPlugin;
+		Plugin* pPlugin;
 		UUID FoundUuid;
 	};
 
-	Plugin *FindPlugin(const string& ModuleName) const;
-	Plugin *FindPlugin(const UUID& SysID) const;
+	Plugin* FindPlugin(string_view ModuleName) const;
+	Plugin* FindPlugin(const UUID& SysID) const;
 
 #ifndef NO_WRAPPER
 	bool OemPluginsPresent() const { return OemPluginsCount > 0; }
 #endif // NO_WRAPPER
 	bool IsPluginsLoaded() const { return m_PluginsLoaded; }
-	void Configure(int StartPos=0);
-	int CommandsMenu(int ModalType,int StartPos,const wchar_t *HistoryName=nullptr);
+	void Configure(int StartPos=0) const;
+	bool CommandsMenu(int ModalType,int StartPos,const wchar_t *HistoryName=nullptr) const;
 	bool GetDiskMenuItem(Plugin* pPlugin, size_t PluginItem, bool& ItemPresent, wchar_t& PluginHotkey, string& strPluginText, UUID& Uuid) const;
 	void ReloadLanguage() const;
-	bool ProcessCommandLine(const string& Command);
-	size_t GetPluginInformation(Plugin *pPlugin, FarGetPluginInformation *pInfo, size_t BufferSize);
+	bool ProcessCommandLine(string_view Command);
+	size_t GetPluginInformation(Plugin* pPlugin, FarGetPluginInformation *pInfo, size_t BufferSize);
 	// $ .09.2000 SVS - Функция CallPlugin - найти плагин по ID и запустить OpenFrom = OPEN_*
 	bool CallPlugin(const UUID& SysID,int OpenFrom, void *Data, void **Ret=nullptr) const;
 	bool CallPluginItem(const UUID& Uuid, CallPluginInfo* Data) const;
 	void RefreshPluginsList();
 	const auto& Factories() const { return PluginFactories; }
 
-	static void ConfigureCurrent(Plugin *pPlugin, const UUID& Uuid);
+	static void ConfigureCurrent(Plugin* pPlugin, const UUID& Uuid);
 	static bool UseInternalCommand(const plugin_panel* hPlugin, int CommandType, OpenPanelInfo const& Info);
 	static const UUID& GetUUID(const plugin_panel* hPlugin);
-	static bool SetHotKeyDialog(Plugin* pPlugin, const UUID& Uuid, hotkey_type HotKeyType, string_view DlgPluginTitle);
+	static bool SetHotKeyDialog(const Plugin* pPlugin, const UUID& Uuid, hotkey_type HotKeyType, string_view DlgPluginTitle);
 	static void ShowPluginInfo(Plugin* pPlugin, const UUID& Uuid);
 
 private:
@@ -232,17 +234,17 @@ private:
 	void LoadIfCacheAbsent() const;
 	Plugin* LoadPlugin(const string& FileName, const os::fs::find_data &FindData, bool LoadToMem);
 	Plugin* AddPlugin(std::unique_ptr<Plugin>&& pPlugin);
-	bool RemovePlugin(Plugin *pPlugin);
-	int UnloadPlugin(Plugin *pPlugin, int From);
+	bool RemovePlugin(const Plugin* pPlugin);
+	bool UnloadPlugin(Plugin* pPlugin, int From);
 	void UndoRemove(Plugin* plugin);
-	bool UpdateId(Plugin *pPlugin, const UUID& Id);
+	bool UpdateId(Plugin* pPlugin, const UUID& Id);
 	void LoadPluginsFromCache();
+	bool ProcessPluginPanel(std::unique_ptr<plugin_panel>&& hNewPlugin, const bool fe_close) const;
 
 	std::vector<std::unique_ptr<plugin_factory>> PluginFactories;
 	std::unordered_map<UUID, std::unique_ptr<Plugin>> m_Plugins;
 	plugins_set SortedPlugins;
-	std::list<Plugin*> UnloadedPlugins;
-	listener m_PluginSynchro;
+	std::unordered_set<Plugin*> UnloadedPlugins;
 
 #ifndef NO_WRAPPER
 	size_t OemPluginsCount;

@@ -39,42 +39,43 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Internal:
 #include "farcolor.hpp"
+#include "color_picker.hpp"
+#include "colormix.hpp"
 #include "vmenu.hpp"
 #include "vmenu2.hpp"
-#include "dialog.hpp"
 #include "filepanels.hpp"
 #include "ctrlobj.hpp"
 #include "scrbuf.hpp"
 #include "panel.hpp"
-#include "interf.hpp"
 #include "config.hpp"
-#include "console.hpp"
-#include "colormix.hpp"
 #include "lang.hpp"
 #include "manager.hpp"
 #include "global.hpp"
-#include "strmix.hpp"
 #include "lockscrn.hpp"
+#include "FarDlgBuilder.hpp"
 
 // Platform:
 
 // Common:
-#include "common.hpp"
 #include "common/2d/point.hpp"
-#include "common/null_iterator.hpp"
-#include "common/scope_exit.hpp"
 
 // External:
 #include "format.hpp"
 
 //----------------------------------------------------------------------------
 
-static void ChangeColor(PaletteColors PaletteIndex)
+static void ChangeColor(PaletteColors PaletteIndex, PaletteColors const* const BottomPaletteIndex)
 {
 	auto NewColor = Global->Opt->Palette[PaletteIndex];
+	const auto BottomColor = BottomPaletteIndex? &Global->Opt->Palette[*BottomPaletteIndex] : nullptr;
 
-	if (!console.GetColorDialog(NewColor))
+	auto Reset = false;
+
+	if (!GetColorDialog(NewColor, false, BottomColor, &Reset) && !Reset)
 		return;
+
+	if (Reset)
+		NewColor = Global->Opt->Palette.Default(PaletteIndex);
 
 	Global->Opt->Palette.Set(PaletteIndex, { &NewColor, 1 });
 
@@ -88,9 +89,6 @@ static void ChangeColor(PaletteColors PaletteIndex)
 
 		Global->WindowManager->ResizeAllWindows(); // рефрешим
 		Global->WindowManager->PluginCommit(); // коммитим.
-
-		if (Global->Opt->Clock)
-			ShowTime();
 	}
 
 	Global->WindowManager->PluginCommit(); // коммитим.
@@ -106,14 +104,47 @@ enum list_mode
 	list_modes_count
 };
 
+struct color_item;
+
+class color_item_span
+{
+public:
+	constexpr color_item_span() = default;
+
+	template<size_t N>
+	explicit(false) constexpr color_item_span(color_item const (&Items)[N]):
+		data(Items),
+		size(N)
+	{
+	}
+
+	constexpr bool empty() const
+	{
+		return !size;
+	}
+
+	constexpr operator std::span<color_item const>() const;
+
+private:
+	color_item const* data{};
+	size_t size{};
+};
+
 struct color_item
 {
 	lng LngId;
 	PaletteColors Color;
-	span<const color_item> SubColor;
+	// libc++ decided to follow the standard literally and prohibit incomplete types in spans :(
+	color_item_span SubColor;
+	PaletteColors const* BottomColor;
 };
 
-static void SetItemColors(span<const color_item> const Items, point Position = {})
+constexpr color_item_span::operator std::span<color_item const>() const
+{
+	return { data, data + size };
+}
+
+static void SetItemColors(std::span<const color_item> const Items, point Position = {})
 {
 	const auto ItemsMenu = VMenu2::create(msg(lng::MSetColorItemsTitle), {});
 
@@ -126,7 +157,7 @@ static void SetItemColors(span<const color_item> const Items, point Position = {
 	ItemsMenu->SetMenuFlags(VMENU_WRAPMODE);
 	ItemsMenu->RunEx([&](int Msg, void *param)
 	{
-		const auto ItemsCode = reinterpret_cast<intptr_t>(param);
+		const auto ItemsCode = std::bit_cast<intptr_t>(param);
 		if (Msg != DN_CLOSE || ItemsCode < 0)
 			return 0;
 
@@ -136,17 +167,25 @@ static void SetItemColors(span<const color_item> const Items, point Position = {
 		}
 		else
 		{
-			ChangeColor(Items[ItemsCode].Color);
+			ChangeColor(Items[ItemsCode].Color, Items[ItemsCode].BottomColor);
 		}
 
 		return 1;
 	});
 }
 
+static void ConfigurePalette()
+{
+	DialogBuilder Builder(lng::MColorsPalette, {});
+	Builder.AddCheckbox(lng::MColorsClassicPalette, Global->Opt->SetPalette);
+	Builder.AddOKCancel();
+	Builder.ShowDialog();
+}
+
 void SetColors()
 {
-	static const color_item
-	PanelItems[] =
+	static constexpr color_item
+	PanelItems[]
 	{
 		{ lng::MSetColorPanelNormal,                COL_PANELTEXT },
 		{ lng::MSetColorPanelSelected,              COL_PANELSELECTEDTEXT },
@@ -165,7 +204,7 @@ void SetColors()
 		{ lng::MSetColorPanelScreensNumber,         COL_PANELSCREENSNUMBER },
 	},
 
-	ListItemsNormal[] =
+	ListItemsNormal[]
 	{
 		{ lng::MSetColorDialogListText,                          COL_DIALOGLISTTEXT },
 		{ lng::MSetColorDialogListHighLight,                     COL_DIALOGLISTHIGHLIGHT },
@@ -182,7 +221,7 @@ void SetColors()
 		{ lng::MSetColorDialogSelectedListGrayed,                COL_DIALOGLISTSELECTEDGRAYTEXT },
 	},
 
-	ListItemsWarn[] =
+	ListItemsWarn[]
 	{
 		{ lng::MSetColorDialogListText,                          COL_WARNDIALOGLISTTEXT },
 		{ lng::MSetColorDialogListHighLight,                     COL_WARNDIALOGLISTHIGHLIGHT },
@@ -199,7 +238,7 @@ void SetColors()
 		{ lng::MSetColorDialogSelectedListGrayed,                COL_WARNDIALOGLISTSELECTEDGRAYTEXT },
 	},
 
-	ComboItemsNormal[] =
+	ComboItemsNormal[]
 	{
 		{ lng::MSetColorDialogListText,                          COL_DIALOGCOMBOTEXT },
 		{ lng::MSetColorDialogListHighLight,                     COL_DIALOGCOMBOHIGHLIGHT },
@@ -216,7 +255,7 @@ void SetColors()
 		{ lng::MSetColorDialogSelectedListGrayed,                COL_DIALOGCOMBOSELECTEDGRAYTEXT },
 	},
 
-	ComboItemsWarn[] =
+	ComboItemsWarn[]
 	{
 		{ lng::MSetColorDialogListText,                          COL_WARNDIALOGCOMBOTEXT },
 		{ lng::MSetColorDialogListHighLight,                     COL_WARNDIALOGCOMBOHIGHLIGHT },
@@ -233,7 +272,7 @@ void SetColors()
 		{ lng::MSetColorDialogSelectedListGrayed,                COL_WARNDIALOGCOMBOSELECTEDGRAYTEXT },
 	},
 
-	DialogItems[] =
+	DialogItems[]
 	{
 		{ lng::MSetColorDialogNormal,                                   COL_DIALOGTEXT },
 		{ lng::MSetColorDialogHighlighted,                              COL_DIALOGHIGHLIGHTTEXT },
@@ -257,7 +296,7 @@ void SetColors()
 		{ lng::MSetColorDialogComboBoxControl,                          {}, ComboItemsNormal },
 	},
 
-	WarnDialogItems[] =
+	WarnDialogItems[]
 	{
 		{ lng::MSetColorDialogNormal,                                   COL_WARNDIALOGTEXT },
 		{ lng::MSetColorDialogHighlighted,                              COL_WARNDIALOGHIGHLIGHTTEXT },
@@ -281,7 +320,7 @@ void SetColors()
 		{ lng::MSetColorDialogComboBoxControl,                          {}, ComboItemsWarn },
 	},
 
-	MenuItems[] =
+	MenuItems[]
 	{
 		{ lng::MSetColorMenuNormal,                   COL_MENUTEXT },
 		{ lng::MSetColorMenuSelected,                 COL_MENUSELECTEDTEXT },
@@ -298,7 +337,7 @@ void SetColors()
 		{ lng::MSetColorMenuSelectedGrayed,           COL_MENUSELECTEDGRAYTEXT },
 	},
 
-	HMenuItems[] =
+	HMenuItems[]
 	{
 		{ lng::MSetColorHMenuNormal,                  COL_HMENUTEXT },
 		{ lng::MSetColorHMenuSelected,                COL_HMENUSELECTEDTEXT },
@@ -306,14 +345,14 @@ void SetColors()
 		{ lng::MSetColorHMenuSelectedHighlighted,     COL_HMENUSELECTEDHIGHLIGHT },
 	},
 
-	KeyBarItems[] =
+	KeyBarItems[]
 	{
 		{ lng::MSetColorKeyBarNumbers,                COL_KEYBARNUM },
 		{ lng::MSetColorKeyBarNames,                  COL_KEYBARTEXT },
 		{ lng::MSetColorKeyBarBackground,             COL_KEYBARBACKGROUND },
 	},
 
-	CommandLineItems[] =
+	CommandLineItems[]
 	{
 		{ lng::MSetColorCommandLineNormal,            COL_COMMANDLINE },
 		{ lng::MSetColorCommandLineSelected,          COL_COMMANDLINESELECTED },
@@ -321,14 +360,14 @@ void SetColors()
 		{ lng::MSetColorCommandLineUserScreen,        COL_COMMANDLINEUSERSCREEN },
 	},
 
-	ClockItems[] =
+	ClockItems[]
 	{
 		{ lng::MSetColorClockNormal,                  COL_CLOCK },
 		{ lng::MSetColorClockNormalEditor,            COL_EDITORCLOCK },
 		{ lng::MSetColorClockNormalViewer,            COL_VIEWERCLOCK },
 	},
 
-	ViewerItems[] =
+	ViewerItems[]
 	{
 		{ lng::MSetColorViewerNormal,                 COL_VIEWERTEXT },
 		{ lng::MSetColorViewerSelected,               COL_VIEWERSELECTEDTEXT },
@@ -337,15 +376,15 @@ void SetColors()
 		{ lng::MSetColorViewerScrollbar,              COL_VIEWERSCROLLBAR },
 	},
 
-	EditorItems[] =
+	EditorItems[]
 	{
 		{ lng::MSetColorEditorNormal,                 COL_EDITORTEXT },
-		{ lng::MSetColorEditorSelected,               COL_EDITORSELECTEDTEXT },
+		{ lng::MSetColorEditorSelected,               COL_EDITORSELECTEDTEXT, {}, &EditorItems[0].Color },
 		{ lng::MSetColorEditorStatus,                 COL_EDITORSTATUS },
 		{ lng::MSetColorEditorScrollbar,              COL_EDITORSCROLLBAR },
 	},
 
-	HelpItems[] =
+	HelpItems[]
 	{
 		{ lng::MSetColorHelpNormal,                   COL_HELPTEXT },
 		{ lng::MSetColorHelpHighlighted,              COL_HELPHIGHLIGHTTEXT },
@@ -357,11 +396,10 @@ void SetColors()
 	};
 
 	{
-		// NOT constexpr, see VS bug #3103404
-		static const struct
+		static constexpr struct
 		{
 			lng MenuId;
-			span<const color_item> Subitems;
+			std::span<const color_item> Subitems;
 		}
 		Groups[]
 		{
@@ -391,386 +429,45 @@ void SetColors()
 			GroupsMenu->AddItem(tmp);
 		}
 
-		const auto DefaultId = static_cast<int>(GroupsMenu->size());
+		const auto DefaultIndexId = static_cast<int>(GroupsMenu->size());
 		GroupsMenu->AddItem(msg(lng::MSetDefaultColors));
-		const auto BlackWhiteId = static_cast<int>(GroupsMenu->size());
-		GroupsMenu->AddItem(msg(lng::MSetBW));
+		const auto DefaultRGBId = static_cast<int>(GroupsMenu->size());
+		GroupsMenu->AddItem(msg(lng::MSetDefaultColorsRGB));
+		GroupsMenu->SetHelp(L"ColorGroups"sv);
+
+		{
+			MenuItemEx tmp;
+			tmp.Flags = LIF_SEPARATOR;
+			GroupsMenu->AddItem(tmp);
+		}
+
+		const auto PaletteId = static_cast<int>(GroupsMenu->size());
+		GroupsMenu->AddItem(msg(lng::MColorsPalette));
 
 		GroupsMenu->SetPosition({ 2, 1, 0, 0 });
 		GroupsMenu->SetMenuFlags(VMENU_WRAPMODE);
 		const auto GroupsCode=GroupsMenu->RunEx([&](int Msg, void *param)
 		{
-			const auto ItemsCode = reinterpret_cast<intptr_t>(param);
+			const auto ItemsCode = std::bit_cast<intptr_t>(param);
 			if (Msg != DN_CLOSE || ItemsCode < 0 || static_cast<size_t>(ItemsCode) >= std::size(Groups))
 				return 0;
 			SetItemColors(Groups[ItemsCode].Subitems);
 			return 1;
 		});
 
-		if (GroupsCode == DefaultId)
+		if (GroupsCode == DefaultIndexId)
 		{
-			Global->Opt->Palette.ResetToDefault();
+			Global->Opt->Palette.ResetToDefaultIndex();
 		}
-		else if (GroupsCode == BlackWhiteId)
+		else if (GroupsCode == DefaultRGBId)
 		{
-			Global->Opt->Palette.ResetToBlack();
+			Global->Opt->Palette.ResetToDefaultRGB();
+		}
+		else if (GroupsCode == PaletteId)
+		{
+			ConfigurePalette();
 		}
 	}
 	Global->CtrlObject->Cp()->SetScreenPosition();
-	Global->CtrlObject->Cp()->LeftPanel()->Redraw();
-	Global->CtrlObject->Cp()->RightPanel()->Redraw();
-}
-
-template<class T>
-constexpr auto distinct(T value)
-{
-	return (~value & 0xff) >> 4 | value;
-}
-
-static const int ColorIndex[]
-{
-	distinct(B_BLACK),
-	distinct(B_RED),
-	distinct(B_DARKGRAY),
-	distinct(B_LIGHTRED),
-	distinct(B_BLUE),
-	distinct(B_MAGENTA),
-	distinct(B_LIGHTBLUE),
-	distinct(B_LIGHTMAGENTA),
-	distinct(B_GREEN),
-	distinct(B_BROWN),
-	distinct(B_LIGHTGREEN),
-	distinct(B_YELLOW),
-	distinct(B_CYAN),
-	distinct(B_LIGHTGRAY),
-	distinct(B_LIGHTCYAN),
-	distinct(B_WHITE)
-};
-
-enum color_dialog_items
-{
-	cd_border,
-
-	cd_fg_box,
-	cd_fg_color_first,
-	cd_fg_color_last = cd_fg_color_first + 15,
-
-	cd_fg_colorcode,
-	cd_fg_advanced,
-	cd_fg_transparent,
-
-	cd_bg_box,
-	cd_bg_color_first,
-	cd_bg_color_last = cd_bg_color_first + 15,
-
-	cd_bg_colorcode,
-	cd_bg_advanced,
-	cd_bg_transparent,
-
-	cd_sample_first,
-	cd_sample_last = cd_sample_first + 2,
-
-	cd_separator,
-
-	cd_button_ok,
-	cd_button_cancel,
-
-	cd_count
-};
-
-static string color_code(COLORREF Color)
-{
-	return format(FSTR(L"{0:06X}"), colors::color_value(colors::ARGB2ABGR(Color)));
-}
-
-// BUGBUG
-static bool IgnoreEditChange = false;
-
-static intptr_t GetColorDlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2)
-{
-	const auto ColorState = reinterpret_cast<FarColor*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
-	auto& CurColor = ColorState[0];
-
-	const auto GetColor = [Param1](size_t const Offset)
-	{
-		return colors::ConsoleColorToFarColor(ColorIndex[Param1 - Offset]);
-	};
-
-	const auto Flag4Bit = [](bool const IsFg)
-	{
-		return IsFg? FCF_FG_4BIT : FCF_BG_4BIT;
-	};
-
-	const auto SetComponentColorValue = [&CurColor](bool IsFg, COLORREF const Value)
-	{
-		auto& Component = IsFg? CurColor.ForegroundColor : CurColor.BackgroundColor;
-		Component = colors::alpha_value(Component) | colors::color_value(Value);
-	};
-
-
-	const auto DM_UPDATECOLORCODE = DM_USER + 1;
-
-	switch (Msg)
-	{
-		case DN_CTLCOLORDLGITEM:
-			{
-				const auto Colors = static_cast<FarDialogItemColors*>(Param2);
-				if (Param1 >= cd_fg_color_first && Param1 <= cd_fg_color_last)
-				{
-					Colors->Colors[0] = GetColor(cd_fg_color_first);
-					return TRUE;
-				}
-				else if (Param1 >= cd_bg_color_first && Param1 <= cd_bg_color_last)
-				{
-					Colors->Colors[0] = GetColor(cd_bg_color_first);
-					return TRUE;
-				}
-				else if (Param1 >= cd_sample_first && Param1 <= cd_sample_last)
-				{
-					Colors->Colors[0] = colors::merge(ColorState[1], ColorState[0]);
-					return TRUE;
-				}
-				else
-					return FALSE;
-			}
-
-		case DN_BTNCLICK:
-			{
-				if (Param2 && ((Param1 >= cd_fg_color_first && Param1 <= cd_fg_color_last) || (Param1 >= cd_bg_color_first && Param1 <= cd_bg_color_last)))
-				{
-					const auto IsFg = Param1 >= cd_fg_color_first && Param1 <= cd_fg_color_last;
-					const auto First = IsFg? cd_fg_color_first : cd_bg_color_first;
-					const auto ChosenColor = GetColor(First).BackgroundColor;
-
-					SetComponentColorValue(IsFg, ChosenColor);
-					CurColor.Flags |= Flag4Bit(IsFg);
-
-					Dlg->SendMessage(DM_UPDATECOLORCODE, IsFg? cd_fg_colorcode : cd_bg_colorcode, ToPtr(colors::ConsoleIndexToTrueColor(ChosenColor)));
-
-					return TRUE;
-				}
-				else if (Param1 == cd_fg_transparent || Param1 == cd_bg_transparent)
-				{
-					const auto IsFg = Param1 == cd_fg_transparent;
-					auto& Component = IsFg? CurColor.ForegroundColor : CurColor.BackgroundColor;
-					Param2? colors::make_transparent(Component) : colors::make_opaque(Component);
-				}
-				else if (Param1 == cd_fg_advanced || Param1 == cd_bg_advanced)
-				{
-					const auto IsFg = Param1 == cd_fg_advanced;
-					auto CustomColors = Global->Opt->Palette.GetCustomColors();
-
-					CHOOSECOLOR Params{sizeof(Params)};
-					Params.hwndOwner = console.GetWindow();
-
-					Params.Flags = CC_ANYCOLOR | CC_FULLOPEN | CC_RGBINIT;
-					Params.lpCustColors = CustomColors.data();
-
-					auto& Component = IsFg? CurColor.ForegroundColor : CurColor.BackgroundColor;
-
-					Params.rgbResult = colors::color_value(CurColor.Flags & Flag4Bit(IsFg)?
-						colors::ConsoleIndexToTrueColor(Component) :
-						Component
-					);
-
-					if (ChooseColor(&Params))
-					{
-						SetComponentColorValue(IsFg, Params.rgbResult);
-						CurColor.Flags &= ~Flag4Bit(IsFg);
-
-						Dlg->SendMessage(DM_SETCHECK, IsFg? cd_fg_color_first : cd_bg_color_first, ToPtr(BSTATE_3STATE));
-						Dlg->SendMessage(DM_UPDATECOLORCODE, IsFg? cd_fg_colorcode : cd_bg_colorcode, ToPtr(Params.rgbResult));
-
-						Global->Opt->Palette.SetCustomColors(CustomColors);
-					}
-
-					return TRUE;
-				}
-			}
-			break;
-
-		case DN_EDITCHANGE:
-			if (!IgnoreEditChange && (Param1 == cd_fg_colorcode || Param1 == cd_bg_colorcode))
-			{
-				const auto& Item = *static_cast<const FarDialogItem*>(Param2);
-				const auto Iterator = null_iterator(Item.Data);
-				if (std::any_of(Iterator, Iterator.end(), std::iswxdigit))
-				{
-					const auto IsFg = Param1 == cd_fg_colorcode;
-					const auto ChosenColor = colors::ARGB2ABGR(std::wcstoul(Item.Data, nullptr, 16));
-
-					SetComponentColorValue(IsFg, ChosenColor);
-					CurColor.Flags &= ~Flag4Bit(IsFg);
-
-					Dlg->SendMessage(DM_SETCHECK, IsFg? cd_fg_color_first : cd_bg_color_first, ToPtr(BSTATE_3STATE));
-				}
-			}
-			return TRUE;
-
-		case DM_UPDATECOLORCODE:
-			{
-				IgnoreEditChange = true;
-				SCOPE_EXIT{ IgnoreEditChange = false; };
-				Dlg->SendMessage(DM_SETTEXTPTR, Param1, UNSAFE_CSTR(color_code(static_cast<int>(reinterpret_cast<intptr_t>(Param2)))));
-			}
-			return TRUE;
-
-		default:
-			break;
-	}
-
-	return Dlg->DefProc(Msg, Param1, Param2);
-}
-
-bool GetColorDialogInternal(FarColor& Color, bool const bCentered, const FarColor* const BaseColor)
-{
-	auto ColorDlg = MakeDialogItems<cd_count>(
-	{
-		{ DI_DOUBLEBOX,   {{3,  1 }, {35, 14}}, DIF_NONE, msg(lng::MSetColorTitle), },
-		{ DI_SINGLEBOX,   {{5,  2 }, {18, 7 }}, DIF_NONE, msg(lng::MSetColorForeground), },
-		{ DI_RADIOBUTTON, {{6,  3 }, {0,  3 }}, DIF_MOVESELECT | DIF_GROUP,},
-		{ DI_RADIOBUTTON, {{6,  4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{6,  5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{6,  6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{9,  3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{9,  4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{9,  5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{9,  6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{12, 3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{12, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{12, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{12, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{15, 3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{15, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{15, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{15, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_FIXEDIT,     {{5,  8 }, {10, 8 }}, DIF_MASKEDIT, },
-		{ DI_BUTTON,      {{12, 8 }, {18, 8 }}, DIF_NONE, msg(lng::MSetColorForeRGB), },
-		{ DI_CHECKBOX,    {{5,  9 }, {0,  9 }}, DIF_NONE, msg(lng::MSetColorForeTransparent), },
-		{ DI_SINGLEBOX,   {{20, 2 }, {33, 7 }}, DIF_NONE, msg(lng::MSetColorBackground), },
-		{ DI_RADIOBUTTON, {{21, 3 }, {0,  3 }}, DIF_MOVESELECT | DIF_GROUP, },
-		{ DI_RADIOBUTTON, {{21, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{21, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{21, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{24, 3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{24, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{24, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{24, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{27, 3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{27, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{27, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{27, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{30, 3 }, {0,  3 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{30, 4 }, {0,  4 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{30, 5 }, {0,  5 }}, DIF_MOVESELECT, },
-		{ DI_RADIOBUTTON, {{30, 6 }, {0,  6 }}, DIF_MOVESELECT, },
-		{ DI_FIXEDIT,     {{20, 8 }, {25, 8 }}, DIF_MASKEDIT, },
-		{ DI_BUTTON,      {{27, 8 }, {33, 8 }}, DIF_NONE, msg(lng::MSetColorBackRGB), },
-		{ DI_CHECKBOX,    {{22, 9 }, {0,  9 }}, DIF_NONE, msg(lng::MSetColorBackTransparent), },
-		{ DI_TEXT,        {{5,  9 }, {33, 9 }}, DIF_NONE, msg(lng::MSetColorSample), },
-		{ DI_TEXT,        {{5,  10}, {33, 10}}, DIF_NONE, msg(lng::MSetColorSample), },
-		{ DI_TEXT,        {{5,  11}, {33, 11}}, DIF_NONE, msg(lng::MSetColorSample), },
-		{ DI_TEXT,        {{-1, 12}, {0,  12}}, DIF_SEPARATOR, },
-		{ DI_BUTTON,      {{0,  13}, {0,  13}}, DIF_CENTERGROUP | DIF_DEFAULTBUTTON, msg(lng::MSetColorSet), },
-		{ DI_BUTTON,      {{0,  13}, {0,  13}}, DIF_CENTERGROUP, msg(lng::MSetColorCancel), },
-	});
-
-	ColorDlg[cd_fg_colorcode].strData = color_code(Color.IsFg4Bit()? colors::ConsoleIndexToTrueColor(Color.ForegroundColor) : Color.ForegroundColor);
-	ColorDlg[cd_bg_colorcode].strData = color_code(Color.IsBg4Bit()? colors::ConsoleIndexToTrueColor(Color.BackgroundColor) : Color.BackgroundColor);
-	ColorDlg[cd_fg_colorcode].strMask = ColorDlg[cd_bg_colorcode].strMask = L"HHHHHH"sv;
-
-	FarColor CurColor[]{ Color, BaseColor? *BaseColor : colors::ConsoleColorToFarColor(F_BLACK | B_BLACK) };
-
-	if (Color.IsFg4Bit() || Color.IsBg4Bit())
-	{
-		const auto ConsoleColor = colors::FarColorToConsoleColor(Color);
-
-		if (Color.IsFg4Bit())
-		{
-			for (size_t i = cd_fg_color_first; i <= cd_fg_color_last; ++i)
-			{
-				if (((ColorIndex[i - cd_fg_color_first] & B_MASK) >> 4) == (ConsoleColor & F_MASK))
-				{
-					ColorDlg[i].Selected = true;
-					ColorDlg[i].Flags |= DIF_FOCUS;
-					break;
-				}
-			}
-		}
-
-		if (Color.IsBg4Bit())
-		{
-			for (size_t i = cd_bg_color_first; i <= cd_bg_color_last; ++i)
-			{
-				if ((ColorIndex[i - cd_bg_color_first] & B_MASK) == (ConsoleColor & B_MASK))
-				{
-					ColorDlg[i].Selected = true;
-					break;
-				}
-			}
-		}
-	}
-	else
-	{
-		ColorDlg[cd_fg_colorcode].Flags |= DIF_FOCUS;
-	}
-
-	if (BaseColor)
-	{
-		ColorDlg[0].Y2++;
-
-		for (size_t i = cd_sample_first; i < cd_count; ++i)
-		{
-			ColorDlg[i].Y1+=1;
-			ColorDlg[i].Y2+=1;
-		}
-
-		ColorDlg[cd_border].X2 += 4;
-		ColorDlg[cd_fg_box].X2 += 2;
-		ColorDlg[cd_bg_box].X1 += 2;
-		ColorDlg[cd_bg_box].X2 += 4;
-
-		for (size_t i = cd_fg_color_first; i <= cd_fg_color_last; ++i)
-		{
-			ColorDlg[i].X1+=1;
-		}
-
-		for (size_t i = cd_bg_color_first; i <= cd_bg_color_last; ++i)
-		{
-			ColorDlg[i].X1+=3;
-		}
-
-		for (size_t i = cd_sample_first; i <= cd_sample_last; ++i)
-		{
-			ColorDlg[i].X2+=4;
-		}
-
-		ColorDlg[cd_bg_advanced].X1 += 2;
-		ColorDlg[cd_bg_advanced].X2 += 2;
-
-		ColorDlg[cd_bg_colorcode].X1 += 2;
-		ColorDlg[cd_bg_colorcode].X2 += 2;
-
-		ColorDlg[cd_fg_transparent].Selected = colors::is_transparent(Color.ForegroundColor);
-		ColorDlg[cd_bg_transparent].Selected = colors::is_transparent(Color.BackgroundColor);
-	}
-	else
-	{
-		ColorDlg[cd_fg_transparent].Flags|=DIF_HIDDEN;
-		ColorDlg[cd_bg_transparent].Flags|=DIF_HIDDEN;
-	}
-
-	const auto Dlg = Dialog::create(ColorDlg, GetColorDlgProc, CurColor);
-
-	if (bCentered)
-		Dlg->SetPosition({ -1, -1, 39 + (BaseColor? 4 : 0), 16 + (BaseColor? 1 : 0) });
-	else
-		Dlg->SetPosition({ 37, 2, 75 + (BaseColor? 4 : 0), 17 + (BaseColor? 1 : 0)});
-
-	Dlg->Process();
-	if (Dlg->GetExitCode() != cd_button_ok)
-		return false;
-
-	Color = CurColor[0];
-	return true;
+	Global->CtrlObject->Cp()->Redraw();
 }

@@ -43,13 +43,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/noncopyable.hpp"
-#include "common/range.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-unsigned int ToPercent(unsigned long long Value, unsigned long long Base);
+unsigned int ToPercent(unsigned long long Value, unsigned long long Base, unsigned Max = 100);
 unsigned long long FromPercent(unsigned int Percent, unsigned long long Base);
 
 string MakeTemp(string_view Prefix = {}, bool WithTempPath = true, string_view UserTempPath = {});
@@ -60,18 +59,52 @@ void PluginPanelItemToFindDataEx(const PluginPanelItem& Src, os::fs::find_data& 
 class PluginPanelItemHolder
 {
 public:
-	NONCOPYABLE(PluginPanelItemHolder);
-
-	PluginPanelItemHolder() = default;
-	~PluginPanelItemHolder();
+	virtual void set_name(string_view Value) = 0;
+	virtual void set_alt_name(string_view Value) = 0;
+	virtual void set_description(string_view Value) = 0;
+	virtual void set_owner(string_view Value) = 0;
+	virtual void set_columns(std::span<const wchar_t* const> Value) = 0;
 
 	PluginPanelItem Item{};
+
+protected:
+	virtual ~PluginPanelItemHolder() = default;
 };
 
-class PluginPanelItemHolderNonOwning: public PluginPanelItemHolder
+class PluginPanelItemHolderRef final: public PluginPanelItemHolder
 {
 public:
-	~PluginPanelItemHolderNonOwning()
+	~PluginPanelItemHolderRef() override = default;
+
+	void set_name(string_view Value) override;
+	void set_alt_name(string_view Value) override;
+	void set_description(string_view Value) override;
+	void set_owner(string_view Value) override;
+	void set_columns(std::span<const wchar_t* const> Value) override;
+};
+
+class PluginPanelItemHolderHeap: public PluginPanelItemHolder
+{
+public:
+	NONCOPYABLE(PluginPanelItemHolderHeap);
+
+	PluginPanelItemHolderHeap() = default;
+	~PluginPanelItemHolderHeap() override;
+
+	void set_name(string_view Value) override;
+	void set_alt_name(string_view Value) override;
+	void set_description(string_view Value) override;
+	void set_owner(string_view Value) override;
+	void set_columns(std::span<const wchar_t* const> Values) override;
+
+private:
+	static const wchar_t* make_copy(string_view Value);
+};
+
+class PluginPanelItemHolderHeapNonOwning final: public PluginPanelItemHolderHeap
+{
+public:
+	~PluginPanelItemHolderHeapNonOwning() override
 	{
 		Item = {};
 	}
@@ -81,7 +114,7 @@ void FindDataExToPluginPanelItemHolder(const os::fs::find_data& Src, PluginPanel
 
 void FreePluginPanelItemData(const PluginPanelItem& Data);
 void FreePluginPanelItemUserData(HANDLE hPlugin, const UserDataItem& Data);
-void FreePluginPanelItemsData(span<PluginPanelItem> Items);
+void FreePluginPanelItemsData(std::span<PluginPanelItem> Items);
 
 class plugin_item_list
 {
@@ -95,18 +128,23 @@ public:
 	void emplace_back(const PluginPanelItem& Item);
 	void reserve(size_t Size);
 
+	auto begin() { return m_Data.begin(); }
+	auto begin() const { return m_Data.begin(); }
+
+	auto end() { return m_Data.end(); }
+	auto end() const { return m_Data.end(); }
+
 	const PluginPanelItem* data() const;
 	PluginPanelItem* data();
 	size_t size() const;
 	bool empty() const;
-	const std::vector<PluginPanelItem>& items() const;
 
 private:
 	std::vector<PluginPanelItem> m_Data;
 };
 
 template<class T>
-void DeleteRawArray(span<T> Data)
+void DeleteRawArray(std::span<T> Data)
 {
 	for (const auto& i: Data)
 	{

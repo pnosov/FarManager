@@ -33,12 +33,19 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
-#include "../preprocessor.hpp"
-#include "../rel_ops.hpp"
-
 //----------------------------------------------------------------------------
 
-struct point: public rel_ops<point>
+namespace detail
+{
+	template<typename type>
+	concept point_like = requires(type t)
+	{
+		t.X;
+		t.Y;
+	};
+}
+
+struct point
 {
 	int x{};
 	int y{};
@@ -51,17 +58,13 @@ struct point: public rel_ops<point>
 	{
 	}
 
-	template<typename T, REQUIRES(sizeof(T::X) && sizeof(T::Y))>
-	point(T const& Coord) noexcept:
-		point(Coord.X, Coord.Y)
+	explicit(false) point(detail::point_like auto const& Point) noexcept:
+		point(Point.X, Point.Y)
 	{
 	}
 
 	[[nodiscard]]
-	bool operator==(point const& rhs) const noexcept
-	{
-		return x == rhs.x && y == rhs.y;
-	}
+	bool operator==(point const& rhs) const = default;
 };
 
 #endif // POINT_HPP_5D641DB2_6406_4A9E_8D64_C642ECCF9790

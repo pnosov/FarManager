@@ -29,11 +29,8 @@ class ConsoleTitle{
 			if (Length)
 			{
 				OldTitle=new wchar_t[Length+1];
-				if (OldTitle)
-				{
-					GetWindowText(GetConsoleWindow(), OldTitle, Length + 1);
-					SetConsoleTitle(NewTitle);
-				}
+				GetWindowText(GetConsoleWindow(), OldTitle, Length + 1);
+				SetConsoleTitle(NewTitle);
 			}
 		}
 		~ConsoleTitle()
@@ -55,16 +52,12 @@ class MakeVETitle{
 		MakeVETitle(const wchar_t *Pref, const wchar_t *Cmd)
 		{
 			Title=new wchar_t[lstrlen(Pref)+(Cmd?lstrlen(Cmd):0)+1];
-			if (Title)
-			{
-				lstrcpy(Title,Pref);
-				if (Cmd) lstrcat(Title,Cmd);
-			}
+			lstrcpy(Title,Pref);
+			if (Cmd) lstrcat(Title,Cmd);
 		}
 		~MakeVETitle()
 		{
-			if (Title)
-				delete[] Title;
+			delete[] Title;
 		}
 		const wchar_t *Get() {return Title;}
 };
@@ -105,9 +98,9 @@ enum CatchModeType {
 	cmtDiff      = 3,  // <? - redirect #stderr# and #stdout# as different streams
 };
 
-extern struct PluginStartupInfo Info;
-extern struct FarStandardFunctions FSF;
-extern struct Options Opt;
+extern PluginStartupInfo PsInfo;
+extern FarStandardFunctions FSF;
+extern Options Opt;
 
 
 inline int IsSpace(int x) { return x==L' ' || x==L'\t'; }
@@ -135,8 +128,5 @@ bool __proc_Link(int outputtofile,wchar_t *pCmd);
 
 bool IsTextUTF8(const char* Buffer,size_t Length);
 wchar_t *ConvertBuffer(wchar_t* Ptr,size_t PtrSize,BOOL outputtofile, size_t& shift,bool *unicode);
-
-#define CP_UNICODE    ((uintptr_t)1200)
-#define CP_REVERSEBOM ((uintptr_t)1201)
 
 UINT GetCPBuffer(const void* data, size_t size, size_t* off);

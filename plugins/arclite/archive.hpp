@@ -15,13 +15,24 @@ extern const ArcType c_wim;
 extern const ArcType c_tar;
 extern const ArcType c_SWFc;
 extern const ArcType c_dmg;
+//
 extern const ArcType c_hfs;
+extern const ArcType c_fat;
+extern const ArcType c_ntfs;
+extern const ArcType c_ext4;
+extern const ArcType c_apfs;
+extern const ArcType c_mbr;
+extern const ArcType c_gpt;
+//
+extern const ArcType c_xfat;
 
 extern const wchar_t* c_method_copy;   // pseudo method
 
 extern const wchar_t* c_method_lzma;   // standard 7z methods
 extern const wchar_t* c_method_lzma2;  //
 extern const wchar_t* c_method_ppmd;   //
+extern const wchar_t* c_method_deflate;
+extern const wchar_t* c_method_deflate64;
 
 extern const UInt64 c_min_volume_size;
 
@@ -55,22 +66,22 @@ struct ArcLib {
 
 struct ArcFormat {
   std::wstring name;
-  bool updatable;
+  bool updatable{};
   std::list<std::wstring> extension_list;
   std::map<std::wstring, std::wstring> nested_ext_mapping;
   std::wstring default_extension() const;
 
-  UInt32 Flags;
-  bool NewInterface;
+  UInt32 Flags{};
+  bool NewInterface{};
 
-  UInt32 SignatureOffset;
+  UInt32 SignatureOffset{};
   std::vector<ByteVector> Signatures;
 
-  int lib_index;
-  UInt32 FormatIndex;
+  int lib_index{-1};
+  UInt32 FormatIndex{};
   ByteVector ClassID;
 
-  Func_IsArc IsArc;
+  Func_IsArc IsArc{};
 
   bool Flags_KeepName() const { return (Flags & NArcInfoFlags::kKeepName) != 0; }
   bool Flags_FindSignature() const { return (Flags & NArcInfoFlags::kFindSignature) != 0; }
@@ -85,8 +96,9 @@ struct ArcFormat {
   bool Flags_BackwardOpen() const { return (Flags & NArcInfoFlags::kBackwardOpen) != 0; }
   bool Flags_PreArc() const { return (Flags & NArcInfoFlags::kPreArc) != 0; }
   bool Flags_PureStartOpen() const { return (Flags & NArcInfoFlags::kPureStartOpen) != 0; }
+  bool Flags_ByExtOnlyOpen() const { return (Flags & NArcInfoFlags::kByExtOnlyOpen) != 0; }
 
-  ArcFormat() : updatable(false), Flags(0), NewInterface(false), lib_index(-1), FormatIndex(0), IsArc(nullptr) {}
+  ArcFormat() = default;
 };
 
 typedef std::vector<ArcLib> ArcLibs;
@@ -179,10 +191,10 @@ public:
 };
 
 struct ArcFileInfo {
-  UInt32 parent;
+  UInt32 parent{};
   std::wstring name;
-  bool is_dir;
-  bool is_altstream;
+  bool is_dir{};
+  bool is_altstream{};
   bool operator<(const ArcFileInfo& file_info) const;
 };
 typedef std::vector<ArcFileInfo> FileList;
@@ -216,7 +228,6 @@ private:
   UInt32 error_flags, warning_flags;
   std::wstring error_text, warning_text;
   IInStream *base_stream;
-  bool open(IInStream* in_stream, const ArcType& type);
   UInt64 get_physize();
   UInt64 archive_filesize();
   UInt64 get_skip_header(IInStream *stream, const ArcType& type);
@@ -238,6 +249,7 @@ public:
   }
   static std::unique_ptr<Archives> open(const OpenOptions& options);
   void close();
+  bool open(IInStream* in_stream, const ArcType& type, const bool allow_tail = false);
   void reopen();
   bool is_open() const {
     return in_arc;
@@ -253,7 +265,7 @@ public:
 
   // archive contents
 public:
-  UInt32 num_indices;
+  UInt32 m_num_indices;
   FileList file_list;
   FileIndex file_list_index;
   void make_index();
@@ -272,6 +284,9 @@ public:
   unsigned get_crc(UInt32 index) const;
   bool get_anti(UInt32 index) const;
   bool get_isaltstream(UInt32 index) const;
+
+  UInt64 get_offset(UInt32 index) const;
+  //std::wstring get_filesystem(UInt32 index) const;
 
   void read_open_results();
   std::list<std::wstring> get_open_errors() const;
@@ -292,14 +307,14 @@ private:
   std::wstring get_temp_file_name() const;
   void set_properties(IOutArchive* out_arc, const UpdateOptions& options);
 public:
-  unsigned level;
-  std::wstring method;
-  bool solid;
-  bool encrypted;
-  std::wstring password;
-  int open_password;
-  bool update_props_defined;
-  bool has_crc;
+  unsigned m_level;
+  std::wstring m_method;
+  bool m_solid;
+  bool m_encrypted;
+  std::wstring m_password;
+  int m_open_password;
+  bool m_update_props_defined;
+  bool m_has_crc;
   void load_update_props();
 public:
   void create(const std::wstring& src_dir, const std::vector<std::wstring>& file_names, const UpdateOptions& options, std::shared_ptr<ErrorLog> error_log);
@@ -321,7 +336,7 @@ public:
 
 public:
   Archive()
-   : base_stream(nullptr), num_indices(0)
-   , level(0), solid(false), encrypted(false), open_password(0), update_props_defined(false), has_crc(false)
+   : base_stream(nullptr), m_num_indices(0)
+   , m_level(0), m_solid(false), m_encrypted(false), m_open_password(0), m_update_props_defined(false), m_has_crc(false)
   { error_flags = warning_flags = 0; }
 };

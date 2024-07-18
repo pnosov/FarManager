@@ -43,14 +43,17 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cmdline.hpp"
 #include "dlgedit.hpp"
 #include "strmix.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.env.hpp"
 #include "platform.fs.hpp"
 
 // Common:
 #include "common.hpp"
 #include "common/enum_substrings.hpp"
+#include "common/view/zip.hpp"
 
 // External:
 #include "format.hpp"
@@ -59,21 +62,21 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 constexpr auto max_integer_in_double = bit(std::numeric_limits<double>::digits);
 
-unsigned int ToPercent(unsigned long long const Value, unsigned long long const Base)
+unsigned int ToPercent(unsigned long long const Value, unsigned long long const Base, unsigned const Max)
 {
-	if (!Value || !Base)
+	if (!Value || !Base || !Max)
 		return 0;
 
 	if (Value == Base)
-		return 100;
+		return Max;
 
 	if (Value <= max_integer_in_double && Base <= max_integer_in_double)
-		return static_cast<int>(static_cast<double>(Value) / static_cast<double>(Base) * 100);
+		return static_cast<int>(static_cast<double>(Value) / static_cast<double>(Base) * Max);
 
-	const auto Step = Base / 100;
+	const auto Step = Base / Max;
 	const auto Result = Value / Step;
 
-	return Result == 100? 99 : Result;
+	return Result == Max? Max - 1 : Result;
 }
 
 unsigned long long FromPercent(unsigned int const Percent, unsigned long long const Base)
@@ -101,7 +104,10 @@ string MakeTemp(string_view Prefix, bool const WithTempPath, string_view const U
 	if (WithTempPath)
 	{
 		// BUGBUG check result
-		(void)os::fs::GetTempPath(strPath);
+		if (!os::fs::GetTempPath(strPath))
+		{
+			LOGWARNING(L"GetTempPath(): {}"sv, os::last_error());
+		}
 	}
 	else if(!UserTempPath.empty())
 	{
@@ -110,7 +116,7 @@ string MakeTemp(string_view Prefix, bool const WithTempPath, string_view const U
 
 	AddEndSlash(strPath);
 
-	wchar_t_ptr_n<os::default_buffer_size> Buffer(Prefix.size() + strPath.size() + 13);
+	const wchar_t_ptr_n<os::default_buffer_size> Buffer(Prefix.size() + strPath.size() + 13);
 
 	auto Unique = 23 * GetCurrentProcessId() + s_shift;
 	const auto UniqueCopy = Unique? Unique : 1;
@@ -183,20 +189,77 @@ void FindDataExToPluginPanelItemHolder(const os::fs::find_data& Src, PluginPanel
 	Dest.FileAttributes = Src.Attributes;
 	Dest.NumberOfLinks = 1;
 
-	const auto MakeCopy = [](string_view const Str)
-	{
-		auto Buffer = std::make_unique<wchar_t[]>(Str.size() + 1);
-		*copy_string(Str, Buffer.get()) = {};
-		return Buffer.release();
-	};
-
-	Dest.FileName = MakeCopy(Src.FileName);
-	Dest.AlternateFileName = MakeCopy(Src.AlternateFileName());
+	Holder.set_name(Src.FileName);
+	Holder.set_alt_name(Src.AlternateFileName());
 }
 
-PluginPanelItemHolder::~PluginPanelItemHolder()
+void PluginPanelItemHolderRef::set_name(string_view Value)
+{
+	Item.FileName = Value.data();
+}
+
+void PluginPanelItemHolderRef::set_alt_name(string_view Value)
+{
+	Item.AlternateFileName = Value.data();
+}
+
+void PluginPanelItemHolderRef::set_description(string_view Value)
+{
+	Item.Description = Value.data();
+}
+
+void PluginPanelItemHolderRef::set_owner(string_view Value)
+{
+	Item.Owner = Value.data();
+}
+
+void PluginPanelItemHolderRef::set_columns(std::span<const wchar_t* const> Value)
+{
+	Item.CustomColumnData = Value.data();
+}
+
+PluginPanelItemHolderHeap::~PluginPanelItemHolderHeap()
 {
 	FreePluginPanelItemData(Item);
+}
+
+void PluginPanelItemHolderHeap::set_name(string_view const Value)
+{
+	Item.FileName = make_copy(Value);
+}
+
+void PluginPanelItemHolderHeap::set_alt_name(string_view const Value)
+{
+	Item.AlternateFileName = make_copy(Value);
+}
+
+void PluginPanelItemHolderHeap::set_description(string_view const Value)
+{
+	Item.Description = make_copy(Value);
+}
+
+void PluginPanelItemHolderHeap::set_owner(string_view const Value)
+{
+	Item.Owner = make_copy(Value);
+}
+
+void PluginPanelItemHolderHeap::set_columns(std::span<const wchar_t* const> const Values)
+{
+	auto Columns = std::make_unique<const wchar_t*[]>(Values.size());
+
+	for (const auto& [Column, Value]: zip(std::span(Columns.get(), Values.size()), Values))
+	{
+		Column = Value? make_copy(Value) : nullptr;
+	}
+
+	Item.CustomColumnData = Columns.release();
+}
+
+const wchar_t* PluginPanelItemHolderHeap::make_copy(string_view const Value)
+{
+	auto Buffer = std::make_unique<wchar_t[]>(Value.size() + 1);
+	*copy_string(Value, Buffer.get()) = {};
+	return Buffer.release();
 }
 
 void FreePluginPanelItemData(const PluginPanelItem& Data)
@@ -205,7 +268,7 @@ void FreePluginPanelItemData(const PluginPanelItem& Data)
 	delete[] Data.AlternateFileName;
 	delete[] Data.Description;
 	delete[] Data.Owner;
-	DeleteRawArray(span(Data.CustomColumnData, Data.CustomColumnNumber));
+	DeleteRawArray(std::span(Data.CustomColumnData, Data.CustomColumnNumber));
 }
 
 void FreePluginPanelItemUserData(HANDLE hPlugin, const UserDataItem& Data)
@@ -213,11 +276,11 @@ void FreePluginPanelItemUserData(HANDLE hPlugin, const UserDataItem& Data)
 	if (!Data.FreeData)
 		return;
 
-	FarPanelItemFreeInfo info{ sizeof(FarPanelItemFreeInfo), hPlugin };
+	const FarPanelItemFreeInfo info{ sizeof(info), hPlugin };
 	Data.FreeData(Data.Data, &info);
 }
 
-void FreePluginPanelItemsData(span<PluginPanelItem> const Items)
+void FreePluginPanelItemsData(std::span<PluginPanelItem> const Items)
 {
 	for (const auto& i: Items)
 	{
@@ -250,11 +313,6 @@ bool plugin_item_list::empty() const
 	return m_Data.empty();
 }
 
-const std::vector<PluginPanelItem>& plugin_item_list::items() const
-{
-	return m_Data;
-}
-
 void plugin_item_list::emplace_back(const PluginPanelItem& Item)
 {
 	m_Data.emplace_back(Item);
@@ -267,26 +325,21 @@ void plugin_item_list::reserve(size_t const Size)
 
 WINDOWINFO_TYPE WindowTypeToPluginWindowType(const int fType)
 {
-	static const std::pair<window_type, WINDOWINFO_TYPE> TypesMap[] =
+	switch (static_cast<window_type>(fType))
 	{
-		{windowtype_desktop,    WTYPE_DESKTOP},
-		{windowtype_panels,     WTYPE_PANELS},
-		{windowtype_viewer,     WTYPE_VIEWER},
-		{windowtype_editor,     WTYPE_EDITOR},
-		{windowtype_dialog,     WTYPE_DIALOG},
-		{windowtype_menu,       WTYPE_VMENU},
-		{windowtype_help,       WTYPE_HELP},
-		{windowtype_combobox,   WTYPE_COMBOBOX},
-		{windowtype_findfolder, WTYPE_FINDFOLDER},
-		{windowtype_grabber,    WTYPE_GRABBER},
-		{windowtype_hmenu,      WTYPE_HMENU},
-	};
-
-	const auto ItemIterator = std::find_if(CONST_RANGE(TypesMap, i)
-	{
-		return i.first == fType;
-	});
-	return ItemIterator == std::cend(TypesMap)? WTYPE_UNKNOWN : ItemIterator->second;
+	case windowtype_desktop:       return WTYPE_DESKTOP;
+	case windowtype_panels:        return WTYPE_PANELS;
+	case windowtype_viewer:        return WTYPE_VIEWER;
+	case windowtype_editor:        return WTYPE_EDITOR;
+	case windowtype_dialog:        return WTYPE_DIALOG;
+	case windowtype_menu:          return WTYPE_VMENU;
+	case windowtype_help:          return WTYPE_HELP;
+	case windowtype_combobox:      return WTYPE_COMBOBOX;
+	case windowtype_findfolder:    return WTYPE_FINDFOLDER;
+	case windowtype_grabber:       return WTYPE_GRABBER;
+	case windowtype_hmenu:         return WTYPE_HMENU;
+	default:                       return WTYPE_UNKNOWN;
+	}
 }
 
 SetAutocomplete::SetAutocomplete(EditControl* edit, bool NewState):
@@ -358,7 +411,7 @@ string version_to_string(const VersionInfo& Version)
 
 	static_assert(std::size(Stage) == VS_PRIVATE + 1);
 
-	auto VersionStr = format(FSTR(L"{0}.{1}.{2}.{3}"), Version.Major, Version.Minor, Version.Build, Version.Revision);
+	auto VersionStr = far::format(L"{}.{}.{}.{}"sv, Version.Major, Version.Minor, Version.Build, Version.Revision);
 	if (Version.Stage != VS_RELEASE && static_cast<size_t>(Version.Stage) < std::size(Stage))
 	{
 		append(VersionStr, L" ("sv, Stage[Version.Stage], L')');

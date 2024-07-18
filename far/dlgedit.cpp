@@ -43,7 +43,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "history.hpp"
 #include "editcontrol.hpp"
 #include "config.hpp"
-#include "syslog.hpp"
 #include "global.hpp"
 
 // Platform:
@@ -56,14 +55,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 DlgEdit::DlgEdit(window_ptr Owner,size_t Index,DLGEDITTYPE Type):
 	SimpleScreenObject(std::move(Owner)),
-	LastPartLength(-1),
 	m_Index(Index),
-	Type(Type),
-	iHistory(nullptr),
-#if defined(PROJECT_DI_MEMOEDIT)
-	multiEdit(nullptr),
-#endif
-	lineEdit(nullptr)
+	Type(Type)
+{
+	Init();
+}
+
+void DlgEdit::Init()
 {
 	switch (Type)
 	{
@@ -74,11 +72,11 @@ DlgEdit::DlgEdit(window_ptr Owner,size_t Index,DLGEDITTYPE Type):
 			break;
 		case DLGEDIT_SINGLELINE:
 		{
-			EditControl::Callback callback={true,EditChange,this};
+			EditControl::Callback callback{ true, EditChange, this };
 
-			FarList* iList = nullptr;
+			VMenu* iList = nullptr;
 			DWORD iFlags=0;
-			auto& CurItem=GetDialog()->Items[Index];
+			const auto& CurItem = GetDialog()->Items[m_Index];
 			if(Global->Opt->Dialogs.AutoComplete && CurItem.Flags&(DIF_HISTORY|DIF_EDITPATH|DIF_EDITPATHEXEC) && !(CurItem.Flags&DIF_DROPDOWNLIST) && !(CurItem.Flags&DIF_NOAUTOCOMPLETE))
 			{
 				iFlags=EditControl::EC_ENABLEAUTOCOMPLETE;
@@ -89,7 +87,7 @@ DlgEdit::DlgEdit(window_ptr Owner,size_t Index,DLGEDITTYPE Type):
 			}
 			if(CurItem.Type == DI_COMBOBOX)
 			{
-				iList=CurItem.ListItems;
+				iList = CurItem.ListPtr.get();
 			}
 			if(CurItem.Flags&DIF_HISTORY)
 			{
@@ -121,7 +119,12 @@ DlgEdit::~DlgEdit()
 
 void DlgEdit::SetHistory(string_view const Name)
 {
-	iHistory = std::make_unique<History>(HISTORYTYPE_DIALOG, Name, Global->Opt->Dialogs.EditHistory);
+	iHistory = std::make_unique<History>(HISTORYTYPE_DIALOG, Name, Global->Opt->Dialogs.EditHistory, false);
+
+	if (lineEdit)
+	{
+		lineEdit.get()->pHistory = iHistory.get();
+	}
 }
 
 bool DlgEdit::ProcessKey(const Manager::Key& Key)
@@ -732,16 +735,12 @@ long long DlgEdit::VMProcess(int OpCode, void* vParam, long long iParam)
 
 void DlgEdit::EditChange(void* aParam)
 {
-	_DIALOG(CleverSysLog CL(L"DlgEdit::EditChange()"));
-	_DIALOG(SysLog(L"aParam=%p, GetClearFlag=%d",aParam, static_cast<DlgEdit*>(aParam)->GetClearFlag()));
 	static_cast<DlgEdit*>(aParam)->DoEditChange();
 }
 
 void DlgEdit::DoEditChange() const
 {
 	const auto dialog = GetDialog();
-	_DIALOG(CleverSysLog CL(L"DlgEdit::DoEditChange()"));
-	_DIALOG(SysLog(L"m_Owner=%p, m_Owner->IsInited()=%d, m_Index=%d",dialog,dialog->IsInited(),m_Index));
 	if (dialog->IsInited())
 	{
 		dialog->SendMessage(DN_EDITCHANGE, m_Index, nullptr);

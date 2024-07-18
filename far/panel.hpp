@@ -39,13 +39,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scrobj.hpp"
 #include "panelfwd.hpp"
 #include "panelctype.hpp"
+#include "plugin.hpp"
 
 // Platform:
 #include "platform.fwd.hpp"
 
 // Common:
 #include "common/enumerator.hpp"
-#include "common/range.hpp"
+#include "common/string_utils.hpp"
 
 // External:
 
@@ -53,8 +54,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 class plugin_panel;
 class DizList;
-struct PluginPanelItem;
-struct OpenPanelInfo;
 
 struct column
 {
@@ -106,7 +105,6 @@ enum
 	UPDATE_KEEP_SELECTION = 0_bit,
 	UPDATE_SECONDARY      = 1_bit,
 	UPDATE_IGNORE_VISIBLE = 2_bit,
-	UPDATE_DRAW_MESSAGE   = 3_bit,
 };
 
 enum class panel_mode
@@ -118,7 +116,7 @@ enum class panel_mode
 enum class panel_sort: int;
 enum class sort_order: int;
 
-span<std::pair<panel_sort, sort_order> const> default_sort_layers(panel_sort SortMode);
+std::span<std::pair<panel_sort, sort_order> const> default_sort_layers(panel_sort SortMode);
 
 class VMenu2;
 class Edit;
@@ -148,11 +146,11 @@ public:
 	virtual void EditFilter() {}
 	virtual bool FileInFilter(size_t idxItem) {return true;}
 	virtual bool FilterIsEnabled() {return false;}
-	virtual void ReadDiz(span<PluginPanelItem> Items = {}) {}
-	virtual void DeleteDiz(const string& Name,const string& ShortName) {}
+	virtual void ReadDiz(std::span<PluginPanelItem> Items = {}) {}
+	virtual void DeleteDiz(string_view Name, string_view ShortName) {}
 	virtual string GetDizName() const { return {}; }
 	virtual void FlushDiz() {}
-	virtual void CopyDiz(const string& Name,const string& ShortName,const string& DestName, const string& DestShortName,DizList *DestDiz) {}
+	virtual void CopyDiz(string_view Name, string_view ShortName, string_view DestName, string_view DestShortName, DizList* DestDiz) {}
 	virtual bool IsDizDisplayed() const { return false; }
 	virtual bool IsColumnDisplayed(column_type Type) const {return false;}
 	virtual int GetColumnsCount() const { return 1;}
@@ -176,14 +174,13 @@ public:
 	virtual bool GetCurName(string &strName, string &strShortName) const;
 	virtual bool GetCurBaseName(string &strName, string &strShortName) const;
 	virtual bool GetFileName(string& strName, int Pos, os::fs::attributes& FileAttr) const { return false; }
-	virtual const std::unordered_set<string>* GetFilteredExtensions() const { return {}; }
+	virtual const unordered_string_set* GetFilteredExtensions() const { return {}; }
 	virtual int GetCurrentPos() const {return 0;}
 	virtual bool IsFocused() const;
 	virtual void OnFocusChange(bool Get);
 	virtual void Update(int Mode) = 0;
-	virtual void UpdateIfChanged(bool Idle) {}
+	virtual void UpdateIfChanged(bool Changed = false) {}
 	virtual void UpdateIfRequired() {}
-	virtual void StartFSWatcher(bool got_focus=false, bool check_time=true) {}
 	virtual void StopFSWatcher() {}
 	virtual bool FindPartName(string_view Name,int Next,int Direct=1) {return false;}
 	virtual bool GetPlainString(string& Dest, int ListPos) const { return false; }
@@ -196,7 +193,7 @@ public:
 	virtual long FindNext(int StartPos, string_view Name) {return -1;}
 	virtual void SetSelectedFirstMode(bool) {}
 	virtual bool GetSelectedFirstMode() const { return false; }
-	virtual void SetViewMode(int ViewMode);
+	virtual void SetViewMode(int Mode);
 	virtual int GetPrevViewMode() const {return m_PrevViewMode;}
 	virtual panel_sort GetPrevSortMode() const { return m_SortMode; }
 	virtual bool GetPrevSortOrder() const { return m_ReverseSortOrder; }
@@ -212,6 +209,9 @@ public:
 	virtual Viewer* GetViewer() {return nullptr;}
 	virtual Viewer* GetById(int ID) { return nullptr;}
 	virtual void OnDestroy() {}
+	virtual void InitCurDir(string_view CurDir);
+	virtual void on_swap() {}
+	virtual void dispose(){}
 
 	panel_mode GetMode() const { return m_PanelMode; }
 	void SetMode(panel_mode Mode) { m_PanelMode = Mode; }
@@ -227,9 +227,8 @@ public:
 	void SetSortGroups(bool Mode) {m_SortGroups=Mode;}
 	bool GetShowShortNamesMode() const { return m_ShowShortNames; }
 	void SetShowShortNamesMode(bool Mode) {m_ShowShortNames=Mode;}
-	void InitCurDir(string_view CurDir);
-	bool ExecShortcutFolder(int Pos);
-	bool ExecFolder(string_view Folder, const UUID& PluginUuid, const string& strPluginFile, const string& strPluginData, bool CheckType, bool TryClosest, bool Silent);
+	bool ExecShortcutFolder(size_t Index);
+	bool ExecFolder(string_view Folder, const UUID& PluginUuid, const string& strPluginFile, const string& strPluginData, bool CheckType, bool Silent);
 	bool SaveShortcutFolder(int Pos) const;
 	int SetPluginCommand(int Command,int Param1,void* Param2);
 	bool ProcessMouseDrag(const MOUSE_EVENT_RECORD* MouseEvent);
@@ -250,7 +249,7 @@ public:
 	auto enum_selected()
 	{
 		using value_type = os::fs::find_data;
-		return make_inline_enumerator<value_type>([this](const bool Reset, value_type& Value)
+		return inline_enumerator<value_type>([this](const bool Reset, value_type& Value)
 		{
 			if (Reset)
 				GetSelName(nullptr);
@@ -313,7 +312,7 @@ private:
 	string strDragName;
 };
 
-class dummy_panel : public Panel
+class dummy_panel final: public Panel
 {
 public:
 	explicit dummy_panel(window_ptr Owner):

@@ -41,10 +41,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/preprocessor.hpp"
+#include "common/string_utils.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
+
+struct RegExpMatch;
 
 enum FM_FLAGS
 {
@@ -63,7 +66,8 @@ public:
 	filemasks& operator=(filemasks&&) noexcept;
 
 	bool assign(string_view Str, DWORD Flags = 0);
-	bool check(string_view Name) const;
+	using regex_matches = std::pair<std::vector<RegExpMatch>&, unordered_string_map<size_t>&>;
+	bool check(string_view Name, regex_matches const* Matches = {}) const;
 	bool empty() const;
 
 	static void ErrorMessage();

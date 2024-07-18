@@ -41,7 +41,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Common:
 #include "common/function_ref.hpp"
-#include "common/range.hpp"
 
 // External:
 
@@ -51,12 +50,12 @@ struct menu_item;
 struct MenuItemEx;
 struct SortItemParam;
 
-class VMenu2 : public Dialog
+class VMenu2 final: public Dialog
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
-	static vmenu2_ptr create(const string& Title, span<const menu_item> Data, int MaxHeight=0, DWORD Flags=0);
+	static vmenu2_ptr create(const string& Title, std::span<const menu_item> Data, int MaxHeight=0, DWORD Flags=0);
 
 	VMenu2(private_tag, int MaxHeight);
 
@@ -86,6 +85,7 @@ public:
 	void SetCheck(int Position=-1);
 	void SetCustomCheck(wchar_t Char, int Position = -1);
 	void ClearCheck(int Position = -1);
+	void FlipCheck(int Position = -1);
 	void UpdateItemFlags(int Pos, unsigned long long NewFlags);
 	void SetMaxHeight(int NewMaxHeight){MaxHeight=NewMaxHeight; Resize();}
 	/*
@@ -124,7 +124,7 @@ public:
 	void Pack();
 	MenuItemEx& at(size_t n);
 	MenuItemEx& current();
-	int GetShowItemCount();
+	int GetShowItemCount() const;
 
 private:
 	intptr_t VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2);
@@ -142,16 +142,16 @@ private:
 
 	box_type m_BoxType{ box_type::full };
 	int MaxHeight;
-	int cancel;
-	int m_X1;
-	int m_Y1;
-	int m_X2;
-	int m_Y2;
-	INPUT_RECORD DefRec;
-	int InsideCall;
-	bool NeedResize;
-	bool closing;
-	bool ForceClosing;
+	int cancel{};
+	int m_X1{-1};
+	int m_Y1{-1};
+	int m_X2{};
+	int m_Y2{};
+	INPUT_RECORD DefRec{};
+	int InsideCall{};
+	bool NeedResize{};
+	bool closing{};
+	bool ForceClosing{};
 	std::function<int(int Msg, void *param)> mfn;
 };
 

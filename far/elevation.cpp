@@ -54,8 +54,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "global.hpp"
 #include "exception.hpp"
 #include "exception_handler.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.concurrency.hpp"
 #include "platform.fs.hpp"
 #include "platform.memory.hpp"
@@ -70,8 +72,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "format.hpp"
 
 //----------------------------------------------------------------------------
-
-using namespace os::security;
 
 static const int CallbackMagic = 0xCA11BAC6;
 
@@ -103,19 +103,17 @@ enum ELEVATION_COMMAND: int
 
 static const auto ElevationArgument = L"/service:elevation"sv;
 
-static privilege CreateBackupRestorePrivilege()
+static os::security::privilege CreateBackupRestorePrivilege()
 {
 	return { SE_BACKUP_NAME, SE_RESTORE_NAME };
 }
 
-template<typename T>
-static void WritePipe(const os::handle& Pipe, const T& Data)
+static void WritePipe(const os::handle& Pipe, const auto& Data)
 {
 	return pipe::write(Pipe, Data);
 }
 
-template<typename T>
-static void ReadPipe(const os::handle& Pipe, T& Data)
+static void ReadPipe(const os::handle& Pipe, auto& Data)
 {
 	pipe::read(Pipe, Data);
 }
@@ -176,7 +174,7 @@ static void WritePipe(const os::handle& Pipe, SECURITY_ATTRIBUTES* Data)
 {
 	if (!Data)
 	{
-		pipe::write(Pipe, size_t{});
+		pipe::write(Pipe, 0uz);
 		return;
 	}
 	else
@@ -234,9 +232,9 @@ elevation::~elevation()
 		{
 			Write(C_SERVICE_EXIT);
 		}
-		catch (const far_exception&)
+		catch (far_exception const& e)
 		{
-			// TODO: log
+			LOGERROR(L"{}"sv, e);
 		}
 	}
 
@@ -249,6 +247,7 @@ void elevation::ResetApprove()
 		return;
 
 	m_AskApprove=true;
+	m_IsApproved = false;
 
 	if (!m_Elevation)
 		return;
@@ -265,17 +264,16 @@ T elevation::Read() const
 	return Data;
 }
 
-template<typename... args>
-void elevation::Write(const args&... Args) const
+void elevation::Write(const auto&... Args) const
 {
 	(..., WritePipe(m_Pipe, Args));
 }
 
 void elevation::RetrieveLastError() const
 {
-	const auto ErrorState = Read<error_state>();
+	const auto ErrorState = Read<os::error_state>();
 	SetLastError(ErrorState.Win32Error);
-	imports.RtlNtStatusToDosError(ErrorState.NtError);
+	os::set_last_error_from_ntstatus(ErrorState.NtError);
 }
 
 template<typename T>
@@ -285,14 +283,13 @@ T elevation::RetrieveLastErrorAndResult() const
 	return Read<T>();
 }
 
-template<typename T, typename F1, typename F2>
-auto elevation::execute(lng Why, string_view const Object, T Fallback, const F1& PrivilegedHander, const F2& ElevatedHandler)
+auto elevation::execute(lng Why, string_view const Object, auto Fallback, const auto& PrivilegedHander, const auto& ElevatedHandler)
 {
-	SCOPED_ACTION(std::lock_guard)(m_CS);
+	SCOPED_ACTION(std::scoped_lock)(m_CS);
 	if (!ElevationApproveDlg(Why, Object))
 		return Fallback;
 
-	if (is_admin())
+	if (os::security::is_admin())
 	{
 		SCOPED_ACTION(auto)(CreateBackupRestorePrivilege());
 		return PrivilegedHander();
@@ -309,61 +306,117 @@ auto elevation::execute(lng Why, string_view const Object, T Fallback, const F1&
 	{
 		return ElevatedHandler();
 	}
-	catch (const far_exception&)
+	catch (far_exception const& e)
 	{
 		// Something went really bad, it's better to stop any further attempts
 		TerminateChildProcess();
 		m_Process.close();
 		m_Pipe.close();
 
-		// TODO: log
+		LOGERROR(L"{}"sv, e);
 		return Fallback;
 	}
 }
 
-static os::handle create_named_pipe(string_view const Name)
+static auto make_admin_sid()
 {
 	SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+	return os::security::make_sid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS);
+}
 
+static auto make_explicit_admin_access(os::security::sid_ptr const& AdminSid)
+{
+	EXPLICIT_ACCESS Access{};
+	Access.grfInheritance = NO_INHERITANCE;
+	Access.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+	Access.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+	Access.Trustee.ptstrName = static_cast<wchar_t*>(AdminSid.get());
+	return Access;
+}
+
+static auto make_acl(PACL const OldAcl, EXPLICIT_ACCESS& Access)
+{
+	os::memory::local::ptr<ACL> Acl;
+	if (const auto Result = SetEntriesInAcl(1, &Access, OldAcl, &ptr_setter(Acl)); Result != ERROR_SUCCESS)
+	{
+		LOGWARNING(L"SetEntriesInAcl: {}"sv, os::format_error(Result));
+	}
+
+	return Acl;
+}
+
+static os::handle create_named_pipe(string_view const Name)
+{
 	SECURITY_DESCRIPTOR SD;
-
 	if (!InitializeSecurityDescriptor(&SD, SECURITY_DESCRIPTOR_REVISION))
 		return nullptr;
 
-	const auto AdminSID = os::security::make_sid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS);
-
-	if (!AdminSID)
+	const auto AdminSid = make_admin_sid();
+	if (!AdminSid)
 		return nullptr;
 
-	EXPLICIT_ACCESS ea{};
-	ea.grfAccessPermissions = GENERIC_READ | GENERIC_WRITE;
-	ea.grfAccessMode = SET_ACCESS;
-	ea.grfInheritance = NO_INHERITANCE;
-	ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
-	ea.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
-	ea.Trustee.ptstrName = static_cast<wchar_t*>(AdminSID.get());
+	auto Access = make_explicit_admin_access(AdminSid);
+	Access.grfAccessPermissions = GENERIC_READ | GENERIC_WRITE;
+	Access.grfAccessMode = SET_ACCESS;
 
-	os::memory::local::ptr<ACL> pACL;
-	if (SetEntriesInAcl(1, &ea, nullptr, &ptr_setter(pACL)) != ERROR_SUCCESS)
+	const auto Acl = make_acl({}, Access);
+	if (!Acl)
 		return nullptr;
 
-	if (!SetSecurityDescriptorDacl(&SD, TRUE, pACL.get(), FALSE))
+	if (!SetSecurityDescriptorDacl(&SD, TRUE, Acl.get(), FALSE))
 		return nullptr;
 
 	SECURITY_ATTRIBUTES sa{ sizeof(sa), &SD };
 	return os::handle(CreateNamedPipe(concat(L"\\\\.\\pipe\\"sv, Name).c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT, 1, 0, 0, 0, &sa));
 }
 
+static bool grant_duplicate_handle()
+{
+	PACL Acl;
+	os::memory::local::ptr<std::remove_pointer_t<PSECURITY_DESCRIPTOR>> Descriptor;
+	if (const auto Result = GetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, {}, {}, &Acl, {}, &ptr_setter(Descriptor)); Result != ERROR_SUCCESS)
+	{
+		LOGWARNING(L"GetSecurityInfo: {}"sv, os::format_error(Result));
+		return false;
+	}
+
+	const auto AdminSid = make_admin_sid();
+	if (!AdminSid)
+		return false;
+
+	auto Access = make_explicit_admin_access(AdminSid);
+	Access.grfAccessPermissions = PROCESS_DUP_HANDLE;
+	Access.grfAccessMode = GRANT_ACCESS;
+
+	const auto NewAcl = make_acl(Acl, Access);
+	if (!NewAcl)
+		return false;
+
+	if (const auto Result = SetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, {}, {}, NewAcl.get(), {}); Result != ERROR_SUCCESS)
+	{
+		LOGWARNING(L"SetSecurityInfo: {}"sv, os::format_error(Result));
+		return false;
+	}
+
+	return true;
+}
+
 static os::handle create_job()
 {
 	os::handle Job(CreateJobObject(nullptr, nullptr));
 	if (!Job)
+	{
+		LOGERROR(L"CreateJobObject: {}"sv, os::last_error());
 		return nullptr;
+	}
 
 	JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli{};
 	jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 	if (!SetInformationJobObject(Job.native_handle(), JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)))
+	{
+		LOGERROR(L"SetInformationJobObject: {}"sv, os::last_error());
 		return nullptr;
+	}
 
 	return Job;
 }
@@ -373,7 +426,7 @@ static os::handle create_elevated_process(const string& Parameters)
 	SHELLEXECUTEINFO info
 	{
 		sizeof(info),
-		SEE_MASK_FLAG_NO_UI | SEE_MASK_UNICODE | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
+		SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS,
 		nullptr,
 		L"runas",
 		Global->g_strFarModuleName.c_str(),
@@ -382,7 +435,10 @@ static os::handle create_elevated_process(const string& Parameters)
 	};
 
 	if (!ShellExecuteEx(&info))
+	{
+		LOGERROR(L"ShellExecuteEx({}): {}"sv, info.lpFile, os::last_error());
 		return nullptr;
+	}
 
 	return os::handle(info.hProcess);
 }
@@ -417,6 +473,11 @@ void elevation::TerminateChildProcess() const
 
 bool elevation::Initialize()
 {
+	if (!m_DuplicateHandleGranted)
+	{
+		m_DuplicateHandleGranted = grant_duplicate_handle();
+	}
+
 	if (m_Process && !m_Process.is_signaled())
 		return true;
 
@@ -442,7 +503,6 @@ bool elevation::Initialize()
 
 	if (m_Job)
 		AssignProcessToJobObject(m_Job.native_handle(), m_Process.native_handle());
-	//TODO: else log
 
 	if (!connect_pipe_to_process(m_Process, m_Pipe))
 	{
@@ -486,10 +546,10 @@ static intptr_t ElevationApproveDlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Para
 		{
 			if(Param1==AAD_EDIT_OBJECT)
 			{
-				const auto Color = colors::PaletteColorToFarColor(COL_DIALOGTEXT);
-				const auto Colors = static_cast<FarDialogItemColors*>(Param2);
-				Colors->Colors[0] = Color;
-				Colors->Colors[2] = Color;
+				const auto& Color = colors::PaletteColorToFarColor(COL_DIALOGTEXT);
+				const auto& Colors = *static_cast<FarDialogItemColors const*>(Param2);
+				Colors.Colors[0] = Color;
+				Colors.Colors[2] = Color;
 			}
 		}
 		break;
@@ -513,14 +573,12 @@ struct EAData: noncopyable
 
 static void ElevationApproveDlgSync(const EAData& Data)
 {
-	SCOPED_ACTION(auto)(message_manager::instance().suppress());
-
 	enum {DlgX=64,DlgY=12};
 
 	auto ElevationApproveDlg = MakeDialogItems<AAD_COUNT>(
 	{
 		{ DI_DOUBLEBOX, {{3,  1     }, {DlgX-4, DlgY-2}}, DIF_NONE, msg(lng::MAccessDenied), },
-		{ DI_TEXT,      {{5,  2     }, {0,      2     }}, DIF_NONE, msg(is_admin()? lng::MElevationRequiredPrivileges : lng::MElevationRequired), },
+		{ DI_TEXT,      {{5,  2     }, {0,      2     }}, DIF_NONE, msg(os::security::is_admin()? lng::MElevationRequiredPrivileges : lng::MElevationRequired), },
 		{ DI_TEXT,      {{5,  3     }, {0,      3     }}, DIF_NONE, msg(Data.Why), },
 		{ DI_EDIT,      {{5,  4     }, {DlgX-6, 4     }}, DIF_READONLY, Data.Object, },
 		{ DI_CHECKBOX,  {{5,  6     }, {0,      6     }}, DIF_NONE, msg(lng::MElevationDoForAll), },
@@ -553,23 +611,29 @@ static void ElevationApproveDlgSync(const EAData& Data)
 
 bool elevation::ElevationApproveDlg(lng const Why, string_view const Object)
 {
-	if (m_Suppressions)
+	// Some logic actually relies on disabled elevation
+	if (m_CompleteSuppressions)
 		return false;
+
+	// Usually we just don't want to be too annoying,
+	// but if it's already active, we might as well use it.
+	if (m_Suppressions)
+		return m_IsApproved;
 
 	// request for backup&restore privilege is useless if the user already has them
 	{
 		SCOPED_ACTION(os::last_error_guard);
 
-		if (m_AskApprove && is_admin() && privilege::check(SE_BACKUP_NAME, SE_RESTORE_NAME))
+		if (m_AskApprove && os::security::is_admin() && os::security::privilege::check(SE_BACKUP_NAME, SE_RESTORE_NAME))
 		{
 			m_AskApprove = false;
 			return true;
 		}
 	}
 
-	if(!(is_admin() && !(Global->Opt->ElevationMode&ELEVATION_USE_PRIVILEGES)) &&
+	if(!(os::security::is_admin() && !(Global->Opt->ElevationMode&ELEVATION_USE_PRIVILEGES)) &&
 		m_AskApprove && !m_DontAskAgain && !m_Recurse &&
- 		Global->WindowManager && !Global->WindowManager->ManagerIsDown())
+		Global->WindowManager && !Global->WindowManager->ManagerIsDown())
 	{
 		++m_Recurse;
 
@@ -581,7 +645,7 @@ bool elevation::ElevationApproveDlg(lng const Why, string_view const Object)
 		if(!Global->IsMainThread())
 		{
 			os::event SyncEvent(os::event::type::automatic, os::event::state::nonsignaled);
-			listener const Listener([&SyncEvent](const std::any& Payload)
+			listener const Listener(listener::scope{L"Elevation"sv}, [&SyncEvent](const std::any& Payload)
 			{
 				ElevationApproveDlgSync(*std::any_cast<EAData*>(Payload));
 				SyncEvent.set();
@@ -657,7 +721,7 @@ void elevation::progress_routine(LPPROGRESS_ROUTINE ProgressRoutine) const
 	const auto Data = Read<intptr_t>();
 	// BUGBUG: SourceFile, DestinationFile ignored
 
-	const auto Result = ProgressRoutine(TotalFileSize, TotalBytesTransferred, StreamSize, StreamBytesTransferred, StreamNumber, CallbackReason, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, reinterpret_cast<void*>(Data));
+	const auto Result = ProgressRoutine(TotalFileSize, TotalBytesTransferred, StreamSize, StreamBytesTransferred, StreamNumber, CallbackReason, INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE, ToPtr(Data));
 
 	Write(CallbackMagic, Result);
 }
@@ -672,7 +736,7 @@ bool elevation::copy_file(const string& From, const string& To, LPPROGRESS_ROUTI
 		},
 		[&]
 		{
-			Write(C_FUNCTION_COPYFILE, From, To, reinterpret_cast<intptr_t>(ProgressRoutine), reinterpret_cast<intptr_t>(Data), Flags);
+			Write(C_FUNCTION_COPYFILE, From, To, std::bit_cast<intptr_t>(ProgressRoutine), std::bit_cast<intptr_t>(Data), Flags);
 			// BUGBUG: Cancel ignored
 
 			while (Read<int>() == CallbackMagic)
@@ -928,16 +992,27 @@ bool elevation::reset_file_security(string const& Object)
 		});
 }
 
-elevation::suppress::suppress():
-	m_owner(Global? &instance() : nullptr)
+elevation::suppress::suppress(bool const Completely):
+	m_owner(Global? &instance() : nullptr),
+	m_Completely(Completely)
 {
-	if (m_owner)
+	if (!m_owner)
+		return;
+
+	if (m_Completely)
+		++m_owner->m_CompleteSuppressions;
+	else
 		++m_owner->m_Suppressions;
 }
 
 elevation::suppress::~suppress()
 {
-	if (m_owner)
+	if (!m_owner)
+		return;
+
+	if (m_Completely)
+		--m_owner->m_CompleteSuppressions;
+	else
 		--m_owner->m_Suppressions;
 }
 
@@ -947,13 +1022,12 @@ bool ElevationRequired(ELEVATION_MODE Mode, bool UseNtStatus)
 	if (!Global || !Global->Opt || !(Global->Opt->ElevationMode & Mode))
 		return false;
 
-	if(UseNtStatus && imports.RtlGetLastNtStatus)
+	if(UseNtStatus)
 	{
-		const auto LastNtStatus = os::GetLastNtStatus();
+		const auto LastNtStatus = os::get_last_nt_status();
 		return LastNtStatus == STATUS_ACCESS_DENIED || LastNtStatus == STATUS_PRIVILEGE_NOT_HELD || LastNtStatus == STATUS_INVALID_OWNER;
 	}
 
-	// RtlGetLastNtStatus not implemented in w2k.
 	const auto LastWin32Error = GetLastError();
 	return LastWin32Error == ERROR_ACCESS_DENIED || LastWin32Error == ERROR_PRIVILEGE_NOT_HELD || LastWin32Error == ERROR_INVALID_OWNER;
 }
@@ -963,16 +1037,18 @@ class elevated:noncopyable
 public:
 	int Run(string_view const Uuid, DWORD PID, bool UsePrivileges)
 	{
-		os::set_error_mode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
-
-		std::vector Privileges{ SE_TAKE_OWNERSHIP_NAME, SE_DEBUG_NAME, SE_CREATE_SYMBOLIC_LINK_NAME };
-		if (UsePrivileges)
+		std::array const Privileges
 		{
-			Privileges.emplace_back(SE_BACKUP_NAME);
-			Privileges.emplace_back(SE_RESTORE_NAME);
-		}
+			SE_BACKUP_NAME,
+			SE_RESTORE_NAME,
 
-		SCOPED_ACTION(privilege)(Privileges);
+			SE_TAKE_OWNERSHIP_NAME,
+			SE_CREATE_SYMBOLIC_LINK_NAME
+		};
+
+		const auto OptionalPrivilegesCount = 2; // Backup, restore
+
+		SCOPED_ACTION(os::security::privilege)(std::span{Privileges}.subspan(UsePrivileges? 0 : OptionalPrivilegesCount));
 
 		const auto PipeName = concat(L"\\\\.\\pipe\\"sv, Uuid);
 		WaitNamedPipe(PipeName.c_str(), NMPWAIT_WAIT_FOREVER);
@@ -991,11 +1067,14 @@ public:
 				return GetLastError();
 
 			string ParentProcessFileName;
-			if (!os::fs::GetModuleFileName(ParentProcess.native_handle(), nullptr, ParentProcessFileName))
+			if (!os::fs::get_module_file_name(ParentProcess.native_handle(), {}, ParentProcessFileName))
 				return GetLastError();
 
+			// Do not use get_current_process_file_name here: even though it's implemented in terms of get_module_file_name,
+			// get_module_file_name uses a different path for the current process case and the results can be different
+			// if the path contains symlinks. See gh-371 for example.
 			string CurrentProcessFileName;
-			if (!os::fs::GetModuleFileName(GetCurrentProcess(), nullptr, CurrentProcessFileName))
+			if (!os::fs::get_module_file_name(GetCurrentProcess(), {}, CurrentProcessFileName))
 				return GetLastError();
 
 			if (!equal_icase(CurrentProcessFileName, ParentProcessFileName))
@@ -1007,10 +1086,8 @@ public:
 		for (;;)
 		{
 			if (!Process(Read<int>()))
-				break;
+				return EXIT_SUCCESS;
 		}
-
-		return EXIT_SUCCESS;
 	}
 
 private:
@@ -1025,11 +1102,6 @@ private:
 		std::exception_ptr ExceptionPtr;
 	};
 
-	void Write(const void* Data, size_t DataSize) const
-	{
-		pipe::write(m_Pipe, Data, DataSize);
-	}
-
 	template<typename T>
 	T Read() const
 	{
@@ -1038,8 +1110,7 @@ private:
 		return Data;
 	}
 
-	template<typename... args>
-	void Write(const args&... Args) const
+	void Write(const auto&... Args) const
 	{
 		(..., WritePipe(m_Pipe, Args));
 	}
@@ -1056,7 +1127,7 @@ private:
 		const auto SecurityAttributes = Read<security_attributes_wrapper>();
 		const auto Result = os::fs::low::create_directory(TemplateObject.c_str(), Object.c_str(), SecurityAttributes());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void RemoveDirectoryHandler() const
@@ -1065,7 +1136,7 @@ private:
 
 		const auto Result = os::fs::low::remove_directory(Object.c_str());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void DeleteFileHandler() const
@@ -1074,7 +1145,7 @@ private:
 
 		const auto Result = os::fs::low::delete_file(Object.c_str());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void CopyFileHandler() const
@@ -1086,10 +1157,10 @@ private:
 		const auto Flags = Read<DWORD>();
 		// BUGBUG: Cancel ignored
 
-		callback_param Param{ this, reinterpret_cast<void*>(Data) };
+		callback_param Param{ this, ToPtr(Data) };
 		const auto Result = os::fs::low::copy_file(From.c_str(), To.c_str(), UserCopyProgressRoutine? CopyProgressRoutineWrapper : nullptr, &Param, nullptr, Flags);
 
-		Write(0 /* not CallbackMagic */, error_state::fetch(), Result);
+		Write(0 /* not CallbackMagic */, os::last_error(), Result);
 
 		rethrow_if(Param.ExceptionPtr);
 	}
@@ -1102,7 +1173,7 @@ private:
 
 		const auto Result = os::fs::low::move_file(From.c_str(), To.c_str(), Flags);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void ReplaceFileHandler() const
@@ -1114,7 +1185,7 @@ private:
 
 		const auto Result = os::fs::low::replace_file(To.c_str(), From.c_str(), Backup.c_str(), Flags);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void GetFileAttributesHandler() const
@@ -1123,7 +1194,7 @@ private:
 
 		const auto Result = os::fs::low::get_file_attributes(Object.c_str());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void SetFileAttributesHandler() const
@@ -1133,7 +1204,7 @@ private:
 
 		const auto Result = os::fs::low::set_file_attributes(Object.c_str(), Attributes);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void CreateHardLinkHandler() const
@@ -1144,7 +1215,7 @@ private:
 
 		const auto Result = os::fs::low::create_hard_link(Object.c_str(), Target.c_str(), SecurityAttributes());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void CreateSymbolicLinkHandler() const
@@ -1155,7 +1226,7 @@ private:
 
 		const auto Result = os::fs::CreateSymbolicLinkInternal(Object, Target, Flags);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void MoveToRecycleBinHandler() const
@@ -1164,7 +1235,7 @@ private:
 
 		const auto Result = os::fs::low::move_to_recycle_bin(Object);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void SetOwnerHandler() const
@@ -1174,7 +1245,7 @@ private:
 
 		const auto Result = SetOwnerInternal(Object, Owner);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void CreateFileHandler() const
@@ -1196,7 +1267,7 @@ private:
 			}
 		}
 
-		Write(error_state::fetch(), reinterpret_cast<intptr_t>(Duplicate));
+		Write(os::last_error(), std::bit_cast<intptr_t>(Duplicate));
 	}
 
 	void SetEncryptionHandler() const
@@ -1206,7 +1277,7 @@ private:
 
 		const auto Result = os::fs::low::set_file_encryption(Object.c_str(), Encrypt);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void DetachVirtualDiskHandler() const
@@ -1216,7 +1287,7 @@ private:
 
 		const auto Result = os::fs::low::detach_virtual_disk(Object.c_str(), VirtualStorageType);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void GetDiskFreeSpaceHandler() const
@@ -1226,7 +1297,7 @@ private:
 		unsigned long long FreeBytesAvailableToCaller, TotalNumberOfBytes, TotalNumberOfFreeBytes;
 		const auto Result = os::fs::low::get_disk_free_space(Object.c_str(), &FreeBytesAvailableToCaller, &TotalNumberOfBytes, &TotalNumberOfFreeBytes);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 
 		if(Result)
 		{
@@ -1241,7 +1312,7 @@ private:
 
 		const auto Result = os::fs::low::get_file_security(Object.c_str(), SecurityInformation);
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void SetFileSecurityHandler() const
@@ -1254,7 +1325,7 @@ private:
 
 		const auto Result = os::fs::low::set_file_security(Object.c_str(), SecurityInformation, SecurityDescriptor.data());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	void ResetFileSecurityHandler() const
@@ -1263,7 +1334,7 @@ private:
 
 		const auto Result = os::fs::low::reset_file_security(Object.c_str());
 
-		Write(error_state::fetch(), Result);
+		Write(os::last_error(), Result);
 	}
 
 	static DWORD CALLBACK CopyProgressRoutineWrapper(LARGE_INTEGER TotalFileSize, LARGE_INTEGER TotalBytesTransferred, LARGE_INTEGER StreamSize, LARGE_INTEGER StreamBytesTransferred, DWORD StreamNumber, DWORD CallbackReason, HANDLE SourceFile,HANDLE DestinationFile, LPVOID Data)
@@ -1273,9 +1344,9 @@ private:
 		return cpp_try(
 		[&]
 		{
-			const auto Context = Param->Owner;
+			const auto& Context = *Param->Owner;
 
-			Context->Write(
+			Context.Write(
 				CallbackMagic,
 				TotalFileSize,
 				TotalBytesTransferred,
@@ -1283,25 +1354,22 @@ private:
 				StreamBytesTransferred,
 				StreamNumber,
 				CallbackReason,
-				reinterpret_cast<intptr_t>(Param->UserData));
+				std::bit_cast<intptr_t>(Param->UserData));
 			// BUGBUG: SourceFile, DestinationFile ignored
 
 			for (;;)
 			{
-				const auto Result = Context->Read<int>();
+				const auto Result = Context.Read<int>();
 				if (Result == CallbackMagic)
 				{
-					return Context->Read<int>();
+					return Context.Read<int>();
 				}
 				// nested call from ProgressRoutine()
-				Context->Process(Result);
+				Context.Process(Result);
 			}
 		},
-		[&]
-		{
-			SAVE_EXCEPTION_TO(Param->ExceptionPtr);
-			return PROGRESS_CANCEL;
-		});
+		save_exception_and_return<PROGRESS_CANCEL>(Param->ExceptionPtr)
+		);
 	}
 
 	bool Process(int Command) const
@@ -1341,7 +1409,7 @@ private:
 		}
 		catch (...)
 		{
-			// TODO: log
+			LOGERROR(L"{}"sv, unknown_exception);
 			return false;
 		}
 	}

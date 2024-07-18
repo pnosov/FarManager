@@ -36,36 +36,41 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "preprocessor.hpp"
+
+#include <utility>
+
 //----------------------------------------------------------------------------
 
-template<typename T, T Default = T{}>
 class movable
 {
 public:
 	NONCOPYABLE(movable);
 
 	movable() = default;
-	movable(T Value): m_Value(Value){}
-	auto& operator=(T Value) { m_Value = Value; return *this; }
-	auto& operator+=(T Value) { m_Value += Value; return *this; }
-	auto& operator-=(T Value) { m_Value -= Value; return *this; }
-	auto& operator++() { ++m_Value; return *this; }
-	auto& operator--() { --m_Value; return *this; }
 
-	movable(movable&& rhs) noexcept { *this = std::move(rhs); }
-	auto& operator=(movable&& rhs) noexcept { m_Value = std::exchange(rhs.m_Value, Default); return *this; }
+	auto& operator=(movable&& rhs) noexcept
+	{
+		m_Value = std::exchange(rhs.m_Value, false);
+		return *this;
+	}
 
-	[[nodiscard]]
-	bool operator==(T Value) const { return m_Value == Value; }
-
-	[[nodiscard]]
-	bool operator<(T Value) const { return m_Value < Value; }
+	movable(movable&& rhs) noexcept
+	{
+		*this = std::move(rhs);
+	}
 
 	[[nodiscard]]
-	operator T() const { return m_Value; }
+	explicit operator bool() const noexcept
+	{
+		return m_Value;
+	}
+
+	[[nodiscard]]
+	auto operator<=>(const movable&) const = default;
 
 private:
-	T m_Value{Default};
+	bool m_Value{ true };
 };
 
 #endif // MOVABLE_HPP_A063CBC7_C7FC_470D_901E_620E0D6A2D51

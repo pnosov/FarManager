@@ -47,7 +47,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "interf.hpp"
 #include "datetime.hpp"
 #include "strmix.hpp"
-#include "console.hpp"
+#include "color_picker.hpp"
 #include "flink.hpp"
 #include "lang.hpp"
 #include "locale.hpp"
@@ -62,7 +62,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common.hpp"
 #include "common/2d/point.hpp"
 #include "common/2d/matrix.hpp"
-#include "common/view/zip.hpp"
 
 // External:
 #include "format.hpp"
@@ -93,14 +92,6 @@ filter_dates::operator bool() const
 FileFilterParams::FileFilterParams()
 {
 	SetMask(true, L"*"sv);
-
-	for (auto& i: FHighlight.Colors.Color)
-	{
-		colors::make_opaque(i.FileColor.ForegroundColor);
-		colors::make_opaque(i.MarkColor.ForegroundColor);
-	}
-
-	FHighlight.SortGroup=DEFAULT_SORT_GROUP;
 }
 
 FileFilterParams FileFilterParams::Clone() const
@@ -209,9 +200,9 @@ highlight::element FileFilterParams::GetColors() const
 	return FHighlight.Colors;
 }
 
-wchar_t FileFilterParams::GetMarkChar() const
+const string& FileFilterParams::GetMark() const
 {
-	return FHighlight.Colors.Mark.Char;
+	return FHighlight.Colors.Mark.Mark;
 }
 
 struct filter_file_object
@@ -320,7 +311,8 @@ bool FileFilterParams::FileInFilter(const filter_file_object& Object, os::chrono
 			case FDATE_OPENED:   return Object.AccessTime;
 			case FDATE_CHANGED:  return Object.ChangeTime;
 			case FDATE_MODIFIED: return Object.ModificationTime;
-			default: UNREACHABLE; // Validated in SetDate()
+			default:
+				std::unreachable(); // Validated in SetDate()
 			}
 		}();
 
@@ -410,10 +402,9 @@ static string AttributesString(DWORD Include, DWORD Exclude)
 //Централизованная функция для создания строк меню различных фильтров.
 string MenuString(const FileFilterParams* const FF, bool const bHighlightType, wchar_t const Hotkey, bool const bPanelType, string_view const FMask, string_view const Title)
 {
-	const wchar_t DownArrow = L'\x2193';
 	string_view Name;
 	auto Mask = L""sv;
-	auto MarkChar = L"' '"s;
+	string Mark;
 	os::fs::attributes IncludeAttr, ExcludeAttr;
 	bool UseSize, UseHardLinks, UseDate, RelativeDate;
 
@@ -427,14 +418,8 @@ string MenuString(const FileFilterParams* const FF, bool const bHighlightType, w
 	}
 	else
 	{
-		if (const auto Char = FF->GetMarkChar())
-		{
-			MarkChar[1] = Char;
-			if (Char == L'&')
-				MarkChar.insert(1, 1, L'&');
-		}
-		else
-			MarkChar.clear();
+		Mark = FF->GetMark();
+		inplace::escape_ampersands(Mark);
 
 		Name=FF->GetTitle();
 
@@ -483,25 +468,30 @@ string MenuString(const FileFilterParams* const FF, bool const bHighlightType, w
 
 	if (bHighlightType)
 	{
-		SetFlag(FF->GetContinueProcessing(), DownArrow);
+		SetFlag(FF->GetContinueProcessing(), L'↓');
 
-		const auto AmpFix = Name.size() - HiStrlen(Name);
+		const auto MaxMarkSize = 4;
 
-		return format(FSTR(L"{1:3} {0} {2:{3}.{3}} {0} {4} {5} {0} {6}"),
+		const auto
+			MarkAmpFix = Mark.size() - HiStrlen(Mark),
+			NameAmpFix = Name.size() - HiStrlen(Name);
+
+		return far::format(L"{1:{2}.{2}} {0} {3:{4}.{4}} {0} {5} {6} {0} {7}"sv,
 			BoxSymbols[BS_V1],
-			MarkChar,
+			Mark,
+			MaxMarkSize + MarkAmpFix,
 			Name,
-			MaxNameSize + AmpFix,
+			MaxNameSize + NameAmpFix,
 			AttrStr,
 			OtherFlags,
 			Mask
 		);
 	}
 
-	const auto HotkeyStr = Hotkey? format(FSTR(L"&{0}. "), Hotkey) : bPanelType? L"   "s : L""s;
+	const auto HotkeyStr = Hotkey? far::format(L"&{}. "sv, Hotkey) : bPanelType? L"   "s : L""s;
 	const auto AmpFix = Hotkey? 1 : Name.size() - HiStrlen(Name);
 
-	return format(FSTR(L"{1}{2:{3}.{3}} {0} {4} {5} {0} {6}"),
+	return far::format(L"{1}{2:{3}.{3}} {0} {4} {5} {0} {6}"sv,
 			BoxSymbols[BS_V1],
 			HotkeyStr,
 			Name,
@@ -556,7 +546,7 @@ enum enumFileFilterConfig
 	ID_HER_SEPARATOR1,
 	ID_HER_MARK_TITLE,
 	ID_HER_MARKEDIT,
-	ID_HER_MARKTRANSPARENT,
+	ID_HER_MARKINHERIT,
 
 	ID_HER_NORMALFILE,
 	ID_HER_NORMALMARKING,
@@ -588,46 +578,14 @@ struct attribute_map
 	int State;
 };
 
-struct context
+struct ffp_context
 {
 	highlight::element* Colors;
-	span<attribute_map> Attributes;
+	std::span<attribute_map> Attributes;
 };
 
-static void HighlightDlgUpdateUserControl(matrix_view<FAR_CHAR_INFO> const& VBufColorExample, const highlight::element &Colors)
-{
-	const size_t ColorIndices[]{ highlight::color::normal, highlight::color::selected, highlight::color::normal_current, highlight::color::selected_current };
-
-	int VBufRow = 0;
-	for (const auto& [ColorRef, Index, Row]: zip(Colors.Color, ColorIndices, VBufColorExample))
-	{
-		auto BakedColor = ColorRef;
-		highlight::configuration::ApplyFinalColor(BakedColor, Index);
-
-		Row.front() = { BoxSymbols[BS_V2], colors::PaletteColorToFarColor(COL_PANELBOX) };
-
-		auto Iterator = Row.begin() + 1;
-
-		if (Colors.Mark.Char)
-		{
-			Iterator->Char = Colors.Mark.Transparent? L' ' : Colors.Mark.Char;
-			Iterator->Attributes = BakedColor.MarkColor;
-			++Iterator;
-		}
-
-		const span FileArea(Iterator, Row.end() - 1);
-		const auto Str = fit_to_left(msg(lng::MHighlightExample), FileArea.size());
-
-		for (const auto& [Cell, Char] : zip(FileArea, Str))
-		{
-			Cell = { Char, BakedColor.FileColor };
-		}
-
-		Row.back() = { BoxSymbols[BS_V1], Row.front().Attributes };
-
-		++VBufRow;
-	}
-}
+// BUGBUG
+void HighlightDlgUpdateUserControl(matrix_view<FAR_CHAR_INFO> const& VBufColorExample, const highlight::element& Colors);
 
 static void FilterDlgRelativeDateItemsUpdate(Dialog* Dlg, bool bClear)
 {
@@ -661,7 +619,7 @@ static void FilterDlgRelativeDateItemsUpdate(Dialog* Dlg, bool bClear)
 	}
 }
 
-static bool AttributesDialog(span<attribute_map> const Attributes)
+static bool AttributesDialog(std::span<attribute_map> const Attributes)
 {
 	DialogBuilder Builder(lng::MSetAttrTitle);
 
@@ -687,18 +645,15 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 		{
 			if (Param1 == ID_FF_BUTTON_ATTRIBUTES)
 			{
-				const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
-				AttributesDialog(Context->Attributes);
+				const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+				AttributesDialog(Context.Attributes);
 				break;
 			}
 			else if (Param1==ID_FF_CURRENT || Param1==ID_FF_BLANK)
 			{
-				string Date, Time;
-
-				if (Param1==ID_FF_CURRENT)
-				{
-					ConvertDate(os::chrono::nt_clock::now(), Date, Time, 16, 2);
-				}
+				const auto& [Date, Time] = Param1==ID_FF_CURRENT?
+					ConvertDate(os::chrono::nt_clock::now(), 16, 2) :
+					std::tuple<string, string>{};
 
 				SCOPED_ACTION(Dialog::suppress_redraw)(Dlg);
 
@@ -726,19 +681,19 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 			{
 				SCOPED_ACTION(Dialog::suppress_redraw)(Dlg);
 
-				const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+				const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
 				Dlg->SendMessage(DM_SETTEXTPTR,ID_FF_MASKEDIT,const_cast<wchar_t*>(L"*"));
 				Dlg->SendMessage(DM_SETTEXTPTR,ID_FF_SIZEFROMEDIT,nullptr);
 				Dlg->SendMessage(DM_SETTEXTPTR,ID_FF_SIZETOEDIT,nullptr);
 
-				for (auto& i: Context->Attributes)
+				for (auto& i: Context.Attributes)
 				{
-					i.State = !Context->Colors && i.Attribute == FILE_ATTRIBUTE_DIRECTORY?
+					i.State = !Context.Colors && i.Attribute == FILE_ATTRIBUTE_DIRECTORY?
 						BSTATE_UNCHECKED:
 						BSTATE_3STATE;
 				}
 
-				FarListPos LPos={sizeof(FarListPos)};
+				FarListPos LPos{ sizeof(LPos) };
 				Dlg->SendMessage(DM_LISTSETCURPOS,ID_FF_DATETYPE,&LPos);
 				Dlg->SendMessage(DM_SETCHECK,ID_FF_MATCHMASK,ToPtr(BSTATE_CHECKED));
 				Dlg->SendMessage(DM_SETCHECK,ID_FF_MATCHSIZE,ToPtr(BSTATE_UNCHECKED));
@@ -746,23 +701,25 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 				Dlg->SendMessage(DM_SETCHECK,ID_FF_MATCHDATE,ToPtr(BSTATE_UNCHECKED));
 				Dlg->SendMessage(DM_SETCHECK,ID_FF_DATERELATIVE,ToPtr(BSTATE_UNCHECKED));
 				FilterDlgRelativeDateItemsUpdate(Dlg, true);
-				Dlg->SendMessage(DM_SETCHECK,ID_FF_CHECKBOX_ATTRIBUTES, ToPtr(Context->Colors? BSTATE_UNCHECKED : BSTATE_CHECKED));
+				Dlg->SendMessage(DM_SETCHECK,ID_FF_CHECKBOX_ATTRIBUTES, ToPtr(Context.Colors? BSTATE_UNCHECKED : BSTATE_CHECKED));
 
 				break;
 			}
 			else if (Param1==ID_FF_MAKETRANSPARENT)
 			{
-				const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+				const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
 
-				for (auto& i: Context->Colors->Color)
+				for (auto& i: Context.Colors->Color)
 				{
 					colors::make_transparent(i.FileColor.ForegroundColor);
 					colors::make_transparent(i.FileColor.BackgroundColor);
+					colors::make_transparent(i.FileColor.UnderlineColor);
 					colors::make_transparent(i.MarkColor.ForegroundColor);
 					colors::make_transparent(i.MarkColor.BackgroundColor);
+					colors::make_transparent(i.MarkColor.UnderlineColor);
 				}
 
-				Dlg->SendMessage(DM_SETCHECK,ID_HER_MARKTRANSPARENT,ToPtr(BSTATE_CHECKED));
+				Dlg->SendMessage(DM_SETCHECK,ID_HER_MARKINHERIT,ToPtr(BSTATE_CHECKED));
 				Dlg->SendMessage(DM_REFRESHCOLORS, 0, nullptr);
 				break;
 			}
@@ -771,7 +728,7 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 				FilterDlgRelativeDateItemsUpdate(Dlg, true);
 				break;
 			}
-			else if (Param1 == ID_HER_MARKTRANSPARENT)
+			else if (Param1 == ID_HER_MARKINHERIT)
 			{
 				Dlg->SendMessage(DM_REFRESHCOLORS, 0, nullptr);
 				break;
@@ -783,21 +740,21 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 		if ((Msg==DN_BTNCLICK && Param1 >= ID_HER_NORMALFILE && Param1 <= ID_HER_SELECTEDCURSORMARKING)
 			|| (Msg==DN_CONTROLINPUT && Param1==ID_HER_COLOREXAMPLE && static_cast<const INPUT_RECORD*>(Param2)->EventType == MOUSE_EVENT && static_cast<const INPUT_RECORD*>(Param2)->Event.MouseEvent.dwButtonState==FROM_LEFT_1ST_BUTTON_PRESSED))
 		{
-			const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+			const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
 
 			if (Msg==DN_CONTROLINPUT)
 			{
 				Param1 = ID_HER_NORMALFILE + static_cast<const INPUT_RECORD*>(Param2)->Event.MouseEvent.dwMousePosition.Y*2;
 
-				if (static_cast<const INPUT_RECORD*>(Param2)->Event.MouseEvent.dwMousePosition.X==1 && Context->Colors->Mark.Char)
+				if (static_cast<const INPUT_RECORD*>(Param2)->Event.MouseEvent.dwMousePosition.X==1 && !Context.Colors->Mark.Mark.empty())
 					Param1 = ID_HER_NORMALMARKING + static_cast<const INPUT_RECORD*>(Param2)->Event.MouseEvent.dwMousePosition.Y*2;
 			}
 
 			//Color[0=file, 1=mark][0=normal,1=selected,2=undercursor,3=selectedundercursor]
 			static const PaletteColors BaseIndices[]{ COL_PANELTEXT, COL_PANELSELECTEDTEXT, COL_PANELCURSOR, COL_PANELSELECTEDCURSOR };
-			const auto BaseColor = colors::PaletteColorToFarColor(BaseIndices[(Param1 - ID_HER_NORMALFILE) / 2]);
+			const auto& BaseColor = colors::PaletteColorToFarColor(BaseIndices[(Param1 - ID_HER_NORMALFILE) / 2]);
 
-			if (console.GetColorDialog(((Param1-ID_HER_NORMALFILE)&1)? Context->Colors->Color[(Param1-ID_HER_NORMALFILE)/2].MarkColor : Context->Colors->Color[(Param1-ID_HER_NORMALFILE)/2].FileColor, true, &BaseColor))
+			if (GetColorDialog(((Param1-ID_HER_NORMALFILE)&1)? Context.Colors->Color[(Param1-ID_HER_NORMALFILE)/2].MarkColor : Context.Colors->Color[(Param1-ID_HER_NORMALFILE)/2].FileColor, true, &BaseColor))
 				Dlg->SendMessage(DM_REFRESHCOLORS, 0, nullptr);
 		}
 
@@ -805,18 +762,15 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 
 	case DM_REFRESHCOLORS:
 		{
-			const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+			const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
 			const size_t Size = Dlg->SendMessage(DM_GETDLGITEM, ID_HER_COLOREXAMPLE, nullptr);
 			const block_ptr<FarDialogItem> Buffer(Size);
-			FarGetDialogItem gdi = {sizeof(FarGetDialogItem), Size, Buffer.data()};
+			FarGetDialogItem gdi{ sizeof(gdi), Size, Buffer.data() };
 			Dlg->SendMessage(DM_GETDLGITEM,ID_HER_COLOREXAMPLE,&gdi);
-			//MarkChar это FIXEDIT размером в 1 символ
-			wchar_t MarkChar[2];
-			FarDialogItemData item={sizeof(FarDialogItemData),1,MarkChar};
-			Dlg->SendMessage(DM_GETTEXT,ID_HER_MARKEDIT,&item);
-			Context->Colors->Mark.Char = *MarkChar;
-			Context->Colors->Mark.Transparent = Dlg->SendMessage(DM_GETCHECK, ID_HER_MARKTRANSPARENT, nullptr) == BST_CHECKED;
-			HighlightDlgUpdateUserControl(matrix_view(gdi.Item->VBuf, ColorExampleSize.y, ColorExampleSize.x), *Context->Colors);
+			const auto Mark = std::bit_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ID_HER_MARKEDIT, {}));
+			Context.Colors->Mark.Mark = Mark;
+			Context.Colors->Mark.Inherit = Dlg->SendMessage(DM_GETCHECK, ID_HER_MARKINHERIT, nullptr) == BST_CHECKED;
+			HighlightDlgUpdateUserControl(matrix_view(gdi.Item->VBuf, ColorExampleSize.y, ColorExampleSize.x), *Context.Colors);
 			Dlg->SendMessage(DM_SETDLGITEM,ID_HER_COLOREXAMPLE,gdi.Item);
 			return TRUE;
 		}
@@ -830,18 +784,18 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 
 		if (Param1 == ID_FF_OK && Dlg->SendMessage(DM_GETCHECK, ID_FF_MATCHSIZE, nullptr))
 		{
-			string Size = reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ID_FF_SIZEFROMEDIT, nullptr));
+			string Size = std::bit_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ID_FF_SIZEFROMEDIT, nullptr));
 			bool Ok = Size.empty() || CheckFileSizeStringFormat(Size);
 			if (Ok)
 			{
-				Size = reinterpret_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ID_FF_SIZETOEDIT, nullptr));
+				Size = std::bit_cast<const wchar_t*>(Dlg->SendMessage(DM_GETCONSTTEXTPTR, ID_FF_SIZETOEDIT, nullptr));
 				Ok = Size.empty() || CheckFileSizeStringFormat(Size);
 			}
 			if (!Ok)
 			{
-				const auto Context = reinterpret_cast<const context*>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
+				const auto& Context = view_as<ffp_context>(Dlg->SendMessage(DM_GETDLGDATA, 0, nullptr));
 				Message(MSG_WARNING,
-					msg(Context->Colors? lng::MFileHilightTitle : lng::MFileFilterTitle),
+					msg(Context.Colors? lng::MFileHilightTitle : lng::MFileFilterTitle),
 					{
 						msg(lng::MBadFileSizeFormat)
 					},
@@ -859,7 +813,7 @@ static intptr_t FileFilterConfigDlgProc(Dialog* Dlg,intptr_t Msg,intptr_t Param1
 	return Dlg->DefProc(Msg,Param1,Param2);
 }
 
-bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
+bool FileFilterConfig(FileFilterParams& Filter, bool ColorConfig)
 {
 	// Временная маска.
 	filemasks FileMask;
@@ -875,21 +829,17 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 	default:
 	case date_type::ymd:
 		// Маска даты для формата YYYYY.MM.DD
-		strDateMask = format(FSTR(L"N9999{0}99{0}99"), DateSeparator);
+		strDateMask = far::format(L"N9999{0}99{0}99"sv, DateSeparator);
 		break;
 
 	case date_type::mdy:
 	case date_type::dmy:
 		// Маска даты для форматов DD.MM.YYYYY и MM.DD.YYYYY
-		strDateMask = format(FSTR(L"99{0}99{0}9999N"), DateSeparator);
+		strDateMask = far::format(L"99{0}99{0}9999N"sv, DateSeparator);
 		break;
 	}
 
-	// Маска времени
-	const auto strTimeMask = format(FSTR(L"99{0}99{0}99{1}9999999"), TimeSeparator, DecimalSeparator);
-	const wchar_t VerticalLine[] = {BoxSymbols[BS_T_H1V1],BoxSymbols[BS_V1],BoxSymbols[BS_V1],BoxSymbols[BS_V1],BoxSymbols[BS_B_H1V1],0};
-
-	std::pair<lng, string> NameLabels[] =
+	std::pair<lng, string> NameLabels[]
 	{
 		{lng::MHighlightFileName1, {}},
 		{lng::MHighlightFileName2, {}},
@@ -897,7 +847,7 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 		{lng::MHighlightFileName4, {}},
 	};
 
-	const auto ColumnSize = msg(std::max_element(ALL_CONST_RANGE(NameLabels), [](const auto& a, const auto& b) { return msg(a.first).size() < msg(b.first).size(); })->first).size() + 1;
+	const auto ColumnSize = std::ranges::fold_left(NameLabels, 0uz, [](size_t const Value, auto const& i){ return std::max(Value, msg(i.first).size()); }) + 1;
 
 	for (auto& [LngId, Label]: NameLabels)
 	{
@@ -932,15 +882,15 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 		{ DI_BUTTON,      {{0,  6 }, {0,  6 }}, DIF_BTNNOCLOSE, msg(lng::MFileFilterCurrent), },
 		{ DI_BUTTON,      {{0,  6 }, {74, 6 }}, DIF_BTNNOCLOSE, msg(lng::MFileFilterBlank), },
 		{ DI_TEXT,        {{-1, 9 }, {0,  9 }}, DIF_SEPARATOR, },
-		{ DI_VTEXT,       {{22, 5 }, {22, 9 }}, DIF_BOXCOLOR, VerticalLine },
+		{ DI_VTEXT,       {{22, 5 }, {22, 9 }}, DIF_SEPARATORUSER, },
 		{ DI_CHECKBOX,    {{5,  10}, {0,  10}}, DIF_AUTOMATION, msg(lng::MFileFilterAttr)},
 		{ DI_BUTTON,      {{5,  10}, {0,  10}}, DIF_AUTOMATION | DIF_BTNNOCLOSE, msg(lng::MFileFilterAttrChoose), },
 		{ DI_CHECKBOX,    {{41, 10}, {0,  10}}, DIF_NONE, msg(lng::MFileHardLinksCount), },
 
 		{ DI_TEXT,        {{-1, 12}, {0,  12}}, DIF_SEPARATOR, msg(lng::MHighlightColors), },
-		{ DI_TEXT,        {{7,  13}, {0,  13}}, DIF_NONE,  msg(lng::MHighlightMarkChar), },
-		{ DI_FIXEDIT,     {{5,  13}, {5,  13}}, DIF_NONE, },
-		{ DI_CHECKBOX,    {{0,  13}, {0,  13}}, DIF_NONE, msg(lng::MHighlightTransparentMarkChar), },
+		{ DI_TEXT,        {{10, 13}, {0,  13}}, DIF_NONE,  msg(lng::MHighlightMark), },
+		{ DI_EDIT,        {{5,  13}, {8,  13}}, DIF_NONE, },
+		{ DI_CHECKBOX,    {{0,  13}, {0,  13}}, DIF_NONE, msg(lng::MHighlightInheritMark), },
 		{ DI_BUTTON,      {{5,  14}, {0,  14}}, DIF_BTNNOCLOSE | DIF_NOBRACKETS, NameLabels[0].second, },
 		{ DI_BUTTON,      {{0,  14}, {0,  14}}, DIF_BTNNOCLOSE | DIF_NOBRACKETS, msg(lng::MHighlightMarking1), },
 		{ DI_BUTTON,      {{5,  15}, {0,  15}}, DIF_BTNNOCLOSE | DIF_NOBRACKETS, NameLabels[1].second, },
@@ -962,18 +912,20 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 	FilterDlg[ID_FF_MASKEDIT].strHistory = L"FilterMasks"sv;
 
 	FilterDlg[ID_FF_DATEBEFOREEDIT].strMask = FilterDlg[ID_FF_DATEAFTEREDIT].strMask = strDateMask;
-	FilterDlg[ID_FF_TIMEBEFOREEDIT].strMask = FilterDlg[ID_FF_TIMEAFTEREDIT].strMask = strTimeMask;
+	FilterDlg[ID_FF_TIMEBEFOREEDIT].strMask = FilterDlg[ID_FF_TIMEAFTEREDIT].strMask = far::format(L"99{0}99{0}99{1}9999999"sv, TimeSeparator, DecimalSeparator);
 	// Маска для ввода дней для относительной даты
 	FilterDlg[ID_FF_DAYSBEFOREEDIT].strMask = FilterDlg[ID_FF_DAYSAFTEREDIT].strMask = L"9999"sv;
 
+	FilterDlg[ID_FF_SEPARATOR4].strMask = { BoxSymbols[BS_T_H1V1], BoxSymbols[BS_V1], BoxSymbols[BS_B_H1V1] };
+
 	if (!ColorConfig)
 	{
-		for (int i = ID_HER_SEPARATOR1; i <= ID_HER_CONTINUEPROCESSING; ++i)
+		for (const auto i: std::views::iota(ID_HER_SEPARATOR1 + 0, ID_HER_CONTINUEPROCESSING + 1))
 			FilterDlg[i].Flags|=DIF_HIDDEN;
 
 		const auto YDelta = FilterDlg[ID_FF_SEPARATOR5].Y2 - FilterDlg[ID_HER_SEPARATOR1].Y2 + 1;
 
-		for (int i = ID_FF_SEPARATOR5; i <= ID_FF_CANCEL; ++i)
+		for (const auto i: std::views::iota(ID_FF_SEPARATOR5 + 0, ID_FF_CANCEL + 1))
 		{
 			FilterDlg[i].Y1 -= YDelta;
 			FilterDlg[i].Y2 -= YDelta;
@@ -1002,47 +954,48 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 	FilterDlg[ID_FF_CURRENT].X1 = FilterDlg[ID_FF_CURRENT].X2 - FilterDlg[ID_FF_CURRENT].strData.size() + AmpFixup(ID_FF_CURRENT) - 3;
 
 	FilterDlg[ID_FF_BUTTON_ATTRIBUTES].X1 = GetPosAfter(ID_FF_CHECKBOX_ATTRIBUTES) + 5;
-	FilterDlg[ID_HER_MARKTRANSPARENT].X1 = GetPosAfter(ID_HER_MARK_TITLE) + 1;
+	FilterDlg[ID_HER_MARKINHERIT].X1 = GetPosAfter(ID_HER_MARK_TITLE) + 1;
 
 	for (int i = ID_HER_NORMALMARKING; i <= ID_HER_SELECTEDCURSORMARKING; i += 2)
 		FilterDlg[i].X1 = GetPosAfter(ID_HER_NORMALFILE) + 1;
 
 	matrix<FAR_CHAR_INFO> VBufColorExample(ColorExampleSize.y, ColorExampleSize.x);
-	auto Colors = FF->GetColors();
+	auto Colors = Filter.GetColors();
 	HighlightDlgUpdateUserControl(VBufColorExample,Colors);
 	FilterDlg[ID_HER_COLOREXAMPLE].VBuf = VBufColorExample.data();
-	FilterDlg[ID_HER_MARKEDIT].strData.assign(Colors.Mark.Char ? 1 : 0, Colors.Mark.Char);
-	FilterDlg[ID_HER_MARKTRANSPARENT].Selected = Colors.Mark.Transparent;
-	FilterDlg[ID_HER_CONTINUEPROCESSING].Selected=(FF->GetContinueProcessing()?1:0);
-	FilterDlg[ID_FF_NAMEEDIT].strData = FF->GetTitle();
-	FilterDlg[ID_FF_MATCHMASK].Selected = FF->IsMaskUsed();
-	FilterDlg[ID_FF_MASKEDIT].strData = FF->GetMask();
+	FilterDlg[ID_HER_MARKEDIT].strData = Colors.Mark.Mark;
+	FilterDlg[ID_HER_MARKINHERIT].Selected = Colors.Mark.Inherit;
+	FilterDlg[ID_HER_CONTINUEPROCESSING].Selected=(Filter.GetContinueProcessing()?1:0);
+	FilterDlg[ID_FF_NAMEEDIT].strData = Filter.GetTitle();
+	FilterDlg[ID_FF_MATCHMASK].Selected = Filter.IsMaskUsed();
+	FilterDlg[ID_FF_MASKEDIT].strData = Filter.GetMask();
 
 	if (!FilterDlg[ID_FF_MATCHMASK].Selected)
 		FilterDlg[ID_FF_MASKEDIT].Flags|=DIF_DISABLE;
 
-	FilterDlg[ID_FF_MATCHSIZE].Selected = FF->IsSizeUsed();
-	FilterDlg[ID_FF_SIZEFROMEDIT].strData = FF->GetSizeAbove();
-	FilterDlg[ID_FF_SIZETOEDIT].strData = FF->GetSizeBelow();
-	FilterDlg[ID_FF_HARDLINKS].Selected=FF->GetHardLinks(nullptr,nullptr)?1:0; //пока что мы проверяем только флаг использования данного условия
+	FilterDlg[ID_FF_MATCHSIZE].Selected = Filter.IsSizeUsed();
+	FilterDlg[ID_FF_SIZEFROMEDIT].strData = Filter.GetSizeAbove();
+	FilterDlg[ID_FF_SIZETOEDIT].strData = Filter.GetSizeBelow();
+	FilterDlg[ID_FF_HARDLINKS].Selected = Filter.GetHardLinks(nullptr, nullptr)? 1 : 0; //пока что мы проверяем только флаг использования данного условия
 
 	if (!FilterDlg[ID_FF_MATCHSIZE].Selected)
-		for (int i=ID_FF_SIZEFROMSIGN; i <= ID_FF_SIZETOEDIT; i++)
-			FilterDlg[i].Flags|=DIF_DISABLE;
-
+	{
+		for (const auto i: std::views::iota(ID_FF_SIZEFROMSIGN + 0, ID_FF_SIZETOEDIT + 1))
+			FilterDlg[i].Flags |= DIF_DISABLE;
+	}
 	// Лист для комбобокса времени файла
-	FarList DateList={sizeof(FarList)};
-	FarListItem TableItemDate[FDATE_COUNT]={};
+	FarList DateList{ sizeof(DateList) };
+	FarListItem TableItemDate[FDATE_COUNT]{};
 	// Настройка списка типов дат файла
 	DateList.Items=TableItemDate;
 	DateList.ItemsNumber=FDATE_COUNT;
 
-	for (int i=0; i < FDATE_COUNT; ++i)
-		TableItemDate[i].Text = msg(lng::MFileFilterWrited+i).c_str();
+	for (const auto i: std::views::iota(0uz, static_cast<size_t>(FDATE_COUNT)))
+		TableItemDate[i].Text = msg(lng::MFileFilterWrite+i).c_str();
 
 	DWORD DateType;
 	filter_dates Dates;
-	FilterDlg[ID_FF_MATCHDATE].Selected = FF->GetDate(&DateType, &Dates)? 1 : 0;
+	FilterDlg[ID_FF_MATCHDATE].Selected = Filter.GetDate(&DateType, &Dates)? 1 : 0;
 	FilterDlg[ID_FF_DATETYPE].ListItems=&DateList;
 	TableItemDate[DateType].Flags=LIF_SELECTED;
 
@@ -1055,7 +1008,7 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 	const auto ProcessPoint = [&](auto Point, auto DateId, auto TimeId)
 	{
 		FilterDlg[ID_FF_DATERELATIVE].Selected = BSTATE_UNCHECKED;
-		ConvertDate(Point, FilterDlg[DateId].strData, FilterDlg[TimeId].strData, 16, 2);
+		std::tie(FilterDlg[DateId].strData, FilterDlg[TimeId].strData) = ConvertDate(Point, 16, 2);
 	};
 
 	Dates.visit(overload
@@ -1073,8 +1026,10 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 	});
 
 	if (!FilterDlg[ID_FF_MATCHDATE].Selected)
-		for (int i=ID_FF_DATETYPE; i <= ID_FF_BLANK; i++)
-			FilterDlg[i].Flags|=DIF_DISABLE;
+	{
+		for (const auto i: std::views::iota(ID_FF_DATETYPE + 0, ID_FF_BLANK + 1))
+			FilterDlg[i].Flags |= DIF_DISABLE;
+	}
 
 	attribute_map AttributeMapping[]
 	{
@@ -1098,10 +1053,11 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 		{ FILE_ATTRIBUTE_RECALL_ON_OPEN,               lng::MFileFilterAttrRecallOnOpen,       },
 		{ FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,        lng::MFileFilterAttrRecallOnDataAccess, },
 		{ FILE_ATTRIBUTE_STRICTLY_SEQUENTIAL,          lng::MFileFilterAttrStrictlySequential, },
+		{ FILE_ATTRIBUTE_DEVICE,                       lng::MFileFilterAttrDevice,             },
 	};
 
 	os::fs::attributes AttrSet, AttrClear;
-	FilterDlg[ID_FF_CHECKBOX_ATTRIBUTES].Selected = FF->GetAttr(&AttrSet,&AttrClear)? BSTATE_CHECKED : BSTATE_UNCHECKED;
+	FilterDlg[ID_FF_CHECKBOX_ATTRIBUTES].Selected = Filter.GetAttr(&AttrSet,&AttrClear)? BSTATE_CHECKED : BSTATE_UNCHECKED;
 
 	for (auto& i: AttributeMapping)
 	{
@@ -1113,7 +1069,7 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 		FilterDlg[ID_FF_BUTTON_ATTRIBUTES].Flags |= DIF_DISABLE;
 	}
 
-	context Context{ ColorConfig? &Colors : nullptr, AttributeMapping };
+	ffp_context Context{ ColorConfig? &Colors : nullptr, AttributeMapping };
 
 	const auto Dlg = Dialog::create(FilterDlg, FileFilterConfigDlgProc, &Context);
 	Dlg->SetHelp(ColorConfig? L"HighlightEdit"sv : L"Filter"sv);
@@ -1151,17 +1107,14 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 			if (FilterDlg[ID_FF_MATCHMASK].Selected && !FileMask.assign(FilterDlg[ID_FF_MASKEDIT].strData, 0))
 				continue;
 
-			Colors.Mark.Transparent = FilterDlg[ID_HER_MARKTRANSPARENT].Selected == BSTATE_CHECKED;
+			Colors.Mark.Inherit = FilterDlg[ID_HER_MARKINHERIT].Selected == BSTATE_CHECKED;
 
-			FF->SetColors(Colors);
-			FF->SetContinueProcessing(FilterDlg[ID_HER_CONTINUEPROCESSING].Selected!=0);
-			FF->SetTitle(FilterDlg[ID_FF_NAMEEDIT].strData);
-			FF->SetMask(FilterDlg[ID_FF_MATCHMASK].Selected!=0,
-			            FilterDlg[ID_FF_MASKEDIT].strData);
-			FF->SetSize(FilterDlg[ID_FF_MATCHSIZE].Selected!=0,
-			            FilterDlg[ID_FF_SIZEFROMEDIT].strData,
-			            FilterDlg[ID_FF_SIZETOEDIT].strData);
-			FF->SetHardLinks(FilterDlg[ID_FF_HARDLINKS].Selected!=0,0,0); //пока устанавливаем только флаг использования признака
+			Filter.SetColors(Colors);
+			Filter.SetContinueProcessing(FilterDlg[ID_HER_CONTINUEPROCESSING].Selected!=0);
+			Filter.SetTitle(FilterDlg[ID_FF_NAMEEDIT].strData);
+			Filter.SetMask(FilterDlg[ID_FF_MATCHMASK].Selected!=0, FilterDlg[ID_FF_MASKEDIT].strData);
+			Filter.SetSize(FilterDlg[ID_FF_MATCHSIZE].Selected!=0, FilterDlg[ID_FF_SIZEFROMEDIT].strData, FilterDlg[ID_FF_SIZETOEDIT].strData);
+			Filter.SetHardLinks(FilterDlg[ID_FF_HARDLINKS].Selected!=0,0,0); //пока устанавливаем только флаг использования признака
 			const auto IsRelative = FilterDlg[ID_FF_DATERELATIVE].Selected!=0;
 
 			FilterDlg[ID_FF_TIMEBEFOREEDIT].strData[8] = TimeSeparator;
@@ -1179,7 +1132,7 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 					ParseTimePoint(FilterDlg[ID_FF_DATEBEFOREEDIT].strData, FilterDlg[ID_FF_TIMEBEFOREEDIT].strData, static_cast<int>(DateFormat))
 				);
 
-			FF->SetDate(FilterDlg[ID_FF_MATCHDATE].Selected != 0, static_cast<enumFDateType>(FilterDlg[ID_FF_DATETYPE].ListPos), NewDates);
+			Filter.SetDate(FilterDlg[ID_FF_MATCHDATE].Selected != 0, static_cast<enumFDateType>(FilterDlg[ID_FF_DATETYPE].ListPos), NewDates);
 			AttrSet=0;
 			AttrClear=0;
 
@@ -1200,7 +1153,7 @@ bool FileFilterConfig(FileFilterParams *FF, bool ColorConfig)
 				}
 			}
 
-			FF->SetAttr(FilterDlg[ID_FF_CHECKBOX_ATTRIBUTES].Selected == BSTATE_CHECKED, AttrSet, AttrClear);
+			Filter.SetAttr(FilterDlg[ID_FF_CHECKBOX_ATTRIBUTES].Selected == BSTATE_CHECKED, AttrSet, AttrClear);
 			return true;
 		}
 		else

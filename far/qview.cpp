@@ -59,10 +59,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "cvtname.hpp"
 #include "datetime.hpp"
 #include "global.hpp"
+#include "log.hpp"
+#include "stddlg.hpp"
+
 
 // Platform:
+#include "platform.hpp"
+#include "platform.com.hpp"
 #include "platform.fs.hpp"
-#include "platform.reg.hpp"
 
 // Common:
 
@@ -81,12 +85,7 @@ qview_panel_ptr QuickView::create(window_ptr Owner)
 }
 
 QuickView::QuickView(private_tag, window_ptr Owner):
-	Panel(std::move(Owner)),
-	Data(),
-	OldWrapMode(false),
-	OldWrapType(false),
-	m_TemporaryFile(),
-	uncomplete_dirscan(false)
+	Panel(std::move(Owner))
 {
 	m_Type = panel_type::QVIEW_PANEL;
 	if (!LastMode)
@@ -150,49 +149,56 @@ void QuickView::DisplayObject()
 	{
 		SetColor(COL_PANELTEXT);
 		GotoXY(m_Where.left + 2, m_Where.top + 2);
-		const auto DisplayName = truncate_path(strCurFileName, std::max(size_t{}, m_Where.width() - 2 - msg(lng::MListFolder).size() - 5));
-		PrintText(format(FSTR(LR"({0} "{1}")"), msg(lng::MListFolder), DisplayName));
+		const auto DisplayName = truncate_path(strCurFileName, std::max(0uz, m_Where.width() - 2 - msg(lng::MListFolder).size() - 5));
+		PrintText(far::format(LR"({} "{}")", msg(lng::MListFolder), DisplayName));
 
 		const auto currAttr = os::fs::get_file_attributes(strCurFileName); // обламывается, если нет доступа
 		if (currAttr != INVALID_FILE_ATTRIBUTES && (currAttr&FILE_ATTRIBUTE_REPARSE_POINT))
 		{
-			string Target;
 			DWORD ReparseTag=0;
-			string TypeName;
+			string TypeName, Target;
+			bool KnownReparseTag = false;
+
 			if (GetReparsePointInfo(strCurFileName, Target, &ReparseTag))
 			{
+				KnownReparseTag = true;
 				NormalizeSymlinkName(Target);
-				switch(ReparseTag)
+
+				switch (ReparseTag)
 				{
-				// Directory Junction or Volume Mount Point
 				case IO_REPARSE_TAG_MOUNT_POINT:
 					{
 						auto ID_Msg = lng::MListJunction;
-						bool Root;
-						if(ParsePath(Target, nullptr, &Root) == root_type::volume && Root)
-						{
+						if (bool Root; ParsePath(Target, nullptr, &Root) == root_type::volume && Root)
 							ID_Msg = lng::MListVolMount;
-						}
+
 						TypeName = msg(ID_Msg);
 					}
 					break;
 
-				default:
-					if (!reparse_tag_to_string(ReparseTag, TypeName) && !Global->Opt->ShowUnknownReparsePoint)
-						TypeName = msg(lng::MQuickViewUnknownReparsePoint);
+				case IO_REPARSE_TAG_SYMLINK:
+					TypeName = msg(lng::MListSymlink);
 					break;
 				}
+
+				inplace::truncate_path(Target, std::max(0uz, m_Where.width() - 2 - TypeName.size() - 5));
 			}
-			else
+			else if (reparse_tag_to_string(ReparseTag, TypeName, Global->Opt->ShowUnknownReparsePoint))
+			{
+				TypeName = far::format(L"{} {}"sv, msg(lng::MQuickViewReparsePoint), TypeName);
+				KnownReparseTag = true;
+			}
+			else if (TypeName.empty())
 			{
 				TypeName = msg(lng::MQuickViewUnknownReparsePoint);
-				Target = msg(lng::MQuickViewNoData);
 			}
 
-			inplace::truncate_path(Target, std::max(size_t{}, m_Where.width() - 2 - TypeName.size() - 5));
 			SetColor(COL_PANELTEXT);
 			GotoXY(m_Where.left + 2, m_Where.top + 3);
-			PrintText(format(FSTR(LR"({0} "{1}")"), TypeName, Target));
+			PrintText(KnownReparseTag?
+				far::format(LR"({} "{}")", TypeName, Target) :
+				msg(lng::MQuickViewUnknownReparsePoint)
+			);
 		}
 
 		const auto bytes_suffix = upper(msg(lng::MListBytes));
@@ -221,7 +227,7 @@ void QuickView::DisplayObject()
 				lng::MQuickViewSlack,
 			};
 
-			const auto ColumnSize = msg(*std::max_element(ALL_CONST_RANGE(TableLabels), [](lng a, lng b) { return msg(a).size() < msg(b).size(); })).size() + 1;
+			const auto ColumnSize = std::ranges::fold_left(TableLabels, 0uz, [](size_t const Value, lng const Id) { return std::max(Value, msg(Id).size()); }) + 1;
 
 			const auto iColor = uncomplete_dirscan? COL_PANELHIGHLIGHTTEXT : COL_PANELINFOTEXT;
 			const auto prefix = uncomplete_dirscan? L"~"sv : L""sv;
@@ -241,14 +247,13 @@ void QuickView::DisplayObject()
 			PrintRow(5, lng::MQuickViewFiles, str(Data.FileCount));
 			PrintRow(6, lng::MQuickViewBytes, size2str(Data.FileSize));
 
-			const auto Format = FSTR(L"{0} ({1}%)");
-			PrintRow(7, lng::MQuickViewAllocated, format(Format, size2str(Data.AllocationSize), ToPercent(Data.AllocationSize, Data.FileSize)));
+			PrintRow(7, lng::MQuickViewAllocated, far::format(L"{} ({}%)"sv, size2str(Data.AllocationSize), ToPercent(Data.AllocationSize, Data.FileSize)));
 
 			if (m_DirectoryScanStatus == scan_status::real_ok)
 			{
 				PrintRow(9, lng::MQuickViewCluster, GroupDigits(Data.ClusterSize));
-				PrintRow(10, lng::MQuickViewSlack, format(Format, size2str(Data.FilesSlack), ToPercent(Data.FilesSlack, Data.AllocationSize)));
-				PrintRow(11, lng::MQuickViewMFTOverhead, format(Format, size2str(Data.MFTOverhead), ToPercent(Data.MFTOverhead, Data.AllocationSize)));
+				PrintRow(10, lng::MQuickViewSlack, far::format(L"{} ({}%)"sv, size2str(Data.FilesSlack), ToPercent(Data.FilesSlack, Data.AllocationSize)));
+				PrintRow(11, lng::MQuickViewMFTOverhead, far::format(L"{} ({}%)"sv, size2str(Data.MFTOverhead), ToPercent(Data.MFTOverhead, Data.AllocationSize)));
 			}
 		}
 	}
@@ -373,57 +378,6 @@ void QuickView::Update(int Mode)
 	Redraw();
 }
 
-static bool IsProperProgID(string_view const ProgID)
-{
-	return !ProgID.empty() && os::reg::key::open(os::reg::key::classes_root, ProgID, KEY_QUERY_VALUE);
-}
-
-static bool GetShellType(const string_view Ext, string& strType)
-{
-	if (imports.SHCreateAssociationRegistration)
-	{
-		os::com::ptr<IApplicationAssociationRegistration> AAR;
-		if (FAILED(imports.SHCreateAssociationRegistration(IID_IApplicationAssociationRegistration, IID_PPV_ARGS_Helper(&ptr_setter(AAR)))))
-			return false;
-
-		os::com::memory<wchar_t*> Association;
-		if (FAILED(AAR->QueryCurrentDefault(null_terminated(Ext).c_str(), AT_FILEEXTENSION, AL_EFFECTIVE, &ptr_setter(Association))))
-			return false;
-
-		strType = Association.get();
-		return true;
-	}
-
-	if (const auto UserKey = os::reg::key::open(os::reg::key::current_user, concat(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\"sv, Ext), KEY_QUERY_VALUE))
-	{
-		if (string Value; UserKey.get(L"ProgId"sv, Value) && IsProperProgID(Value))
-		{
-			strType = std::move(Value);
-			return true;
-		}
-
-		if (string Value; UserKey.get(L"Application"sv, Value))
-		{
-			if (auto ProgId = L"Applications\\"sv + Value; IsProperProgID(ProgId))
-			{
-				strType = std::move(ProgId);
-				return true;
-			}
-		}
-	}
-
-	if (const auto CRKey = os::reg::key::open(os::reg::key::classes_root, Ext, KEY_QUERY_VALUE))
-	{
-		if (string Value; CRKey.get({}, Value) && IsProperProgID(Value))
-		{
-			strType = std::move(Value);
-			return true;
-		}
-	}
-
-	return false;
-}
-
 void QuickView::ShowFile(string_view const FileName, const UserDataItem* const UserData, bool const TempFile, const plugin_panel* const hDirPlugin)
 {
 	CloseFile();
@@ -448,29 +402,24 @@ void QuickView::ShowFile(string_view const FileName, const UserDataItem* const U
 	if (UserData)
 		CurUserData = *UserData;
 
-	const auto pos = strCurFileName.rfind(L'.');
-	if (pos != string::npos)
-	{
-		string strValue;
-
-		if (GetShellType(string_view(strCurFileName).substr(pos), strValue))
-		{
-			// BUGBUG check result
-			(void)os::reg::key::classes_root.get(strValue, {}, strCurFileType);
-		}
-	}
+	strCurFileType.clear();
 
 	if (hDirPlugin || os::fs::is_directory(strCurFileName))
 	{
-		// Не показывать тип файла для каталогов в "Быстром просмотре"
-		strCurFileType.clear();
-
 		const time_check TimeCheck;
+		std::optional<dirinfo_progress> DirinfoProgress;
 
 		const auto DirInfoCallback = [&](string_view const Name, unsigned long long const ItemsCount, unsigned long long const Size)
 		{
-			if (TimeCheck)
-				DirInfoMsg(msg(lng::MQuickViewTitle), Name, ItemsCount, Size);
+			if (!TimeCheck)
+				return;
+
+			if (!DirinfoProgress)
+				DirinfoProgress.emplace(msg(lng::MQuickViewTitle));
+
+			DirinfoProgress->set_name(Name);
+			DirinfoProgress->set_count(ItemsCount);
+			DirinfoProgress->set_size(Size);
 		};
 
 		if (SameFile && !hDirPlugin)
@@ -488,15 +437,12 @@ void QuickView::ShowFile(string_view const FileName, const UserDataItem* const U
 			const auto ExitCode = GetDirInfo(strCurFileName, Data, nullptr, DirInfoCallback, GETDIRINFO_ENHBREAK | GETDIRINFO_SCANSYMLINKDEF);
 			m_DirectoryScanStatus = ExitCode == -1? scan_status::real_fail : scan_status::real_ok; // ExitCode: 1=done; 0=Esc,CtrlBreak; -1=Other
 			uncomplete_dirscan = ExitCode != 1;
-
-			if (const auto Window = m_Owner.lock())
-			{
-				Window->Redraw();
-			}
 		}
 	}
 	else
 	{
+		strCurFileType = os::com::get_shell_filetype_description(strCurFileName);
+
 		if (!strCurFileName.empty())
 		{
 			QView = std::make_unique<Viewer>(GetOwner(), true);
@@ -554,12 +500,24 @@ void QuickView::QViewDelTempName()
 			QView=nullptr;
 		}
 
-		(void)os::fs::set_file_attributes(strCurFileName, FILE_ATTRIBUTE_ARCHIVE); // BUGBUG
-		(void)os::fs::delete_file(strCurFileName);  //BUGBUG
+		if (!os::fs::set_file_attributes(strCurFileName, FILE_ATTRIBUTE_NORMAL)) // BUGBUG
+		{
+			LOGWARNING(L"set_file_attributes({}): {}"sv, strCurFileName, os::last_error());
+		}
+
+		if (!os::fs::delete_file(strCurFileName))  //BUGBUG
+		{
+			LOGWARNING(L"delete_file({}): {}"sv, strCurFileName, os::last_error());
+		}
+
 		string_view TempDirectoryName = strCurFileName;
 		CutToSlash(TempDirectoryName);
 		// BUGBUG check result
-		(void)os::fs::remove_directory(TempDirectoryName);
+		if (!os::fs::remove_directory(TempDirectoryName))
+		{
+			LOGWARNING(L"remove_directory({}): {}"sv, TempDirectoryName, os::last_error());
+		}
+
 		m_TemporaryFile = false;
 	}
 }
@@ -574,7 +532,7 @@ void QuickView::PrintText(string_view const Str) const
 }
 
 
-void QuickView::UpdateIfChanged(bool Idle)
+void QuickView::UpdateIfChanged(bool Changed)
 {
 	if (!IsVisible() || strCurFileName.empty() || m_DirectoryScanStatus != scan_status::real_fail)
 		return;

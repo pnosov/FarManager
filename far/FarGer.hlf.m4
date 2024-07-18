@@ -47,9 +47,9 @@
 
 @Contents
 $^#Datei- und Archiv-Manager.#
-`$^#'FULLVERSION`#'
+$^#M4_MACRO_GET(FULLVERSION)#
 $^#Copyright © 1996-2000 Eugene Roshal#
-`$^#Copyright © 2000-'COPYRIGHTYEAR` Far Group#
+$^#Copyright © 2000-M4_MACRO_GET(COPYRIGHTYEAR) Far Group#
  ~Help file index~@Index@
  ~Hilfe über Hilfe~@Help@
 
@@ -112,6 +112,8 @@ $^#Copyright © 1996-2000 Eugene Roshal#
 
  ~Dateimasken~@FileMasks@
  ~Tastaturmakros~@KeyMacro@
+
+ ~Customizing UI elements~@CustomizingUI@
 
 
 @Help
@@ -238,7 +240,7 @@ user profile folder (#%APPDATA%\\Far Manager\\Profile# by default).
  Far Manager will set the ~environment variable~@FAREnv@ "FARUSER" to the value <username>.
 
  -v <Dateiname>
- Zeigt die angegebene Datei im Betrachter an. Gibt man als Dateiname - an, wird vom Standardeingabegerät (stdin) eingelesen.
+ Zeigt die angegebene Datei im Betrachter an. Gibt man als Dateiname `#-#' an, wird vom Standardeingabegerät (stdin) eingelesen.
 
  Beispiel, "dir|far -v -" zeigt z.B. die Ausgabe des dir-Befehls an.
 
@@ -247,7 +249,7 @@ the "dir" command in the provided example), Far will wait for the end of data
 in the input stream until you press Ctrl+Break.
 
  #-w[-]#
- Stretch to console window instead of console buffer or vice versa.
+ Show the interface within the console window instead of the console buffer or vice versa.
 
  #-t templateprofile#
  Location of Far template configuration file (overrides the ini file).
@@ -291,7 +293,6 @@ Single letter prefixes A-Z or conflicted with disk letter will be ignored.
 
 @KeyRef
 $ #Tastaturreferenz#
-
  ~Fenstersteuerung~@PanelCmd@
 
  ~Kommandozeilensteuerung~@CmdLineCmd@
@@ -313,8 +314,35 @@ $ #Tastaturreferenz#
 $ #Menu control commands#
  #Common menu and drop-down list commands#
 
- Filter menu or list items                          #Ctrl+Alt+F,RAlt#
- Lock filter                                             #Ctrl+Alt+L#
+ #Ctrl+Alt+F#, #RAlt#
+ Filter menu or list items.
+
+ #Ctrl+Alt+L#
+ Lock filter.
+
+ #Alt+Left#, #Alt+Right#, #MsWheelLeft#, #MsWheelRight#
+ Scroll all items horizontally.
+
+ #Alt+Shift+Left#, #Alt+Shift+Right#
+ Scroll the selected item horizontally.
+
+ #Ctrl+Alt+Left#, #Ctrl+Alt+Right#, #Ctrl+MsWheelLeft#, #Ctrl+MsWheelRight#
+ Scroll all items horizontally by 20 characters.
+
+ #Ctrl+Shift+Left#, #Ctrl+Shift+Right#
+ Scroll the selected item horizontally by 20 characters.
+
+ #Alt+Home#
+ Align all items to the left.
+
+ #Alt+End#
+ Align all items to the right.
+
+ #Alt+Shift+Home#
+ Align the selected item to the left.
+
+ #Alt+Shift+End#
+ Align the selected item to the right.
 
  See also the list of ~macro keys~@KeyMacroMenuList@, available in the menus.
 
@@ -343,7 +371,7 @@ $ #Befehl zur Fenstersteuerung#
  Restore default panels height                     #Ctrl+Alt+Numpad5#
  Show/Hide functional key bar at the bottom line.            #Ctrl+B#
  Toggle total and free size show mode                  #Ctrl+Shift+S#
- in bytes (if possible) or with size suffices K/M/G/T
+ in bytes (if possible) or with size suffixes K/M/G/T
 
  #Dateifensterbefehle#
 
@@ -353,14 +381,11 @@ $ #Befehl zur Fenstersteuerung#
  Gruppenauswahl aufheben                                     #Grau -#
  Auswahl umkehren                                            #Grau *#
  Dateien mit aktueller Erweiterung auswählen          #Strg+<Grau +>#
-
  Dateiauswahl mit aktueller Erweiterung aufheben      #Strg+<Grau ->#
-
- Auswahl inkl. Verzeichnissen aufheben                #Strg+<Grau *>#
-
+ Auswahl inkl. Verzeichnissen umkehren                #Strg+<Grau *>#
  Dateien mit aktuellem Namen auswählen                 #Alt+<Grau +>#
  Dateiauswahl mit aktuellem Namen aufheben             #Alt+<Grau ->#
-
+ Invert selection on files, deselect folders           #Alt+<Grau *>#
  Alle Dateien auswählen                              #Umsch+<Grau +>#
  Auswahl aller Dateien aufheben                      #Umsch+<Grau ->#
  Vorherige Auswahl wiederherstellen                          #Strg+M#
@@ -472,7 +497,46 @@ active panel. The following sort modes are available:
  Use group sorting                                        #Shift+F11#
  Show selected files first                                #Shift+F12#
 
+ You can ~fine-tune~@PanelSortCriteria@ sort modes by pressing #F4#.
+
  See also: common ~menu~@MenuCmd@ keyboard commands.
+
+
+@PanelSortCriteria
+$ #Sort criteria#
+ When files are considered equivalent using the selected sort mode, additional sort criteria are taken into account.
+ For example, if files are sorted by size and both "a.txt" and "b.txt" have the same size, "a.txt" will come first, as if they were sorted by name.
+ In this menu you can adjust the set of criteria associated with the selected sort mode.
+
+ #Ins#
+ Add a criterion to the set.
+
+ #Del#
+ Remove the selected criterion.
+
+ #F4#
+ Replace the selected criterion.
+
+ #+#
+ Use ascending order.
+
+ #-#
+ Use descending order.
+
+ #*#
+ Change the order.
+
+ #=#
+ Inherit the order from the corresponding sort mode.
+
+ #Ctrl+Up#
+ Move the criterion up.
+
+ #Ctrl+Down#
+ Move the criterion down.
+
+ #Ctrl+R#
+ Reset the set of criteria to default.
 
 
 @FastFind
@@ -600,7 +664,7 @@ umgekehrten Schrägstrich ab.
 ein Zielverzeichnis vor dem Bewegen anlegen wollen, schließen
 Sie den Namen mit einem umgekehrten Schrägstrich ab.
 
- ~Neues Verzeichnis anlegen~@CopyFiles@                                       #F7#
+ ~Neues Verzeichnis anlegen~@MakeFolder@                                       #F7#
 
  ~Löschen~@DeleteFile@                                   #Umsch+Entf, Umsch+F8, F8#
 
@@ -610,7 +674,7 @@ Sie den Namen mit einem umgekehrten Schrägstrich ab.
 
  Far beenden                                                    #F10#
 
- ~Plugin~@PlugIns@-Befehle anzeigen                                        #F11#
+ ~Plugin~@Plugins@-Befehle anzeigen                                        #F11#
 
  Laufwerk im linken Fenster wechseln                         #Alt+F1#
 
@@ -635,7 +699,7 @@ otherwise by using internal facilities.
  Die Benutzung von harten Links erlaubt mehrere unterschiedliche
 Dateinamen, die auf die gleichen Daten verweisen.
 
- ~Datei suchen~@FileFind@                                                #Alt+F7#
+ ~Datei suchen~@FindFile@                                                #Alt+F7#
 
  ~Befehlshistory~@History@ anzeigen                                     #Alt+F8#
 
@@ -698,13 +762,13 @@ an ~associated command~@FileAssoc@ is executed or the archive is opened.
 command configuration.
 
  Ins übergeordnete verzeichnis wechseln                  #Strg+Bild↑#
- The behavior in root folders depends on "Use Ctrl+PgUp to change drive~@InterfSettings@" option.
+ The behavior in root folders depends on "~Use Ctrl+PgUp to change drive~@InterfSettings@" option.
 
  Kürzel <Nr> für aktuelles Verzeichnis anlegen       #Strg+Umsch+0…9#
 
  Verzeichniskürzel aufrufen                          #RechtsStrg+0…9#
 
- Dateiattribute setzen                                       #Strg+A#
+ ~Dateiattribute~@FileAttrDlg@ setzen                                       #Strg+A#
 
  Befehl auf ausgewählte Dateien ~anwenden~@ApplyCmd@                     #Strg+G#
 
@@ -751,8 +815,9 @@ $ #Verschiedenes#
  Screen Grabber                                           #Alt+Einfg#
 
  Der Screen Grabber ermöglicht das Markieren und Kopieren eines
-beliebigen Fensterausschnittes in die Zwischenablage. Benutzen Sie die
-Cursortasten oder drücken Sie kurz die linke Maustaste, um den Cursor
+beliebigen Fensterausschnittes in die Zwischenablage.
+
+ Benutzen Sie die Cursortasten oder drücken Sie kurz die linke Maustaste, um den Cursor
 zu bewegen. Zum Markieren des gewünschten Fensterbereiches benutzen Sie
 die #Umsch+Cursor-Tasten# oder bewegen die Maus mit gedrückter linker
 Maustaste. Ein Druck auf die #Enter#, #Strg+Einfg# oder rechte Maus-Taste
@@ -794,7 +859,12 @@ Zeichenketten markieren, damit sie in der History immer zur Verfügung stehen.
  Delete the current item in a dialog edit line history    #Shift+Del#
  (if it is not locked)
 
- Set the dialog focus to the default element                   #PgDn#
+ Set the dialog focus to the first element                     #Home#
+
+ Set the dialog focus to the default element              #PgDn, End#
+
+ The #Home# and #End# keys move the focus if it is currently not
+on a control which handles these keys internally, like edit control.
 
  Diese Tastenkombination gilt für alle Eingabefelder außer für
 die Kommandozeile und den ~internen Editor~@Editor@.
@@ -880,7 +950,7 @@ benötigen, können Sie diese löschen, um Plattenplatz zu sparen.
 
  Plugins können entweder über das ~Laufwerk wechseln~@DriveDlg@-
 oder das #Plugin-Kommandos#-Menü, aktiviert durch #F11# oder den
-entsprechenden Eintrag im ~Befehle~@Cmdmenu@-Menü, aufgerufen werden.
+entsprechenden Eintrag im ~Befehle~@CmdMenu@-Menü, aufgerufen werden.
  Mit F4 im Menü ~"Plugin-Kommandos"~@PluginCommands@ können Hotkeys für Menü-Einträge
 zugewiesen werden (das ist einfacher als über ~Tastaturmakros~@KeyMacro@).
 Dieses Menü ist erreichbar über das Dateifenster und (nur über F11)
@@ -888,7 +958,7 @@ aus dem internen Betrachter und Editor. Wenn das Menü aus dem Editor
 oder Betrachter aufgerufen wird, werden nur spezielle dafür
 erstellte Plugins angezeigt.
 
- Plugin-Parameter können über den #Plugin-Konfiguration#-Aufruf im
+ Plugin-Parameter können über den ~Plugin-Konfiguration~@PluginsConfig@-Aufruf im
 ~Optionen~@OptMenu@ konfiguriert werden.
 
  Dateioperationen wie Kopieren, Verschieben, Löschen, Editieren
@@ -1106,7 +1176,7 @@ unterstützen kein Datum der Dateierzeugung oder des letzten Zugriffs.
 ändern. Nachdem die Ansicht oder das Laufwerk geändert wurden, wird
 automatisch die Starteinstellung des Fenstertyps benutzt.
 
- Die #Schnellsuche# kann benutzt werden, um durch die Anfangsbuch-
+ Die ~Schnellsuche~@FastFind@ kann benutzt werden, um durch die Anfangsbuch-
 staben eines Namens auf die Datei zu springen.
 
  See also the list of ~macro keys~@KeyMacroShellList@, available in the panels.
@@ -1196,7 +1266,6 @@ battery life time and battery life percent. Without smart battery subsystems, th
     ^<wrap>In Windows Vista and above charge status is update automatically.
     ^<wrap>Power status section can be turned on and off in ~settings~@InfoPanelSettings@.
 
-
  All sections (except computer and user names) can be hidden or shown (see ~InfoPanel display modes~@InfoPanelShowMode@).
 
  Also see the list of ~macro keys~@KeyMacroInfoList@, available in the info panel.
@@ -1259,7 +1328,6 @@ Supported types: CD-ROM, CD-RW, CD-RW/DVD, DVD-ROM, DVD-RW and DVD-RAM.
  The output format depends on the domain structure, group policies and DNS settings.
 
  #User name format#
-
  Can be one of:
 
  - #Logon Name#
@@ -1302,8 +1370,9 @@ $ #Schnellansichtsfenster#
 über ausgewählte Einträge im ~Dateifenster~@FilePanel@ oder
 ~Baumfenster~@TreePanel@ anzuzeigen.
 
- Wenn der gewählte Eintrag eine Datei ist, wird der Inhalt
-dieser Datei angezeigt. Bei Dateien registrierter Windows-Typen
+ Wenn der gewählte Eintrag eine Datei ist, wird der Inhalt dieser Datei angezeigt.
+Many of the ~internal viewer~@Viewer@ commands can be used with the file
+displayed in the panel. Bei Dateien registrierter Windows-Typen
 wird dieser Typ ebenfalls angezeigt.
 
  Bei Verzeichnisssen zeigt die Schnellansicht die Gesamtgröße,
@@ -1311,7 +1380,7 @@ die gesamte komprimierte Größe, Anzahl der Dateien und Unter-
 verzeichnisse, aktuelle Clustergröße des Laufwerks, echte Dateigröße
 inkl. ungenutzer Bytes aufgrund der Clusterstückelung.
 
- When viewing reparse points, the path to the source folder is also displayed.
+ When viewing ~reparse points~@HardSymLink@, the path to the source folder is also displayed.
 
  For folders, the total size value may not match the actual value:
  - ^<wrap>If the folder or its subfolders contain symbolic links and the option
@@ -1414,17 +1483,17 @@ und letztes Zugriffsdatum sowie Dateiattribute werden im  Vollbildschirmmodus an
 
 @FilesMenu
 $ #Menü Dateien#
- #Anzeigen#           Zeigt Dateien an, berechnet Verzeichnisgrößen.
+ #Anzeigen#           ~Zeigt~@Viewer@ Dateien an, berechnet Verzeichnisgrößen.
 
- #Bearbeiten#         Editiert Dateien.
+ #Bearbeiten#         ~Editiert~@Editor@ Dateien.
 
- #Kopieren#           Kopiert Dateien und Verzeichnisse.
+ #Kopieren#           ~Kopiert~@CopyFiles@ Dateien und Verzeichnisse.
 
- #Umbenennen/Bewegen# ^<wrap>Benennt Dateien/Verzeichnisse um oder verschiebt sie.
+ #Umbenennen/Bewegen# ^<wrap>~Benennt Dateien/Verzeichnisse um oder verschiebt sie~@CopyFiles@.
 
  #Link#               Create ~file links~@HardSymLink@.
 
- #Neues Verzeichnis#  Legt neues Verzeichnis an.
+ #Neues Verzeichnis#  ~Legt~@MakeFolder@ neues Verzeichnis an.
 
  #Löschen#            Löscht Verzeichnisse oder Dateien.
 
@@ -1432,7 +1501,7 @@ $ #Menü Dateien#
 its data are overwritten with zeros, after which the file is truncated and renamed to
 a temporary name.
 
- #Komprimieren#       Fügt ausgewählte Dateien zu einem Archiv hinzu. 
+ #Komprimieren#       Fügt ausgewählte Dateien zu einem Archiv hinzu.
 
  #Entpacken#          Entpackt ausgewählte Dateien aus einem Archiv.
 
@@ -1476,10 +1545,9 @@ $ #Menü Befehle#
                       baum. Weitere Informationen finden Sie
                       unter ~Verzeichnis suchen~@FindFolder@.
 
- #Anzeige-History#      Zeigt Dateibetrachter- und -editor-
-                      History an.
+ #Anzeige-History#      Zeigt ~Dateibetrachter- und -editor-History~@HistoryViews@ an.
 
- #Verzeichnis-History#  Zeigt Verzeichniswechselhistory an.
+ #Verzeichnis-History#  Zeigt ~Verzeichniswechselhistory@HistoryFolders@ an.
 
                       Einträge in der "Verzeichnishistory" und
                       "Dateibetrachterhistory" werden nach Auswahl
@@ -1513,7 +1581,7 @@ $ #Menü Befehle#
 
  #Dateifensterfilter#   Steuert die Anzeige der Dateifensterinhalte.
                         Detaillierte Informationen dazu finden Sie
-                      unter ~Dateifensterfilter~@Filter@.
+                      unter ~Dateifensterfilter~@FiltersMenu@.
 
  #Plugin commands#      Show ~plugin commands~@Plugins@ list.
 
@@ -1543,8 +1611,9 @@ $ #Menü Optionen#
                        Online-Hilfe. Benutzen Sie "Einstellungen
                        sichern", um die gewählte Sprache dauerhaft
                        zu speichern.
+                       You can ~customize UI elements~@CustomizingUI@ to you needs and taste.
 
- #Plugin-#               Konfiguriert die ~Plugin~@Plugins@-Module.
+ #Plugin-#               Konfiguriert die ~Plugin~@PluginsConfig@-Module.
  #konfiguration#
 
  #Plugin manager#        Shows ~Plugin manager settings~@PluginsManagerSettings@ dialog.
@@ -1571,10 +1640,9 @@ $ #Menü Optionen#
  #Datei-#                Liste der ~Dateibeschreibungsdateien~@FileDiz@
  #beschreibungen#      und Update-Modus.
 
- #Verzeichnis-#          Definiert Dateinamen (~Wildcards~@FileMasks@ sind
- #beschreibungs-#      erlaubt) für Dateien, deren Inhalt im
- #dateien#               ~Statusfenster~@InfoPanel@ als Verzeichnisbeschreibung
-                       angezeigt wird.
+ #Verzeichnis-#          Shows ~Folder description files~@FolderDiz@ dialog.
+ #beschreibungs-#
+ #dateien#
 
  #Betrachter-#           Einstellungen für externen ~Betrachter~@ViewerSettings@.
  #einstellungen#
@@ -1584,10 +1652,7 @@ $ #Menü Optionen#
 
  #Code pages#            Shows the ~Code pages~@CodePagesMenu@ menu.
 
- #Farben#                Erlaubt die Farbauswahl für verschiedene
-                       Programmpunkte, ändert die komlette Far
-                       Farbenpalette nach Schwarzweiß oder setzt
-                       Standardfarben.
+ #Farben#                Shows the ~Color groups~@ColorGroups@ menu.
 
  #Dateihervorhebung#     Ändert die Einstellungen für
                        ~Dateihervorhebungen~@Highlight@.
@@ -1698,7 +1763,7 @@ and "#D:\\foo3#" will be created.
 $ #Datei suchen#
  Dieser Befehl dient zum Suchen von einer oder mehreren Datei(en)
 und Verzeichnissen. In den Dateimasken, die jeweils durch Kommata
-getrennt werden, sind ein oder mehrere Wildcards erlaubt. Die
+getrennt werden, sind ein oder mehrere ~Wildcards~@FileMasks@ erlaubt. Die
 Dateisuche kann auch mit durch ~Plugins~@Plugins@ emulierten
 Dateisystemen benutzt werden.
 
@@ -1711,10 +1776,15 @@ der "Groß-/Kleinschreibung" durchgeführt.
 from other text with spaces, tab characters, line breaks or standard
 separators, which by default are: #!%^&*()+|{}:"<>?`-=\\[];',./#.
 
- By checking the #Search for hex# option you can search for the files
-containing hexadecimal sequence of the specified bytes. In this case #Case#
-#sensitive#, #Whole words#, #Using code page# and #Search for folders#
-options are disabled and their values doesn't affect the search process.
+ #Fuzzy search# is diacritical insensitive, treats ligatures equivalent
+to their corresponding multicharacter sequences and fancy numerals
+to corresponding number characters, and ignores some other minor
+differences.
+
+ By selecting #Hex# option you can search for the files containing hexadecimal
+sequence of the specified bytes. In this case, #Case sensitive#, #Whole words#,
+#Fuzzy search#, #Using code page# and #Search for folders# options are disabled
+and their values do not affect the search process.
 
  #Not containing# allows to find files #not# containing the specified text or code.
 
@@ -1809,7 +1879,6 @@ The following column types are supported:
  LN         - number of hard links
 
  F          - number of alternate streams
-
 
  File attributes are denoted as follows:
 
@@ -1983,13 +2052,13 @@ The logic at work this option is similar to arithmetic with negative numbers.
  <= 0  - select files in the period from the "Today"
  >= 30 - and 30-days ago, including
 
-
  #Attributes#
  Inclusion and exclusion attributes.
 
  Filter conditions are met if file attributes
 analysis is on and it has all of the inclusion
 attributes and none of the exclusion attributes:
+
  #[x]# - ^<wrap>inclusion attribute - the file must have this attribute.
  #[ ]# - ^<wrap>exclusion attribute - the file must not have this attribute.
  #[?]# - ^<wrap>ignore this attribute.
@@ -1997,7 +2066,6 @@ attributes and none of the exclusion attributes:
  The #Compressed#, #Encrypted#, #Not indexed#, #Sparse#, #Temporary# and #Offline# attributes
 are used only on disks with the NTFS file system.
 The #Integrity stream# and #No scrub data# attributes are supported only on ReFS volumes starting from Windows Server 2012.
-
 
  #Has more than one hardlink#
  Used only on disks with NTFS file system. Condition evaluates to true,
@@ -2184,7 +2252,7 @@ $ #Benutzermenü#
 Operationen. Es enthält eine Anzahl benutzerdefinierter Befehle
 und Befehlssequenzen, die über das Benutzermenü ausgeführt werden
 können. Das Menü kann auch Untermenüs enthalten. Spezielle
-Symbole, beschrieben in ~Dateiverknüpfungen~@FileAssoc@, werden
+Symbole, beschrieben in ~Dateiverknüpfungen~@MetaSymbols@, werden
 sowohl in den Befehlen als auch in den Befehlstiteln unterstützt.
 Beachten Sie, daß das Symbol !?<Titel>?<Init>! dazu benutzt werden
 kann, um zusätzliche Parameter unmittelbar vor der Ausführung von
@@ -2243,7 +2311,7 @@ $ #Dateiverknüpfungen#
 actions to running, viewing and editing files with a specified
 ~mask~@FileMasks@.
 
- You can add new associations with the #Edit associations# command in the
+ You can add new associations with the #File associations# command in the
 ~Commands menu~@CmdMenu@.
 
  You can define several associations for one file type and select the
@@ -2300,6 +2368,7 @@ Far, den über Windows verknüpften Befehl für diesen Dateityp auszuführen.
 allow to configure "smarter" associations - if you have specified several
 associations for a file type, the menu will show only the associations
 for which the conditions are true.
+ 3. ^<wrap>If the specified mask is a regular expression, its capturing groups can be referenced in the commands as %RegexGroup#N# or %RegexGroup{#Name#}.
 
 
 @MetaSymbols
@@ -2357,6 +2426,22 @@ the active panel, !##!\\!^!.! - a file on the passive
 panel with the same name as the name of the current
 file on the active panel.
 
+ #![#
+ "![" prefix forces all subsequent special symbols
+to refer to the left panel (see note 4).
+For example, ![!.! denotes a current file name on
+the left panel, ![!\\!^!.! - a file on the left
+panel with the same name as the name of the current
+file on the active panel.
+
+ #!]#
+ "!]" prefix forces all subsequent special symbols
+to refer to the right panel (see note 4).
+For example, !]!.! denotes a current file name on
+the right panel, !]!\\!^!.! - a file on the right
+panel with the same name as the name of the current
+file on the active panel.
+
  Notes:
 
  1. ^<wrap>When handling special characters, Far substitutes only the string
@@ -2386,7 +2471,7 @@ selected file names, in ANSI encoding, with full pathnames, each enclosed in quo
  3. ^<wrap>When there are multiple associations specified, the meta-characters !@@!
 and !$! are shown in the menu as is. Those characters are translated when the command is executed.
 
- 4. ^<wrap>The prefixes "!##" and "!^" work as toggles. The effect
+ 4. ^<wrap>The prefixes "!##", "!^", "![" and "!]" work as toggles. The effect
 of these prefixes continues up to the next similar prefix. For example:
 
     if exist !##!\\!^!.! diff -c -p !##!\\!^!.! !\\!.!
@@ -2411,8 +2496,7 @@ Bin can be performed only for local hard disks.
 
  #Systemkopierroutine benutzen#
  Benutzt die Windowsfunktion CopyFileEx anstelle der internen Implementation zum Kopieren von Dateien.
-Dies ist nützlich bei NTFS, weil CopyFileEx eine rationellere Speicherplatzausnutzung
-bietet und erweiterte Dateiattribute kopiert. On the other hand, when using the system
+Dies ist nützlich bei NTFS, weil CopyFileEx erweiterte Dateiattribute kopiert. On the other hand, when using the system
 function, the possibility of "smart" ~copying~@CopyFiles@ of sparse files is not available.
 
  #Zum Schreiben geöffnete Dateien kopieren#
@@ -2424,31 +2508,20 @@ wenn sie während des Kopiervorgangs gleichzeitig modifiziert wird.
  Scan ~symbolic links~@HardSymLink@ along with normal sub-folders when building the folder tree,
 determining the total file size in the sub-folders.
 
- #Update panels only when Far is active#
- If enabled, file panels will be monitored only when Far is active, i.e. panels will not be updated until Far window is focused.
-This allows to avoid blocking the directories opened on panels.
-However, sometimes the update is not triggered after receiving focus,
-so this option is disabled by default and directories are always monitored.
-
  #Befehls-History sichern#
- Aktiviert das Sichern der Befehls-History beim Beenden und Wiederherstellen dieser beim erneuten Start von Far.
+ Aktiviert das Sichern der ~Befehls-History~@History@ beim Beenden und Wiederherstellen dieser beim erneuten Start von Far.
 
  #Verzeichnis-History sichern#
- Aktiviert das Sichern der Verzeichnis-History beim Beenden und Wiederherstellen dieser beim erneuten Start von Far.
+ Aktiviert das Sichern der ~Verzeichnis-History~@HistoryFolders@ beim Beenden und Wiederherstellen dieser beim erneuten Start von Far.
 Die Verzeichnis-History-Liste kann mit #Alt+F12# angezeigt werden.
 
  #Ansicht- und Edit-History sichern#
- Aktiviert das Sichern der History angezeigter und editierter Dateien beim Beenden und Wiederherstellen dieser beim
+ Aktiviert das Sichern der ~History angezeigter und editierter Dateien~@HistoryViews@ beim Beenden und Wiederherstellen dieser beim
 erneuten Start von Far. Diese History-Liste kann mit Alt+F11 angezeigt werden.
 
  #In Windows registrierte Typen benutzen#
 Wird bei eingeschalteter Option die Enter-Taste auf einer Datei gedrückt und es existiert eine Verknüpfung in Windows und
 keine unter Far's ~Dateiverknüpfungen~@FileAssoc@, wird das in Windows verknüpfte Programm für diesen Dateityp ausgeführt.
-
- #CD drive auto mount#
- When a CD-ROM drive is selected from the ~Change drive menu~@DriveDlg@, Far will close the open
-tray of a CD drive. Turn off this option if automatic CD-ROM mounting does not work
-correctly (this can happen because of bugs in the drivers of some CD-ROM drives).
 
  #Automatic update of environment variables#
  Automatically update the environment variables if they have been changed globally.
@@ -2575,9 +2648,6 @@ $ #Programmeinstellungen#
  #Uhr#
  Zeigt eine Uhr in der rechten oberen Ecke des Bildschirms.
 
- #Uhr in Betrachter und Editor#
- Zeigt die Uhr im (internen) Betrachter und Editor.
-
  #Maus#
  Erlaubt die Benutzung der Maus.
 
@@ -2612,6 +2682,15 @@ to calculate the total files count.
  Pressing #Ctrl+PgUp# in the root directory shows the drive selection menu.
  If Network plugin is installed, for network folders (and network drives, if switch
 is in the third state) a list of server shared resources  will be shown.
+
+ #Use Virtual Terminal for rendering#
+ Render the output using ANSI escape sequences. You can find more about it ~here~@https://docs.microsoft.com/en-us/windows/console/classic-vs-vt@.
+ This allows using 8 and 24-bit colors, text styles, and may (or may not) work better (or worse) with some Unicode characters.
+ Requires Windows 10 and above.
+
+ #Fullwidth-aware rendering#
+ Take into account the fact that East Asian characters require two screen cells instead of one.
+ The support is rudimentary and experimental. It may work or not, depending on your OS, locale, terminal, font and other settings.
 
  #ClearType friendly redraw#
  Redraw the window in such a way that ClearType related artifacts do not appear.
@@ -2773,7 +2852,7 @@ saved path.
  Prompt elements can be highlighted with #colors#.
 
  Format:
- #([[T]FFFFFFFF][:[T]BBBBBBBB])#, where:
+ #([[T]FFFFFFFF][:[T]BBBBBBBB][:style[:[T]UUUUUUUU]])#, where:
 
   #FFFFFFFF#
   Foreground color in aarrggbb format or index in the console palette.
@@ -2781,13 +2860,32 @@ saved path.
   #BBBBBBBB#
   Background color in aarrggbb format or index in the console palette.
 
+  #style#
+  One or more text styles, separated by spaces:
+  #bold#
+  #italic#
+  #overline#
+  #strikeout#
+  #faint#
+  #blink#
+  #inverse#
+  #invisible#
+  #underline#
+  #underline_double#
+  #underline_curly#
+  #underline_dot#
+  #underline_dash#
+
+  #UUUUUUUU#
+  Underline color in aarrggbb format or index in the console palette.
+
   #T#
-  "TrueColor" flag. If absent, value is treated as the console palette index (0-F):
+  "TrueColor" flag. If absent, value is treated as the console palette index (00-FF):
 
   \00 \11 \22 \33 \44 \55 \66 \77 \88 \99 \AA \BB \CC \DD \EE \FF \-
   0123456789ABCDEF
 
- If foreground or background color is omitted, the corresponding default value will be used.
+ If a color is omitted, the corresponding default value will be used.
 
  Examples:
 
@@ -2828,14 +2926,19 @@ $ #Interner Betrachter#
  #Ctrl+Shift+Left#    Show the leftmost column
  #Ctrl+Shift+Right#   Show the rightmost column of all lines currently visible on the screen
 
- In the #hex# and #dump# ~view modes~@ViewerMode@, #Ctrl+Left# and
-#Ctrl+Right# keys shift the content within the window one byte at a time
-in the corresponding direction.
+ The following additional keys work in #dump# and #hex# modes:
 
- In the #hex# ~view mode~@ViewerMode@, #Alt+Left# and #Alt+Right# key
-combinations decrease or increase the number of bytes displayed on each
-row by one byte, respectively. #Ctrl+Alt+Left# and #Ctrl+Alt+Right# key
-combinations adjust the number of displayed bytes by 16 at a time.
+ #Ctrl+Left#          ^<wrap>Shift all characters (#dump# mode) or bytes (#hex# mode) to the right
+moving the last character (byte) of a row to the first positions of the next row
+ #Ctrl+Right#         Shift all characters (#dump# mode) or bytes (#hex# mode) to the left
+moving the first character (byte) of a row to the last position of the previous row
+
+ The following additional keys work in #hex mode#:
+
+ #Alt+Left#           ^<wrap>Decrement the number of bytes per row
+ #Alt+Right#          Inrement the number of bytes per row
+ #Ctrl+Alt+Left#      Decrease the number of bytes per row to the nearest multiple of 16-bytes
+ #Ctrl+Alt+Right#     Increase the number of bytes per row to the nearest multiple of 16-bytes
 
  Viewer commands
 
@@ -2846,11 +2949,11 @@ combinations adjust the number of displayed bytes by 16 at a time.
  #Shift+F4#           Select ~view mode~@ViewerMode@: #text#, #hex#, or #dump#
  #F6#                 Zum ~Editor~@Editor@ wechseln
  #F7#                 ~Suchen~@ViewerSearch@
- #Umsch+F7, Space#    Weitersuchen
- #Alt+F7#             Continue search in reverse direction
+ #Umsch+F7, Space#    Continue searching forward
+ #Alt+F7#             Continue searching backwards
  #F8#                 Zwischen OEM/ANSI Textansicht wechseln
- #Umsch+F8#           Benutzerdefinierte Zeichensatztabelle auswählen
- #Alt+F8#             Wechsle aktuelle Position
+ #Umsch+F8#           Benutzerdefinierte ~Code Pages~@CodePagesMenu@ menu auswählen
+ #Alt+F8#             ~Wechsle aktuelle Position~@ViewerGotoPos@
  #Alt+F9#             Maximize or restore the size of the Far console window;
 see also ~Interface.AltF9~@Interface.AltF9@
  #Alt+Shift+F9#       Open ~Viewer settings~@ViewerSettings@ dialog
@@ -2883,25 +2986,22 @@ beginning in the text.
 
  Hinweise:
 
- 1. ^<wrap>Sie können zusätzlich zu #F7# den ~Suchdialog~@ViewerSearch@ einfach
-durch Eingabe des zu suchenden Textes starten.
-
- 2. ^<wrap>The viewer opens files with the permission to be deleted.
+ 1. ^<wrap>The viewer opens files with the permission to be deleted.
 If another process attempts to delete the file while it is open in the
 viewer, the file will be deleted after the viewer is closed. Any
 operation on a file while its deletion is pending will fail. This is
 a feature of the Windows operating system.
 
- 3. ^<wrap>The maximum number of columns displayed in the #text#
+ 2. ^<wrap>The maximum number of columns displayed in the #text#
 ~view mode~@ViewerMode@ can be configured in the
 ~Viewer settings~@ViewerSettings@ dialog. The range is between 100 to 100,000,
 the default is 10,000. Lines longer than the maximum will be split into
 several screen rows even if word wrap mode is turned off.
 
- 4. ^<wrap>Far starts ~searching~@ViewerSearch@ (#F7#) from the
+ 3. ^<wrap>Far starts ~searching~@ViewerSearch@ (#F7#) from the
 beginning of the currently visible area.
 
- 5. ^<wrap>To auto-scroll a file which is being appended by another
+ 4. ^<wrap>To auto-scroll a file which is being appended by another
 process (conf. Linux “tail”), go to the end of the file (press the #End# key).
 
 
@@ -2941,9 +3041,11 @@ of the base mode (#dump# or #text#) most recently selected in the
 #View mode# menu. Note: #F4# and #F2# switch #hex# mode to different
 modes.
 
+ See also the full list of ~viewer commands~@Viewer@.
+
  #Text# mode
 
- In the #text# mode, viewer renders file content interpreting byte
+ In the #text# mode viewer renders file content interpreting byte
 sequences as character strings using the encoding defined by the current
 code page. (Note that some encodings can use more than one byte
 to represent a character.) Byte sequences invalid in the current
@@ -2976,7 +3078,8 @@ are split into several screen rows even in #truncate# mode.
 
  #Dump# mode
 
- In the #dump# mode, viewer renders file content character by character
+ In the #dump# mode there is no notion of a text line.
+The viewer renders file content character by character
 without regard of line breaks or control codes which are treated
 as ordinary characters. The characters are displayed on screen rows from
 left to right. After reaching the end of the row, the next character
@@ -2999,30 +3102,22 @@ the positions of continuation bytes are filled with the #›# characters
  Code page 1200 (UTF-16): each screen position represents two
 consecutive bytes starting at an even offset in the file.
 
- In the #dump# mode, there is no notion of a text line. Instead
-of horizontal scrolling (cf. #text# #truncate# mode), the text
-is shifted one character at a time. The #Ctrl+Right# key combination
-shifts all characters to the left; the first character on a row becomes
-the last on the previous row. The #Ctrl+Left# key combination shifts all
-characters to the right moving the last character of a row to the first
-positions of the next row. The text “flows” from row to row. The #Right#
-and #Left# keys are ignored.
-
  #Hex# mode (hexadecimal codes)
 
- In the #hex# mode, viewer renders file content 16 bytes per screen
-row, with the hexadecimal offset of the first byte of each row at the
-left, followed by the hexadecimal representation of the bytes, followed
-by the character representation.
+ In the #hex# mode viewer renders hexadecimal representation of the
+bytes in the file. Each row starts with the hexadecimal offset of the
+first byte and ends with the character representation of the bytes
+of the row.
 
- The rendition depends on the encoding defined by the current code
-page. For single-byte encodings (e.g. all ANSI code pages), the bytes
-on each row are represented by 16 double-digit hex values followed by 16
-characters. For UTF-8 encoding, the bytes are represented the same way,
-while the characters are displayed at the positions of the leading bytes
-of the UTF-8 sequences with the positions of continuation bytes being
-filled with the #›# characters (code point U+203A). For UTF-16(BE)
-encodings the hex values are followed by eight characters. For example:
+ The rendition depends on the encoding defined by the current code page.
+For single-byte encodings (e.g. all ANSI code pages), the bytes on each
+row are represented by the sequence of double-digit hex values followed
+by the character sequence of the same length. For UTF-8 encoding, the
+bytes are represented the same way, while the characters are displayed
+at the positions of the leading bytes of the UTF-8 sequences with the
+positions of continuation bytes being filled with the #›# characters
+(code point U+203A). For UTF-16(BE) encodings, each pair of double-digit
+hex values is represented by one character. For example:
 
  Code page 1252 (ANSI - Latin I)
 
@@ -3049,21 +3144,6 @@ encodings the hex values are followed by eight characters. For example:
  \1b00000000C2: 35 04 3C 04 3F 04 3B 04 │ 4F 04 40 04 2C 00 20 00  емпляр, \-
  \1b00000000D2: 34 04 30 04 2E 00 0D 00 │ 0A 00                    да.♪◙   \-
 @+
-
- The #Ctrl+Right# key combination shifts all bytes to the left; the
-first byte on a row becomes the last on the previous row. The
-#Ctrl+Left# key combination shifts all bytes to the right moving the
-last byte of a row to the first positions of the next row. Unlike
-in #dump# mode, the content is shifted by a byte, not by a character.
-
- The #Alt+Right# key combination increases the number of bytes displayed
-on each row by one byte. The #Ctrl+Alt+Right# key combination increases
-the number of bytes by 16 at a time. The #Alt+Left# key combination
-decreases the number of bytes displayed on each row by one byte. The
-#Ctrl+Alt+Left# key combination decreases the number of bytes by 16 at
-a time.
-
- The #Right# and #Left# keys are ignored.
 
 
 @ViewerGotoPos
@@ -3101,12 +3181,21 @@ while searching (so, for example, #Text# will not be found when searching for #t
  #Whole words#
  The given text will be found only if it occurs in the text as a whole word.
 
- #Reverse search#
- Reverse the search direction - search from the end of file towards the beginning.
+ #Fuzzy search#
+ The search will be diacritical insensitive (for example, #deja# will be found in #déjà vu#),
+ligatures will be equivalent to corresponding multicharacter sequences (#fluffy# matches #ﬂuﬀy#),
+fancy numbers to corresponding numbers (#42# matches #④②#), and so on.
+
+ Note that case sensitive fuzzy search sometimes may be useful. For example, #Uber# will be found
+in #Überwald# but not in #überwald#. However, #Æther# will match #AEther#, but not #Aether#.
 
  #Regular expressions#
  Enable the use of ~regular expressions~@RegExp@ in the search string.
 The multiline search is not supported.
+
+ The #Find next# button starts searching forward.
+
+ The #Find previous# button starts searching backwards.
 
 
 @Editor
@@ -3185,20 +3274,20 @@ behavior can be changed in the ~Editor settings~@EditorSettings@ dialog.
  #F2#                      Datei sichern
  #Umsch+F2#                ~Datei sichern als…~@FileSaveAs@
  #Shift+F4#                Edit ~new file~@FileOpenCreate@
- #F6#                      Zum Betrachter wechseln
- #F7#                      Suchen
- #Strg+F7#                 Ersetzen
- #Umsch+F7#                Weitersuchen
- #Alt+F7#                  Continue search/replace in "reverse" mode
+ #F6#                      Zum ~Betrachter~@Viewer@ wechseln
+ #F7#                      ~Suchen~@EditorSearch@
+ #Strg+F7#                 ~Ersetzen~@EditorSearch@
+ #Umsch+F7#                Continue searching or replacing forward
+ #Alt+F7#                  Continue searching or replacing backwards
  #F8#                      Zwischen OEM/ANSI Textansicht wechseln
  #Strg+F8#                 Benutzerdefinierte Zeichensatztabelle auswählen
- #Alt+F8#                  Gehe nach Zeile
+ #Alt+F8#                  ~Gehe nach~@EditorGotoPos@ angegeben Zeile Und Spalte
  #Alt+F9#                  Maximize or restore the size of the Far console window; see also ~Interface.AltF9~@Interface.AltF9@
  #Alt+Shift+F9#            Call ~Editor settings~@EditorSettings@ dialog
  #F10, F4, Esc#            Beenden
  #Umsch+F10#               Sichern und Beenden
  #Ctrl+F10#                Position to the current file
- #F11#                     Menü "Plugin-Kommandos" aufrufen
+ #F11#                     Menü "~Plugin-Kommandos~@Plugins@" aufrufen
  #Alt+F11#                 Display ~file view and edit history~@HistoryViews@
  #Alt+BS, Strg+Z#          Operation rückgängig machen
  #Ctrl+Shift+Z#            Redo
@@ -3237,8 +3326,13 @@ $ #Editor: search/replace#
  #Whole words#
  The given text will be found only if it occurs in the text as a whole word.
 
- #Reverse search#
- Change the direction of search (from the end of file towards the beginning)
+ #Fuzzy search#
+ The search will be diacritical insensitive (for example, #deja# will be found in #déjà vu#),
+ligatures will be equivalent to corresponding multicharacter sequences (#fluffy# matches #ﬂuﬀy#),
+fancy numbers to corresponding numbers (#42# matches #④②#), and so on.
+
+ Note that case sensitive fuzzy search sometimes may be useful. For example, #Uber# will be found
+in #Überwald# but not in #überwald#. However, #Æther# will match #AEther#, but not #Aether#.
 
  #Regular expressions#
  Treat input as Perl regular expression (~search~@RegExp@ and ~replace~@RegExpRepl@).
@@ -3246,6 +3340,10 @@ Each line is processed individually, so multi-line expressions and line break ch
 
  ~Preserve style~@PreserveStyle@
  Preserve style (case and delimiters in program source code) of the replaced text.
+
+ The #Find next# / #Replace next# buttons start searching / replacing forward.
+
+ The #Find previous# / #Replace previous# buttons start searching / replacing backwards.
 
  The #All# button will show All matching entries ~menu~@FindAllMenu@.
 
@@ -3412,8 +3510,11 @@ $ #Editor: All matching entries menu#
  #Ctrl+Up#, #Ctrl+Down#
  Scroll the text in the editor.
 
- #Ctrl+Enter#, #Ctrl+Left#, #mouse click#
+ #Ctrl+Enter#, #Ctrl+Left mouse click#
  Go to the position of the found text.
+
+ #Ctrl+Numpad5#
+ Vertically align all found entries.
 
  #Gray +#
  Add session bookmark with the current position.
@@ -3423,6 +3524,8 @@ $ #Editor: All matching entries menu#
 
  #LeftCtrl+0…9#
  Go to the bookmark 0…9.
+
+ See also: common ~menu~@MenuCmd@ keyboard commands.
 
 
 @FileOpenCreate
@@ -3570,7 +3673,6 @@ $ #Code pages menu#
  #Other#
  The rest of code pages installed in the system.
 
-
  The following key combinations are available in this menu:
 
  #Ctrl+H#
@@ -3655,6 +3757,8 @@ and closes the menu.
  Pressing #Shift+Enter# invokes the Windows Explorer showing the root
 directory of the selected drives (works only for disk drives and not for
 plugins).
+
+ #Ctrl+H# shows unmapped volumes.
 
  #Ctrl+R# allows to refresh the disk selection menu.
 
@@ -3795,7 +3899,8 @@ combinations are available:
  #Ctrl+Down#    - ^<wrap>Move a group down.
 
  Hervorgehobene Gruppen werden vom Beginn an anlysiert. Wenn eine Datei in
-eine bestimmte Gruppe passt, werden die restlichen Gruppen nicht weiter ausgewertet.
+eine bestimmte Gruppe passt, werden die restlichen Gruppen nicht weiter ausgewertet,
+unless #[x] Continue processing# is set in the group.
 
  See also: common ~menu~@MenuCmd@ keyboard commands.
 
@@ -3813,17 +3918,14 @@ Jede Gruppendefinition ~beinhaltet~@Filter@:
    #[ ]# - ^<wrap>exclusion attribute - file must not have this attribute.
    #[?]# - ^<wrap>ignore this attribute;
 
- - Farbeneinstellungen für normale Dateinamen, ausgewählte
+ - ^<wrap>Farbeneinstellungen für normale Dateinamen, ausgewählte
 Dateinamen, Dateiname unter dem Cursor und ausgewählte
 Dateinamen unter dem Cursor.
 Wenn Sie die Standardfarben benutzen wollen, wählen Sie
 die Farbkombination "Schwarz auf Schwarz";
 
- - optionales Zeichen, um Dateien der Gruppe zu markieren. Es
-kann mit oder anstelle farblicher Hervorhebung benutzt werden.
-
- If the option "A file mask or several file masks" is turned off, file masks
-will not be analyzed, and only file attributes will be taken into account.
+ - ^<wrap>eine Markierung für Dateien aus der Gruppe.
+Es kann mit oder anstelle farblicher Hervorhebung benutzt werden.
 
  Eine Datei fällt in eine hervorgehobene Gruppe, wenn:
  - ^<wrap>ihr Name wenigstens einer der Dateimasken entspricht (if file mask analysis is disabled,
@@ -3839,82 +3941,74 @@ Windows Server 2012.
 
 @ViewerSettings
 $ #Betrachter-Einstellungen#
-    Dieser Dialog ermöglicht das Ändern der Standardeinstellungen
-für den internen und externen ~Betrachter~@Viewer@.
+ Dieser Dialog ermöglicht das Ändern der Standardeinstellungen für den internen und externen ~Betrachter~@Viewer@.
 
 @=
 ^#Betrachter#
 @=
- #Use external viewer#     Start external viewer on #F3# key
- #for F3 instead of#       and internal viewer on #Alt+F3#
- #Alt+F3#                  key combination.
+ #Use external viewer for F3 instead of Alt+F3#
+ Start external viewer on #F3# key and internal viewer on #Alt+F3# key combination.
 
- #Kommando zum Aufruf#     Das Kommando zum Aufruf des externen
- #des Betrachters#         Betrachters. Benutzen Sie die
-                         ~Spezialsymbole~@MetaSymbols@ um den Namen der
-                         anzuzeigenden Datei zu spezifizieren.
+ #Kommando zum Aufruf des Betrachters#
+ Das Kommando zum Aufruf des externen Betrachters.
+Benutzen Sie die ~Spezialsymbole~@MetaSymbols@ um den Namen der anzuzeigenden Datei zu spezifizieren.
+
 @=
 ^#Interner Betrachter#
 @=
- #Persistent selection#    Do not remove block selection after
-                         moving the cursor.
+ #Persistent selection#
+ Do not remove block selection after moving the cursor.
 
- #Search dialog#           Always returns focus to the search text field in
- #auto-focus#              the ~Viewer~@Viewer@ search dialog.
+ #Tabulatorgröße#
+ Tab zeigt die entsprechende Anzahl Leerzeichen an.
 
- #Tabulatorgröße#          Tab zeigt die entsprechende Anzahl
-                         Leerzeichen an.
+ #Show scrolling arrows#
+ Show scrolling arrows at the edges of the viewer window if the text does not fit horizontally.
 
- #Show scrolling arrows#   Show scrolling arrows at the edges of the viewer
-                         window if the text does not fit horizontally.
+ #Visible '\0'#
+ Show a printable character instead of space for the character '\0'.
+The character to display can be set in ~far:config~@FarConfig@ #Viewer.ZeroChar#.
 
- #Visible '\0'#            Show a printable character instead of space for
-                         the character '\0'. The character to display can be
-                         set in ~far:config~@FarConfig@ #Viewer.ZeroChar#.
+ #Show a scrollbar#
+ Show a scrollbar in the internal viewer. This option can also be toggled by pressing #Ctrl+S# in the internal viewer.
 
- #Show scrollbar#          Show scrollbar in the internal viewer. This
-                         option can also be switched by pressing
-                         #Ctrl+S# in the internal viewer.
 @=
- #Dateiposition sichern#   Sichert und restauriert die Position in
-                         der zuletzt angezeigten Datei. Diese Option
-                         sichert und restauriert auch die Zeichen-
-                         satztabelle, wenn sie vom Benutzer von Hand
-                         ausgewählt wurde and ~view mode~@ViewerMode@.
+ #Dateiposition sichern#
+ Sichert und restauriert die Position in der zuletzt angezeigten Datei. Diese Option sichert und restauriert
+auch die Zeichensatztabelle, wenn sie vom Benutzer von Hand ausgewählt wurde and ~view mode~@ViewerMode@.
 
- #Save file code page#     Save and restore the code page selected for a file.
-                         This is automatically enabled if #Save file position#
-                         is enabled, as file position depends on the encoding.
+ #Save file code page#
+ Save and restore the code page selected for a file. This is automatically enabled if #Save file position#
+is enabled, as file position depends on the encoding.
 
- #Save bookmarks#          Save and restore bookmarks in the recently viewed
-                         files. (Bookmarks can be created with #RightCtrl+0…9#
-                         or #Ctrl+Shift+0…9# key combinations.)
+ #Save bookmarks#
+ Save and restore bookmarks in the recently viewed files (bookmarks can be created with #RightCtrl+0…9#
+or #Ctrl+Shift+0…9# key combinations.)
 
- #Maximum line width#      Maximum number of columns for text mode viewer.
-                         Min=100, Max=100,000, Default=10,000.
+ #Maximum line width#
+ Maximum number of columns for text mode viewer. Min=100, Max=100,000, Default=10,000.
 
- #Save view mode#          Save and restore ~view modes~@ViewerMode@
-                         of recently viewed files.
+ #Save view mode#
+ Save and restore ~view modes~@ViewerMode@ of recently viewed files.
 
- #Save wrap mode#          Save and restore #wrap# and #word wrap# ~modes~@ViewerMode@
-                         of recently viewed files.
+ #Save wrap mode#
+ Save and restore #wrap# and #word wrap# ~modes~@ViewerMode@ of recently viewed files.
 
- #Detect dump view mode#   If this option is on and Far considers the file binary,
-                         the #dump# ~mode~@ViewerMode@ is selected automatically
-                         at the first view. Otherwise, the #text# mode is selected.
+ #Detect dump view mode#
+ If this option is on and Far considers the file binary, the #dump# ~mode~@ViewerMode@ is selected automatically
+at the first view. Otherwise, the #text# mode is selected.
 
- #Autodetect#              ~Autodetect~@CodePageAuto@ the code page of
- #code page#               the file being viewed.
+ #Autodetect code page#
+ ~Autodetect~@CodePageAuto@ the code page of the file being viewed.
 
- #Default code page#       Allows to select the default code page.
+ #Default code page#
+ Allows to select the default code page.
+
 @=
+ Wenn der Aufruf des externen Betrachters der #F3#-Taste zugewiesen ist, wird dieser nur dann aufgerufen,
+wenn ein ~verknüpfter~@FileAssoc@ Betrachter für den aktuellen Dateityp nicht existiert.
 
- Wenn der Aufruf des externen Betrachters der #F3#-Taste zugewiesen
-ist, wird dieser nur dann aufgerufen, wenn ein ~verknüpfter~@FileAssoc@
-Betrachter für den aktuellen Dateityp nicht existiert.
-
- Changing of settings does not affect currently opened internal
-viewer windows.
+ Changing of settings does not affect currently opened internal viewer windows.
 
  The settings dialog can also be invoked from the ~internal viewer~@Viewer@
 by pressing #Alt+Shift+F9#. The changes will come into effect immediately but
@@ -3923,95 +4017,88 @@ will affect only the current session.
 
 @EditorSettings
 $ #Editor-Einstellungen#
- Dieser Dialog ermöglicht das Ändern der Standardeinstellungen
-für den ~internen~@Editor@ und externen Editor.
+ Dieser Dialog ermöglicht das Ändern der Standardeinstellungen für den ~internen~@Editor@ und externen Editor.
 
- Externer Editor
+@=
+^#Externer Editor#
+@=
+ #Aufruf mit F4#
+ Startet den externen Editor mit #F4# anstatt #Alt+F4#.
 
- #Aufruf mit F4#           Startet den externen Editor mit #F4# anstatt
-                         #Alt+F4#.
+ #Kommando zum Aufruf des Editors#
+ Das Kommando zum Aufruf des externen Betrachters.
+Benutzen Sie die ~Spezialsymbole~@MetaSymbols@ um den Namen der zu bearbeitenden Datei zu spezifizieren.
 
-  #Kommando zum Aufruf#     Das Kommando zum Aufruf des externen
-  #des Editors#             Betrachters. Benutzen Sie die
-                          ~Spezialsymbole~@MetaSymbols@ um den Namen der
-                          zu bearbeitenden Datei zu spezifizieren.
+@=
+^#Interner Editor#
+@=
+ #Do not expand tabs#
+ Do not convert tabs to spaces while editing the document.
 
- Interner Editor
+ #Expand newly entered tabs to spaces#
+ While editing the document, convert each newly entered #Tab# into the appropriate number of spaces.
+Other tabs won't be converted.
 
- #Do not expand tabs#      Do not convert tabs to spaces while
-                         editing the document.
+ #Tabs durch Leerzeichen ersetzen#
+ Ersetzt das Tabulator-Zeichen durch die Anzahl von Leerzeichen.
 
- #Expand newly entered#    While editing the document, convert each
- #tabs to spaces#          newly entered #Tab# into the appropriate
-                         number of spaces. Other tabs won't be
-                         converted.
+ #Blöcke beibehalten#
+ Entfernt die Blockmarkierung nach Bewegen des Cursors nicht.
 
- #Tabs durch Leerzeichen#  Ersetzt das Tabulator-Zeichen durch die
- #ersetzen#                Anzahl von Leerzeichen.
+ #Entf löscht Blöcke#
+ Wenn ein Block ausgewählt ist, löscht Entf nicht das Zeichen unter dem Cursor, sondern diesen Block.
 
- #Blöcke beibehalten#      Entfernt die Blockmarkierung nach
-                         Bewegen des Cursors nicht.
+ #Auto-Einfügemoduds#
+ Schaltet den Auto-Einfügemodus bei der Texteingabe ein.
 
- #Entf löscht Blöcke#      Wenn ein Block ausgewählt ist, löscht Entf
-                         nicht das Zeichen unter dem Cursor, sondern
-                         diesen Block.
+ #Tabulatorgröße#
+ Tab zeigt die entsprechende Anzahl Leerzeichen an.
 
- #Dateiposition sichern#   Sichert und restauriert die Position in
-                         der zuletzt bearbeiteten Datei. Diese
-                         Option sichert und restauriert auch die
-                         Zeichensatztabelle, wenn sie vom Benutzer
-                         von Hand ausgewählt wurde.
+ #Show white space#
+ Make while space characters (spaces, tabulations, line breaks) visible.
 
- #Save bookmarks#          Save and restore bookmarks (current
-                         positions) in recently edited files
-                         (created with #RightCtrl+0…9# or
-                         #Ctrl+Shift+0…9#)
+ #Cursor hinter Zeilenende#
+ Erlaubt das Bewegen des Cursors hinter das Zeilenende.
 
- #Auto-Einfügemoduds#      Schaltet den Auto-Einfügemodus bei der
-                         Texteingabe ein.
+ #Select found#
+ Found text is selected.
 
- #Cursor hinter#           Erlaubt das Bewegen des Cursors hinter
- #Zeilenende#              das Zeilenende.
+ #Cursor at the end#
+ Place the cursor at the end of the found block.
 
- #Tabulatorgröße#          Tab zeigt die entsprechende Anzahl
-                         Leerzeichen an.
+ #Show a scrollbar#
+ Show a scrollbar.
 
- #Show scrollbar#          Show scrollbar.
+@=
+ #Dateiposition sichern#
+ Sichert und restauriert die Position in der zuletzt bearbeiteten Datei. Diese Option sichert und restauriert auch die
+Zeichensatztabelle, wenn sie vom Benutzer von Hand ausgewählt wurde.
 
- #Show white space#        Make while space characters (spaces, tabulations,
-                         line breaks) visible.
+ #Save bookmarks#
+ Save and restore bookmarks (current positions) in recently edited files
+(created with #RightCtrl+0…9# or #Ctrl+Shift+0…9#)
 
- #Select found#            Found text is selected
+ #Allow editing files opened for writing#
+ Allows to edit files that are opened by other programs for writing. This mode is handy to edit
+a file opened for a long time, but it could be dangerous, if a file is being modified at the same time as editing.
 
- #Cursor at the end#       Place the cursor at the end of the found block.
+ #Lock editing of read-only files#
+ When a file with the Read-only attribute is opened for editing, the editor also
+disables the modification of the edited text, just as if #Ctrl+L# was pressed.
 
- #Autodetect#              ~Autodetect~@CodePageAuto@ the code page of
- #code page#               the file being edited.
+ #Warn when opening read-only files#
+ When a file with the Read-only attribute is opened for editing, a warning message will be shown.
 
- #Edit files opened#       Allows to edit files that are opened
- #for writing#             by other programs for writing. This mode
-                         is handy to edit a file opened for a long
-                         time, but it could be dangerous, if a file
-                         is being modified at the same time as
-                         editing.
+ #Autodetect code page#
+ ~Autodetect~@CodePageAuto@ the code page of the file being edited.
 
- #Lock editing of#         When a file with the Read-only attribute
- #read-only files#         is opened for editing, the editor also
-                         disables the modification of the edited
-                         text, just as if #Ctrl+L# was pressed.
+ #Default code page#
+ Select the default code page.
 
- #Warn when opening#       When a file with the Read-only attribute
- #read-only files#         is opened for editing, a warning message
-                         will be shown.
+ Wenn der Aufruf des externen Editors der #F4#-Taste zugewiesen ist, wird dieser nur dann aufgerufen,
+wenn ein ~verknüpfter~@FileAssoc@ Editor für den aktuellen Dateityp nicht existiert.
 
- #Default code page#       Select the default code page.
-
- Wenn der Aufruf des externen Editors der #F4#-Taste zugewiesen ist,
-wird dieser nur dann aufgerufen, wenn ein ~verknüpfter~@FileAssoc@
-Editor für den aktuellen Dateityp nicht existiert.
-
- Modifications of settings in this dialog do not affect previously opened
-internal editor windows.
+ Modifications of settings in this dialog do not affect previously opened internal editor windows.
 
  The settings dialog can also be invoked from the ~internal editor~@Editor@
 by pressing #Alt+Shift+F9#. The changes will come into force immediately but
@@ -4032,9 +4119,7 @@ non-typical text files.
 $ #Dateiattribute#
  Mit diesem Befehl ist es möglich, Dateiattribute und -zeiten
 zu ändern. Es können entweder einzelne Dateien auch Dateigruppen
-bearbeitet werden. Wenn Sie keine Dateien in Unterverzeichnissen
-ändern wollen, schalten Sie die Option "Unterverzeichnisse
-einschließen" aus.
+bearbeitet werden.
 
  #File attributes#
 
@@ -4208,9 +4293,15 @@ Dateibeschreibungen beim Kopieren, Verschieben oder Löschen von Dateien.
 Wenn ein Befehl jedoch Dateien in Unterverzeichnissen betrifft, werden
 die Dateibeschreibungen in diesen Unterverzeichnissen nicht aktualisiert.
 
- Use ANSI code page by default
+ #Use ANSI code page by default#
+ By default Far uses the OEM codepage for file descriptions, both for reading and writing.
+This option changes it to ANSI.
 
- Save in UTF8
+ #Save in UTF-8#
+ If set, the description file will be read as OEM or ANSI, depending on the option above,
+but saved in UTF-8 after you add, remove or update the descriptions.
+
+ #Note#: these options are irrelevant when the file has the UTF-8 signature. In this case it is always read and written in UTF-8.
 
 
 @PanelViewModes
@@ -4227,7 +4318,6 @@ Modus auswählen. In dieser Liste entspricht "Kurz" der Kurzansicht (#LinksStrg+
 "Mittel" einer mittelgroßen Ansicht (#LinksStrg+2#) usw.
 The last item, "Alternative full", corresponds to view mode called with
 #LeftCtrl+0#. After selecting the mode, you can change the following settings:
-
 
  #Column types# - a comma-separated list. Each column type starts with
 a file property character, such as name, size, etc. Some file properties
@@ -4246,7 +4336,7 @@ files will be listed on a single stripe.
  N[M[D],O,R[F],N] - Dateiname, mit:
                     M - ^<wrap>zeige Auswahlmarkierungen, mit:
                         D - dynamic selection marks;
-                    O - ^<wrap>zeige Namen ohne Pfad (hauptsächlich für Plugins);
+                    O - ^<wrap>zeige Namen ohne Pfad (hauptsächlich für ~Plugins~@Plugins@);
                     R - ^<wrap>rechtsbündige Namen, mit:
                         F - right align all names;
                     N - ^<wrap>do not show extensions in name column;
@@ -4318,7 +4408,6 @@ wird das Dateifenster in Mehrspaltenform dargestellt.
  By default the size of the attributes column is 6 characters. To display
 the additional attributes it is necessary to manually increase the size of the column.
 
-
 #Spaltenbreite# - zum Ändern der Breite der Fensterspalten.
 Wenn die Breite den Wert 0 besitzt, wird der Standardwert benutzt.
 Wenn die Breite der Spalte von Namen, Beschreibung oder Eigentümer
@@ -4365,6 +4454,130 @@ Dateien aus, wenn Dateien bearbeitet werden, benutzt Far immer deren
 Original-Schreibweise.
 
  See also: common ~menu~@MenuCmd@ keyboard commands.
+
+
+@ColorGroups
+$ #Color groups#
+ Dieses Menü erlaubt die Farbauswahl für verschiedene Programmpunkte oder setzt Standardfarben.
+
+ #Set default colors#
+ Set the colors to default values, expressed as indices in the console palette.
+
+ #Set default colors (RGB)#
+ Set the colors to default values, expressed as colors in RGB space, normally used for the corresponding console palette indices.
+ Unlike the indices in the console palette, the RGB values are device-independent and will look the same in any terminal.
+ For example, the default #index# value of panels background is #1#, which is usually, but not necessarily, mapped to some unspecified shade of blue.
+ The default #RGB# value of panels background, on the contrary, is always exactly #000080#.
+
+ #Note#: RGB colors require Virtual Terminal-based rendering, which can be enabled in ~Interface settings~@InterfSettings@.
+If it is not enabled or if your terminal does not support RGB colors, they will be approximated to the closest console palette indices.
+
+ This is the current palette:
+
+ \00  \10  \20  \30  \40  \50  \60  \70  \-
+ \80  \90  \A0  \B0  \C0  \D0  \E0  \F0  \-
+
+ This is the default RGB representation:
+
+ \(T0:T000000)  \(T0:T000080)  \(T0:T008000)  \(T0:T008080)  \(T0:T800000)  \(T0:T800080)  \(T0:T808000)  \(T0:TC0C0C0)  \-
+ \(T0:T808080)  \(T0:T0000FF)  \(T0:T00FF00)  \(T0:T00FFFF)  \(T0:TFF0000)  \(T0:TFF00FF)  \(T0:TFFFF00)  \(T0:TFFFFFF)  \-
+
+
+@ColorPicker
+$ #Color Picker#
+ This dialog allows to define a foreground color, a background color and a text style.
+
+ The foreground and the background colors can be either:
+ - one of the 16 colors from the standard Windows Console pallete,
+ - one of the 256 colors from the Xterm pallette, or
+ - one of the 16 million colors from the RGB color space.
+
+ The standard 16-color palette is available in the dialog.
+ To access the ~256-color palette~@ColorPicker256@ and the ~RGB color space~@ColorPickerRGB@ use the corresponding buttons.
+
+ #Default# is the color used by your terminal when no colors are specified explicitly, e.g. \(800000:800000) C:\> \-.
+ Usually it is one of the palette colors, e.g. \(7:0)silver on black\-, but not necessarily: some terminals could handle it differently, e.g. render as translucent.
+
+ The color value is also represented in the hexadecimal form for convenience, where:
+ - #AA______# - the alpha channel, representing the degree of transparency from fully transparent (00) to fully opaque (FF).
+ - #______##### - the palette index from 00 to FF.
+ - #__RRGGBB# - the red, green and blue channels in the RGB color space, from 00 to FF each.
+
+ When the color is not fully opaque, the previous color in the logical Z-order is taken into account.
+
+ The foreground text style can include ANSI/VT100-like attributes listed in the right section.
+ When #Inherit# is checked, the previous foreground text style in the logical Z-order is taken into account.
+
+ Default:   \(7:0) Example \-
+ Bold:      \(7:0:bold) Example \-
+ Italic:    \(7:0:italic) Example \-
+ Overline:  \(7:0:overline) Example \-
+ Strikeout: \(7:0:strikeout) Example \-
+ Faint:     \(7:0:faint) Example \-
+ Blink:     \(7:0:blink) Example \-
+ Inverse:   \(7:0:inverse) Example \-
+ Invisible: \(7:0:invisible) Example \-
+ Underline:
+   Single:  \(7:0:underline) Example \-
+   Double:  \(7:0:underline_double) Example \-
+   Curly:   \(7:0:underline_curly) Example \-
+   Dotted:  \(7:0:underline_dot) Example \-
+   Dashed:  \(7:0:underline_dash) Example \-
+
+ The preview section below displays the final result.
+
+ #Attention#
+ Only the standard 16-color palette is guaranteed to work everywhere.
+ Support for everything else is conditional and defined by your terminal.
+
+ Extended colors and styles require Virtual Terminal-based rendering, which can be enabled in ~Interface settings~@InterfSettings@.
+You can find more about it ~here~@https://docs.microsoft.com/en-us/windows/console/classic-vs-vt@.
+
+
+@ColorPicker256
+$ #256 Color Picker#
+ This dialog allows to pick a color from the 256-color Xterm pallette.
+
+ The first 16 colors are the same as the standard palette and are available in the ~main dialog~@ColorPicker@.
+
+ \00  \10  \20  \30  \40  \50  \60  \70  \-
+ \80  \90  \A0  \B0  \C0  \D0  \E0  \F0  \-
+
+ The next 216 colors are represented as a 6x6x6 cube. The palette usually has 6 levels for every primary color and forms a homogeneous RGB cube.
+ Use the buttons on the right to rotate the cube, access its inner levels or mix the primary colors directly.
+
+ \(:10)  \(:11)  \(:12)  \(:13)  \(:14)  \(:15)  \-  \(:34)  \(:35)  \(:36)  \(:37)  \(:38)  \(:39)  \-  \(:58)  \(:59)  \(:5A)  \(:5B)  \(:5C)  \(:5D)  \-
+ \(:16)  \(:17)  \(:18)  \(:19)  \(:1A)  \(:1B)  \-  \(:3A)  \(:3B)  \(:3C)  \(:3D)  \(:3E)  \(:3F)  \-  \(:5E)  \(:5F)  \(:60)  \(:61)  \(:62)  \(:63)  \-
+ \(:1C)  \(:1D)  \(:1E)  \(:1F)  \(:20)  \(:21)  \-  \(:40)  \(:41)  \(:42)  \(:43)  \(:44)  \(:45)  \-  \(:64)  \(:65)  \(:66)  \(:67)  \(:68)  \(:69)  \-
+ \(:22)  \(:23)  \(:24)  \(:25)  \(:26)  \(:27)  \-  \(:46)  \(:47)  \(:48)  \(:49)  \(:4A)  \(:4B)  \-  \(:6A)  \(:6B)  \(:6C)  \(:6D)  \(:6E)  \(:6F)  \-
+ \(:28)  \(:29)  \(:2A)  \(:2B)  \(:2C)  \(:2D)  \-  \(:4C)  \(:4D)  \(:4E)  \(:4F)  \(:50)  \(:51)  \-  \(:70)  \(:71)  \(:72)  \(:73)  \(:74)  \(:75)  \-
+ \(:2E)  \(:2F)  \(:30)  \(:31)  \(:32)  \(:33)  \-  \(:52)  \(:53)  \(:54)  \(:55)  \(:56)  \(:57)  \-  \(:76)  \(:77)  \(:78)  \(:79)  \(:7A)  \(:7B)  \-
+
+ \(:7C)  \(:7D)  \(:7E)  \(:7F)  \(:80)  \(:81)  \-  \(:A0)  \(:A1)  \(:A2)  \(:A3)  \(:A4)  \(:A5)  \-  \(:C4)  \(:C5)  \(:C6)  \(:C7)  \(:C8)  \(:C9)  \-
+ \(:82)  \(:83)  \(:84)  \(:85)  \(:86)  \(:87)  \-  \(:A6)  \(:A7)  \(:A8)  \(:A9)  \(:AA)  \(:AB)  \-  \(:CA)  \(:CB)  \(:CC)  \(:CD)  \(:CE)  \(:CF)  \-
+ \(:88)  \(:89)  \(:8A)  \(:8B)  \(:8C)  \(:8D)  \-  \(:AC)  \(:AD)  \(:AE)  \(:AF)  \(:B0)  \(:B1)  \-  \(:D0)  \(:D1)  \(:D2)  \(:D3)  \(:D4)  \(:D5)  \-
+ \(:8E)  \(:8F)  \(:90)  \(:91)  \(:92)  \(:93)  \-  \(:B2)  \(:B3)  \(:B4)  \(:B5)  \(:B6)  \(:B7)  \-  \(:D6)  \(:D7)  \(:D8)  \(:D9)  \(:DA)  \(:DB)  \-
+ \(:94)  \(:95)  \(:96)  \(:97)  \(:98)  \(:99)  \-  \(:B8)  \(:B9)  \(:BA)  \(:BB)  \(:BC)  \(:BD)  \-  \(:DC)  \(:DD)  \(:DE)  \(:DF)  \(:E0)  \(:E1)  \-
+ \(:9A)  \(:9B)  \(:9C)  \(:9D)  \(:9E)  \(:9F)  \-  \(:BE)  \(:BF)  \(:C0)  \(:C1)  \(:C2)  \(:C3)  \-  \(:E2)  \(:E3)  \(:E4)  \(:E5)  \(:E6)  \(:E7)  \-
+
+ The last 24 colors are usually defined as a grayscale ramp.
+
+ \(:E8)  \(:E9)  \(:EA)  \(:EB)  \(:EC)  \(:ED)  \(:EE)  \(:EF)  \(:F0)  \(:F1)  \(:F2)  \(:F3)  \(:F4)  \(:F5)  \(:F6)  \(:F7)  \(:F8)  \(:F9)  \(:FA)  \(:FB)  \(:FC)  \(:FD)  \(:FE)  \(:FF)  \-
+
+
+@ColorPickerRGB
+$ #RGB Color Picker#
+ This dialog allows to pick a color from the RGB color space.
+
+ The 16 777 216 RGB colors are represented as a 16x16x16 hypercube.
+
+ Use the buttons on the right to rotate the cube, access its inner levels or mix the primary colors directly.
+
+ Each of the 4096 cells in the hypercube represents a 16x16x16 cube with RGB colors. To switch between the cubes use the #↔# button.
+
+ The #«# button allows to save the selected color to the custom palette for quick access.
+
+ The #System# button opens the system RGB color picker.
 
 
 @SortGroups
@@ -4481,8 +4694,10 @@ auf der der Cursor/Auswahlbalken steht. #†#
  #Strg+<Grau *># kehrt die aktuelle Auswahl einschließlich
 Verzeichnisse um.
 
- #Strg+M# stellte eine vorherige Auswahl wieder her.
+ #Alt+<Grau *># inverts the current selection on files only,
+folders are deselected.
 
+ #Strg+M# stellte eine vorherige Auswahl wieder her.
 
  #Mouse Selection#
 
@@ -4553,6 +4768,7 @@ selected in the tree is appended to the input line.
 
  Whether copying, moving or renaming files works for a plugin depends
 upon the plugin functionality.
+
  Die Option "Zugriffsrechte kopieren" ist nur gültig für das
 NTFS-Dateisystem und erlaubt das Kopieren von Informationen über
 Dateizugriffsrechte.
@@ -4578,8 +4794,7 @@ dialog should be displayed for the read-only files.
  Die Option “#Systemkopierroutine benutzen#” im Dialog ~Systemeinstellungen~@SystemSettings@
 erzwingt die Benutzung der Windowsfunktion CopyFileEx anstelle der internen Implementation
 zum Kopieren von Dateien. Dies ist nützlich bei NTFS, weil CopyFileEx
-eine rationellere Speicherplatzausnutzung bietet und erweiterte
-Dateiattribute mitkopiert. If this option is off, the internal
+erweiterte Dateiattribute mitkopiert. If this option is off, the internal
 implementation of the file copy routine is used. The internal
 function is also used if the source file is encrypted and is being
 copied to a different volume.
@@ -4788,7 +5003,7 @@ $ #Befehl anwenden#
  Mit dem Menüpunkt #Befehl anwenden# im Menü ~Dateien~@FilesMenu@
 kann ein Befehl auf jede ausgewählte Datei angewendet werden. In der
 gleichen Weise wie in ~Dateiverknüpfungen~@FileAssoc@ beschrieben muß man
-Symbole benutzen um den Dateinamen festzulegen.
+~Symbole~@MetaSymbols@ benutzen um den Dateinamen festzulegen.
 
  Z.B. 'type !.!' gibt zum Beispiel alle ausgewählten Dateien nacheinander
 auf dem Bildschirm aus, and the command 'rar32 m !.!.rar !.!' will move all selected files
@@ -4844,9 +5059,9 @@ will be executed if “file1” exists, “file2” does not exist, and the
 environment “variable” is defined:
  #if exist file1 if not exist file2 if defined variable command#
 
- #PUSHD path#
- Stores the current path for use by the “POPD” command, then changes
-the current path on the active panel to the specified “path”.
+ #PUSHD [path]#
+ Stores the current path for use by the “POPD” command.
+If “path” is specified, changes the current path on the active panel to it.
 
  #POPD#
  Changes the current path on the active panel to that stored by the “PUSHD” command.
@@ -4904,7 +5119,7 @@ $ #Regular expressions#
 
  #Options#:
  #i# - ignore character case;
- #s# - ^<wrap>consider the whole text as one line, ‘.’ matches any character;
+ #s# - ^<wrap>consider the whole text as one line, ‘#.#’ matches any character;
  #m# - ^<wrap>consider the whole text as multiple lines. ‘#^#’ and ‘#$#’ match the
 beginning and the end of any "inner" string;
  #x# - ^<wrap>ignore space characters (unescaped ones, i.e. without backslash before).
@@ -4949,8 +5164,7 @@ zero-size expression.
  #(?<=pattern)# - ^<wrap>the backward lookup. Unfortunately, the pattern must have fixed length.
  #(?<!pattern)# - ^<wrap>the negation of backward lookup. The same restriction.
 
- #(?{name}pattern)# - group with a name. The name can be empty (in such case you
-cannot refer to this group) or must contain only word characters (#\w#) and spaces (#\s#).
+ #(?{name}pattern)# - group with a name. The name must contain only word characters (#\w#) and spaces (#\s#).
 
  #Quantifiers#
 
@@ -5026,13 +5240,12 @@ big amounts of data are processed.
         ^<wrap>Strings containing "name=", but not containing "value=", are processed (in fact, skipped) faster.
 
  #\NN#  - ^<wrap>reference to earlier matched parentheses. NN is a positive integer.
-Each parentheses except (?:pattern), (?=pattern), (?!pattern), (?<=pattern), (?<!pattern) and (?{name}pattern)
+Each parentheses except (?:pattern), (?=pattern), (?!pattern), (?<=pattern) and (?<!pattern)
 have a number (in the order of appearance).
         Example:
         "(['"])hello\1" matches to "hello" or 'hello'.
 
  #\p{name}# - ^<wrap>inner regexp reference to it's parsed bracket with specified #name#.
-
 
  #Examples:#
 
@@ -5206,7 +5419,7 @@ previously recorded macros.
 combinations. Because a macro command can be additionally
 configured there are two such combinations: #Ctrl+<.># (#Ctrl#
 and a period pressed together) and #Ctrl+Shift+<.># (#Ctrl#,
-Shift and a period pressed together). Pressing the first
+#Shift# and a period pressed together). Pressing the first
 combination will end the recording of the macro command
 and will use the default settings for its playback. Pressing
 the second combination will end the recording of the macro
@@ -5299,7 +5512,7 @@ command playback is finished.
 
  2. ^<wrap>Some key combinations (including #Enter#, #Esc#, #F1# and #Ctrl+F5#,
 #MsWheelUp#, #MsWheelDown# and other mouse keys combined with #Ctrl#, #Shift#, #Alt#) cannot be entered
-directly because they have special functions in the dialog. To assign a macro
+directly because they have special functions in the dialog. To ~assign a macro~@KeyMacroAssign@
 to one of those key combinations, select it from the drop-down list.
 
 
@@ -5541,6 +5754,41 @@ $ #Version information#
  - names and versions of the active plugins
 
 
+@CustomizingUI
+$ #Customizing UI elements#
+ All Far user interface elements are defined in #.lng# files (e.g., #FarEng.lng#).
+You can customize these elements to your needs. For example, you can
+change hotkeys or labels on a certain Far dialog. To override
+UI elements, create a file with the name #Far<Lng>.lng.custom#
+in #%FARHOME%# or #%FARPROFILE%# directory and provide new values for
+the UI IDs you want to customize.
+
+ For example, to make file system link types on Far panels look like
+in the listing of DIR DOS command, you can create file #FarEng.lng.custom#
+in the #%FARPROFILE%# directory with the following content:
+
+@-
+ \0A┌────────────────────────────┐\-
+ \0A│\30│  │UTF-8│Ln 1/7│Col│8:34 PM\0A│\-
+ \0A│\1b//[MListUp]                 \0A│\-
+ \0A│\1b"..↑"                       \0A│\-
+ \0A│\1b                            \0A│\-
+ \0A│\1bMListFolder   = "<DIR>"     \0A│\-
+ \0A│\1bMListSymlink  = "<SYMLINK>" \0A│\-
+ \0A│\1bMListJunction = "<JUNCTION>"\0A│\-
+ \0A│\071\30Help  \07 2\30Save  \07 3\30      \07 \30    \0A│\-
+ \0A└────────────────────────────┘\-
+@+
+
+ You can specify replacement UI elements in two ways, on two separate
+lines or on a single line. The new value should always be enclosed
+in double quotation marks. You can find UI IDs you want to redefine
+in the original #Far<Lng>.lng# file.
+
+ If custom UI language files exist in both directories, the file
+in #%FARPROFILE%# has precedence over the file in #%FARHOME%#.
+
+
 @FarConfig
 $ #Configuration editor#
  Starts with the command #far:config#
@@ -5553,43 +5801,39 @@ If current value of an option is other than the default, the option is marked wi
 
  Besides the list navigation keys, the following key combinations are supported:
 
- #Enter# or #F4#   Change option value
-               boolean and 3-state are changed in place,
-               for integer and string a dialog is opened.
+ #Enter# or #F4#
+ Toggle or edit the value.
 
- #Shift+F4#      For the integer type, hexadecimal editor dialog is opened,
-               for other types works as #F4#.
+ #Shift+F4#
+ Edit the integer value as a hexadecimal number. For other types works as #F4#.
 
- #Ctrl+H#        Hide/show options having default values.
+ #Alt+F4#
+ Edit the integer value as a binary number. For other types works as #F4#.
 
- #Shift+F1#      Show option help, if available.
+ #Del#
+ Reset the option to its default value.
 
- #Ctrl+Alt+F#    Toggle quick filtering mode.
+ #Ctrl+H#
+ Toggle display of unchanged options.
+
+ #Shift+F1#
+ Show the help for the current option, if available.
+
+ #Ctrl+Alt+F#
+ Toggle quick filtering mode.
 
 
 @Codepages.NoAutoDetectCP
 $ #far:config Codepages.NoAutoDetectCP#
- This string parameter defines the code pages which will be excluded
-from Universal Codepage Detector (UCD) autodetect. Sometimes, especially
-on small files, UCD annoyingly chooses wrong code pages.
+ This parameter allows to exclude specific code pages from the heuristic code page detection results.
+Such detection is unreliable by definition: it depends on statistical data and could guess wrong, especially when the amount of input data is small.
 
- The default value is empty string #""#. In this case all code pages
-detectable by UCD (about 20, much less than there is usually available
-in the system) are enabled.
+ By default the parameter is empty and there are no restrictions which code pages could be detected heuristically.
 
- If this parameter is set to string #"-1"# and the #Other# section
-of the ~Code pages~@CodePagesMenu@ menu is hidden (#Ctrl+H# key
-combination), only #System# (ANSI, OEM), #Unicode#, and #Favorites# code
-pages will be enabled for UCD. If the #Other# section is visible, all
-code pages are enabled.
+ If this parameter is set to #-1#, only the code pages, currenltly visible in the ~Code pages~@CodePagesMenu@ menu, will be accepted.
+You can control which code pages are visible there with the #Ctrl+H# key combination and the #Favorites# section.
 
- Otherwise, this parameter should contain comma separated list
-of code page numbers disabled for UCD. For example,
-#"1250,1252,1253,1255,855,10005,28592,28595,28597,28598,38598"#.
-
- Since Unicode code pages (1200, 1201, 65001) are detected outside
-of UCD, they cannot be disabled even if they appear on the exclusions
-list.
+ If this parameter contains a comma-separated list of code page numbers, all the specified code pages will be excluded from the heuristic detection.
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
@@ -5800,7 +6044,7 @@ is not listed in this parameter and the program “date.exe” exists
 in one of the #PATH# directories, the internal command processor’s
 command can never be executed.
 
- Ready-made settings for CMD.EXE, COMMAND.COM, and other well-known
+ Ready-made settings for CMD.EXE and other well-known
 command processors can be found in the
 #Addons\SetUp\Executor.*.farconfig# files.
 
@@ -6043,25 +6287,6 @@ of the parameter. If the parameter is set to #-1#, random values will
 be used.
 
  Default value: 0.
-
- This parameter can be changed via ~far:config~@FarConfig@ only.
-
-
-@System.FlagPosixSemantics
-$ #far:config System.FlagPosixSemantics#
- This Boolean parameter specifies whether inserting files into
-~view and edit history~@HistoryViews@ is case sensitive.
-
- If a file being added already exists in the history, it is not inserted
-again; instead, the existing history entry is moved to the most recent
-position.
-
- False - ^<wrap>Case insensitive comparison is used to search the
-history for duplicates.
- True  - Case sensitive comparison is used to search the history for
-duplicates.
-
- Default value: True (the search is case sensitive).
 
  This parameter can be changed via ~far:config~@FarConfig@ only.
 
@@ -6343,7 +6568,7 @@ horizontally (Windows Vista and above):
  System.MsHWheelDeltaEdit - in the internal Editor
  System.MsHWheelDelta     - in other areas
 
- Default value: 1 (for all parameters).
+ Default value for all parameters: 0 (use system settings).
 
  Note: Rolling or tilting mouse wheel while holding #Alt# key always
 scrolls one line or character at a time.

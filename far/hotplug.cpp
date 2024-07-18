@@ -52,12 +52,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "drivemix.hpp"
 #include "global.hpp"
 #include "keyboard.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.fs.hpp"
 
 // Common:
 #include "common/enum_substrings.hpp"
+#include "common/function_ref.hpp"
 #include "common/keep_alive.hpp"
 
 // External:
@@ -105,7 +108,14 @@ namespace
 
 namespace detail
 {
-	struct devinfo_handle_closer { void operator()(HDEVINFO Handle) const noexcept { SetupDiDestroyDeviceInfoList(Handle); } };
+	struct devinfo_handle_closer
+	{
+		void operator()(HDEVINFO Handle) const noexcept
+		{
+			if (!SetupDiDestroyDeviceInfoList(Handle))
+				LOGWARNING(L"SetupDiDestroyDeviceInfoList(): {}"sv, os::last_error());
+		}
+	};
 }
 
 class [[nodiscard]] dev_info: noncopyable
@@ -147,14 +157,11 @@ public:
 		return SetupDiEnumDeviceInterfaces(m_info.native_handle(), nullptr, &InterfaceClassUuid, MemberIndex, &DeviceInterfaceData) != FALSE;
 	}
 
-	template<typename uuid_type>
 	[[nodiscard]]
-	auto DeviceInterfacesEnumerator(uuid_type&& InterfaceClassUuid) const
+	auto DeviceInterfacesEnumerator(UUID const& InterfaceClassUuid) const
 	{
-		static_assert(std::is_convertible_v<uuid_type, UUID>);
-
 		using value_type = SP_DEVICE_INTERFACE_DATA;
-		return make_inline_enumerator<value_type>([this, InterfaceClassUuid = keep_alive(FWD(InterfaceClassUuid)), Index = size_t{}](const bool Reset, value_type& Value) mutable
+		return inline_enumerator<value_type>([this, InterfaceClassUuid = keep_alive(FWD(InterfaceClassUuid)), Index = 0uz](const bool Reset, value_type& Value) mutable
 		{
 			if (Reset)
 				Index = 0;
@@ -172,7 +179,7 @@ public:
 		SetupDiGetDeviceInterfaceDetail(m_info.native_handle(), &DeviceInterfaceData, nullptr, 0, &RequiredSize, nullptr);
 		if(RequiredSize)
 		{
-			block_ptr<SP_DEVICE_INTERFACE_DETAIL_DATA> DData(RequiredSize);
+			const block_ptr<SP_DEVICE_INTERFACE_DETAIL_DATA> DData(RequiredSize);
 			DData->cbSize = sizeof(*DData);
 			if(SetupDiGetDeviceInterfaceDetail(m_info.native_handle(), &DeviceInterfaceData, DData.data(), RequiredSize, nullptr, nullptr))
 			{
@@ -187,11 +194,10 @@ private:
 	string m_id;
 };
 
-template<typename receiver>
 [[nodiscard]]
-static bool GetDevicePropertyImpl(DEVINST hDevInst, const receiver& Receiver)
+static bool GetDevicePropertyImpl(DEVINST hDevInst, function_ref<bool(dev_info const&, SP_DEVINFO_DATA&)> const Receiver)
 {
-	dev_info Info(hDevInst);
+	dev_info const Info(hDevInst);
 	if (!Info)
 		return false;
 
@@ -205,21 +211,21 @@ static bool GetDevicePropertyImpl(DEVINST hDevInst, const receiver& Receiver)
 [[nodiscard]]
 static bool GetDeviceProperty(DEVINST hDevInst, DWORD Property, DWORD& Value)
 {
-	return GetDevicePropertyImpl(hDevInst, [&](dev_info& Info, SP_DEVINFO_DATA& DeviceInfoData)
+	return GetDevicePropertyImpl(hDevInst, [&](const dev_info& Info, SP_DEVINFO_DATA& DeviceInfoData)
 	{
-		return Info.GetDeviceRegistryProperty(DeviceInfoData, Property, nullptr, reinterpret_cast<PBYTE>(&Value), sizeof(Value), nullptr);
+		return Info.GetDeviceRegistryProperty(DeviceInfoData, Property, nullptr, std::bit_cast<BYTE*>(&Value), sizeof(Value), nullptr);
 	});
 }
 
 [[nodiscard]]
 static bool GetDeviceProperty(DEVINST hDevInst, DWORD Property, string& Value)
 {
-	return GetDevicePropertyImpl(hDevInst, [&](dev_info& Info, SP_DEVINFO_DATA& DeviceInfoData)
+	return GetDevicePropertyImpl(hDevInst, [&](const dev_info& Info, SP_DEVINFO_DATA& DeviceInfoData)
 	{
-		return os::detail::ApiDynamicStringReceiver(Value, [&](span<wchar_t> Buffer)
+		return os::detail::ApiDynamicStringReceiver(Value, [&](std::span<wchar_t> Buffer)
 		{
 			DWORD RequiredSize = 0;
-			if (Info.GetDeviceRegistryProperty(DeviceInfoData, Property, nullptr, reinterpret_cast<BYTE*>(Buffer.data()), static_cast<DWORD>(Buffer.size()), &RequiredSize))
+			if (Info.GetDeviceRegistryProperty(DeviceInfoData, Property, nullptr, std::bit_cast<BYTE*>(Buffer.data()), static_cast<DWORD>(Buffer.size()), &RequiredSize))
 				return RequiredSize / sizeof(wchar_t) - 1;
 			return RequiredSize / sizeof(wchar_t);
 		});
@@ -253,7 +259,7 @@ static bool IsDeviceHotplug(DEVINST hDevInst, bool const IncludeSafeToRemove)
 	if (!GetDeviceProperty(hDevInst, SPDRP_CAPABILITIES, Capabilities))
 		return false;
 
-	DWORD Status = 0, Problem = 0;
+	ULONG Status = 0, Problem = 0;
 	if (CM_Get_DevNode_Status(&Status, &Problem, hDevInst, 0) != CR_SUCCESS)
 		return false;
 
@@ -271,7 +277,7 @@ static DWORD DriveMaskFromVolumeName(string_view const VolumeName)
 	DWORD Result = 0;
 	string strCurrentVolumeName;
 	const os::fs::enum_drives Enumerator(os::fs::get_logical_drives());
-	const auto ItemIterator = std::find_if(ALL_CONST_RANGE(Enumerator), [&](const auto& i)
+	const auto ItemIterator = std::ranges::find_if(Enumerator, [&](const auto& i)
 	{
 		return os::fs::GetVolumeNameForVolumeMountPoint(os::fs::drive::get_win32nt_root_directory(i), strCurrentVolumeName) && starts_with_icase(strCurrentVolumeName, VolumeName);
 	});
@@ -311,10 +317,10 @@ static device_paths get_device_paths_impl(DEVINST hDevInst)
 
 		AddEndSlash(strMountPoint);
 		string strVolumeName;
-		if (os::fs::GetVolumeNameForVolumeMountPoint(strMountPoint,strVolumeName))
-		{
-			DevicePaths.Disks |= DriveMaskFromVolumeName(strVolumeName);
-		}
+		if (!os::fs::GetVolumeNameForVolumeMountPoint(strMountPoint, strVolumeName))
+			continue;
+
+		DevicePaths.Disks |= DriveMaskFromVolumeName(strVolumeName);
 		DevicePaths.Volumes.emplace_back(strVolumeName);
 	}
 
@@ -337,11 +343,10 @@ static device_paths get_relation_device_paths(DEVINST hDevInst)
 		return {};
 
 	device_paths DevicePaths;
-	const auto DeviceIdListPtr = DeviceIdList.data();
-	for (const auto& i: enum_substrings(DeviceIdListPtr))
+	for (const auto& i: enum_substrings(DeviceIdList))
 	{
 		DEVINST hRelationDevInst;
-		if (CM_Locate_DevNode(&hRelationDevInst, const_cast<DEVINSTID_W>(i.data()), 0) == CR_SUCCESS)
+		if (CM_Locate_DevNode(&hRelationDevInst, const_cast<DEVINSTID>(i.data()), 0) == CR_SUCCESS)
 			DevicePaths.append(get_device_paths_impl(hRelationDevInst));
 	}
 
@@ -393,8 +398,8 @@ static auto GetHotplugDevicesInfo(bool const IncludeSafeToRemove)
 {
 	std::vector<DeviceInfo> Result;
 
-	DEVNODE Root;
-	if (CM_Locate_DevNodeW(&Root, nullptr, CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS)
+	DEVINST Root;
+	if (CM_Locate_DevNode(&Root, nullptr, CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS)
 	{
 		GetHotplugDevicesInfo(Root, Result, IncludeSafeToRemove);
 	}
@@ -413,26 +418,16 @@ static bool RemoveHotplugDriveDevice(const DeviceInfo& Info, bool const Confirm,
 	if (GetDevicePropertyRecursive(Info.DevInst, SPDRP_DEVICEDESC, strDescription))
 		inplace::trim(strDescription);
 
-	int MessageResult = Message::first_button;
+	auto MessageResult = message_result::first_button;
 
 	if (Confirm)
 	{
-		string DisksStr;
 		const auto Separator = L", "sv;
-		for (size_t i = 0; i < Info.DevicePaths.Disks.size(); ++i)
-		{
-			if (Info.DevicePaths.Disks[i])
-				append(DisksStr, os::fs::drive::get_device_path(i), Separator);
-		}
-		// remove trailing ", "
-		if (!DisksStr.empty())
-		{
-			DisksStr.resize(DisksStr.size() - Separator.size());
-		}
-		else
-		{
-			DisksStr = join(Info.DevicePaths.Volumes, L", "sv);
-		}
+
+		auto DisksStr = join(Separator, os::fs::enum_drives(Info.DevicePaths.Disks) | std::views::transform([](wchar_t const Drive){ return os::fs::drive::get_device_path(Drive); }));
+
+		if (DisksStr.empty())
+			DisksStr = join(Separator, Info.DevicePaths.Volumes);
 
 		std::vector<string> MessageItems;
 		MessageItems.reserve(6);
@@ -444,7 +439,7 @@ static bool RemoveHotplugDriveDevice(const DeviceInfo& Info, bool const Confirm,
 			MessageItems.emplace_back(strFriendlyName);
 
 		if (!DisksStr.empty())
-			MessageItems.emplace_back(format(msg(lng::MHotPlugDisks), DisksStr));
+			MessageItems.emplace_back(far::vformat(msg(lng::MHotPlugDisks), DisksStr));
 
 		MessageResult = Message(MSG_WARNING,
 			msg(lng::MChangeHotPlugDisconnectDriveTitle),
@@ -452,7 +447,7 @@ static bool RemoveHotplugDriveDevice(const DeviceInfo& Info, bool const Confirm,
 			{ lng::MHRemove, lng::MHCancel });
 	}
 
-	if (MessageResult != Message::first_button)
+	if (MessageResult != message_result::first_button)
 	{
 		Cancelled = true;
 		return false;
@@ -511,12 +506,12 @@ bool RemoveHotplugDrive(string_view const Path, bool const Confirm, bool& Cancel
 		if (PathType == root_type::win32nt_drive_letter)
 		{
 			const auto DiskNumber = os::fs::drive::get_number(Path[L"\\\\?\\"sv.size()]);
-			return std::find_if(CONST_RANGE(Info, i) { return i.DevicePaths.Disks[DiskNumber]; });
+			return std::ranges::find_if(Info, [&](DeviceInfo const& i){ return i.DevicePaths.Disks[DiskNumber]; });
 		}
 
-		return std::find_if(CONST_RANGE(Info, i)
+		return std::ranges::find_if(Info, [&](DeviceInfo const& i)
 		{
-			return std::any_of(ALL_CONST_RANGE(i.DevicePaths.Volumes), [&](string const& VolumeName)
+			return std::ranges::any_of(i.DevicePaths.Volumes, [&](string const& VolumeName)
 			{
 				return equal_icase(VolumeName, Path);
 			});
@@ -534,7 +529,7 @@ bool RemoveHotplugDrive(string_view const Path, bool const Confirm, bool& Cancel
 
 void ShowHotplugDevices()
 {
-	const auto HotPlugList = VMenu2::create(msg(lng::MHotPlugListTitle), {}, 0);
+	const auto HotPlugList = VMenu2::create(msg(lng::MHotPlugListTitle), {});
 	std::vector<DeviceInfo> Info;
 
 	const auto FillMenu = [&]()
@@ -587,25 +582,16 @@ void ShowHotplugDevices()
 	HotPlugList->AssignHighlights();
 	HotPlugList->SetBottomTitle(KeysToLocalizedText(KEY_DEL, KEY_CTRLR));
 
-	bool NeedRefresh = false;
-
-	SCOPED_ACTION(listener)(update_devices, [&NeedRefresh]()
+	SCOPED_ACTION(listener)(update_devices, [&]
 	{
-		NeedRefresh = true;
+		HotPlugList->ProcessKey(Manager::Key(KEY_CTRLR));
 	});
 
 	HotPlugList->Run([&](const Manager::Key& RawKey)
 	{
-		auto Key=RawKey();
-		if(Key==KEY_NONE && NeedRefresh)
-		{
-			Key=KEY_CTRLR;
-			NeedRefresh = false;
-		}
-
 		int KeyProcessed = 1;
 
-		switch (Key)
+		switch (RawKey())
 		{
 			case KEY_F1:
 			{
@@ -632,7 +618,7 @@ void ShowHotplugDevices()
 					else if (!Cancelled)
 					{
 						SetLastError(ERROR_DRIVE_LOCKED); // ... "The disk is in use or locked by another process."
-						const auto ErrorState = error_state::fetch();
+						const auto ErrorState = os::last_error();
 
 						Message(MSG_WARNING, ErrorState,
 							msg(lng::MError),

@@ -39,9 +39,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Platform:
 #include "platform.hpp"
+#include "platform.security.hpp"
 
 // Common:
-#include "common/range.hpp"
 #include "common/string_utils.hpp"
 
 // External:
@@ -50,16 +50,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace os::env
 {
-	const wchar_t* provider::detail::provider::data() const
+	provider::strings::strings():
+		m_Data(GetEnvironmentStrings())
 	{
-		return m_Data;
-	}
-
-	//-------------------------------------------------------------------------
-
-	provider::strings::strings()
-	{
-		m_Data = GetEnvironmentStrings();
 	}
 
 	provider::strings::~strings()
@@ -70,15 +63,18 @@ namespace os::env
 		}
 	}
 
+	const wchar_t* provider::strings::data() const
+	{
+		return m_Data;
+	}
+
 	//-------------------------------------------------------------------------
 
 	provider::block::block()
 	{
-		m_Data = nullptr;
-		handle TokenHandle;
-		if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &ptr_setter(TokenHandle)))
+		if (const auto TokenHandle = security::open_current_process_token(TOKEN_QUERY))
 		{
-			CreateEnvironmentBlock(reinterpret_cast<void**>(&m_Data), TokenHandle.native_handle(), TRUE);
+			CreateEnvironmentBlock(std::bit_cast<void**>(&m_Data), TokenHandle.native_handle(), TRUE);
 		}
 	}
 
@@ -90,19 +86,24 @@ namespace os::env
 		}
 	}
 
+	const wchar_t* provider::block::data() const
+	{
+		return m_Data;
+	}
+
 	//-------------------------------------------------------------------------
 
 	bool get(const string_view Name, string& Value)
 	{
 		last_error_guard ErrorGuard;
-		null_terminated C_Name(Name);
+		const null_terminated C_Name(Name);
 
 		// GetEnvironmentVariable might return 0 not only in case of failure, but also when the variable is empty.
 		// To recognise this, we set LastError to ERROR_SUCCESS manually and check it after the call,
 		// which doesn't change it upon success.
 		SetLastError(ERROR_SUCCESS);
 
-		if (detail::ApiDynamicStringReceiver(Value, [&](span<wchar_t> Buffer)
+		if (detail::ApiDynamicStringReceiver(Value, [&](std::span<wchar_t> Buffer)
 		{
 			return ::GetEnvironmentVariable(C_Name.c_str(), Buffer.data(), static_cast<DWORD>(Buffer.size()));
 		}))
@@ -140,19 +141,18 @@ namespace os::env
 
 	string expand(const string_view Str)
 	{
-		null_terminated C_Str(Str);
+		const null_terminated C_Str(Str);
 
 		bool Failure = false;
 
 		string Result;
-		if (!detail::ApiDynamicStringReceiver(Result, [&](span<wchar_t> Buffer)
+		if (!detail::ApiDynamicStringReceiver(Result, [&](std::span<wchar_t> Buffer)
 		{
 			// ExpandEnvironmentStrings return value always includes the terminating null character.
 			// ApiDynamicStringReceiver expects a string length upon success (e.g. without the \0),
 			// but we cannot simply subtract 1 from the returned value - the function can also return 1
 			// when the result exists, but empty, so if we do that, it will be treated as error.
-			const auto ReturnedSize = ::ExpandEnvironmentStrings(C_Str.c_str(), Buffer.data(), static_cast<DWORD>(Buffer.size()));
-			switch (ReturnedSize)
+			switch (const auto ReturnedSize = ::ExpandEnvironmentStrings(C_Str.c_str(), Buffer.data(), static_cast<DWORD>(Buffer.size())))
 			{
 			case 0:
 				// Failure

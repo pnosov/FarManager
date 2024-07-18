@@ -46,13 +46,14 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-class desktop: public window
+class desktop final: public window
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
 
 public:
 	static desktop_ptr create();
 	explicit desktop(private_tag);
+	~desktop() override;
 
 	int GetType() const override { return windowtype_desktop; }
 	int GetTypeAndName(string& Type, string& Name) override { Type = GetTitle();  return GetType(); }

@@ -37,9 +37,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Internal:
 
 // Platform:
+#include "platform.hpp"
 
 // Common:
-#include "common/range.hpp"
 #include "common/smart_ptr.hpp"
 
 // External:
@@ -64,22 +64,24 @@ namespace os::security
 	[[nodiscard]]
 	bool is_admin();
 
+	[[nodiscard]]
+	handle open_current_process_token(DWORD DesiredAccess);
+
 	class privilege
 	{
 	public:
 		NONCOPYABLE(privilege);
 		MOVE_CONSTRUCTIBLE(privilege);
 
-		privilege(const std::initializer_list<const wchar_t* const>& Names): privilege(span(Names)) {}
-		explicit privilege(span<const wchar_t* const> Names);
+		privilege(const std::initializer_list<const wchar_t* const>& Names): privilege(std::span(Names)) {}
+		explicit privilege(std::span<const wchar_t* const> Names);
 		~privilege();
 
-		template<class... args>
 		[[nodiscard]]
-		static bool check(args&&... Args) { return check({ FWD(Args)... }); }
+		static bool check(auto&&... Args) { return check({{ FWD(Args)... }}); }
 
 		[[nodiscard]]
-		static bool check(span<const wchar_t* const> Names);
+		static bool check(std::span<const wchar_t* const> Names);
 
 	private:
 		block_ptr<TOKEN_PRIVILEGES> m_SavedState;

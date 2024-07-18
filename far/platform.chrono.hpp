@@ -86,6 +86,12 @@ namespace os::chrono
 	using duration = nt_clock::duration;
 	using time_point = nt_clock::time_point;
 
+	SYSTEMTIME now_utc();
+	SYSTEMTIME now_local();
+
+	bool utc_to_local(time_point UtcTime, SYSTEMTIME& LocalTime);
+	bool local_to_utc(const SYSTEMTIME& LocalTime, time_point& UtcTime);
+
 	// Q: WTF is this, it's in the standard!
 	// A: MSVC implemented it in terms of sleep_until, which is mental
 	void sleep_for(std::chrono::milliseconds Duration);
@@ -94,12 +100,12 @@ namespace os::chrono
 	bool get_process_creation_time(HANDLE Process, time_point& CreationTime);
 
 	[[nodiscard]]
-	string format_time();
+	string wall_time(time_point Time);
 
 	namespace literals
 	{
 		[[nodiscard]]
-		constexpr auto operator"" _hns(unsigned long long const Value) noexcept
+		consteval auto operator""_hns(unsigned long long const Value) noexcept
 		{
 			return hectonanoseconds(Value);
 		}

@@ -1,42 +1,59 @@
 BEGIN{
   ORS=""
   bootstrap = ENVIRON["BOOTSTRAPDIR"]
+  split(ENVIRON["FORCEINCLUDELIST"], force_include, " ")
   if (compiler=="gcc")
   {
+    dirsep="/";
     out="$(OBJDIR)";
     obj="o";
     rc="rc.o"
-    dirsep="/";
   }
   else
   {
-    out="$(INTDIR)";
+    dirsep="\\";
+    out="$(INTDIR)" dirsep;
     obj="obj";
     rc="res"
-    dirsep="\\";
   }
 }
 {
-  i = split($0, a, ".");
-  filename = a[1];
-  for (j=2; j < i; j++)
-    filename = filename "." a[j]
-  ext = a[i];
+  if (match($0, /(.+)\.(.+)/, a))
+  {
+    filename = a[1]
+    ext = a[2]
+  }
+
+  if (match(filename, /(.+\\).+/, a))
+  {
+    path_part = a[1]
+  }
+
+  is_cpp = ext == "cpp"
 
   if(ext == "cpp" || ext == "c")
     ext=obj;
   if(ext == "rc")
     ext=rc;
-  if(ext == "hpp")
+
+  if(path_part == "" && (ext == obj || ext == rc))
   {
-    ext="hpp";
-    print filename "." ext ":";
+    print out filename "." ext ":";
+    print " " $0;
+
+    if (is_cpp)
+    {
+      for (i in force_include)
+        print " " force_include[i];
+    }
+    else if (ext == obj)
+        print " disabled_warnings.hpp"
   }
   else
   {
-    print out dirsep filename "." ext ":";
-    print " " $0;
+    print filename "." ext ":";
   }
+
   while((getline lnsrc < ($0)) > 0)
   {
     if(substr(lnsrc,1,length("#include \"")) == "#include \"")
@@ -45,7 +62,7 @@ BEGIN{
       if(lnsrc != "" && lnsrc != $0)
         if(substr(lnsrc,1,length("bootstrap/")) == "bootstrap/")
           lnsrc = bootstrap substr(lnsrc, length("bootstrap/") + 1)
-        print " " lnsrc;
+        print " " path_part lnsrc;
     }
   }
   print "\n\n"

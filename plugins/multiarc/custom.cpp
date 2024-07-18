@@ -363,7 +363,7 @@ DWORD WINAPI _export LoadFormatModule(const char *ModuleName)
 
 BOOL WINAPI _export IsArchive(const char *Name, const unsigned char *Data, int DataSize)
 {
-    char *Dot = strrchr((char *) Name, '.');
+    const char *Dot = strrchr(Name, '.');
 
     for(int I = 0;; I++)
     {
@@ -1095,7 +1095,7 @@ void ParseListingItemPlain(const char *CurFormat, const char *CurStr,
         switch (*CurFormat)
         {
         case '*':
-            if(isspace(*CurStr) || !CurStr)
+            if(isspace(*CurStr) || !*CurStr)
                 CurStr--;
             else
                 while( /*CurStr[0] && */ CurStr[1] /*&& !isspace(CurStr[0]) */

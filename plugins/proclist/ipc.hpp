@@ -407,7 +407,7 @@ public:
 			if (NumberOfBytesRead)
 				*NumberOfBytesRead = static_cast<size_t>(Read);
 
-			return Result == STATUS_SUCCESS;
+			return NT_SUCCESS(Result);
 		}
 		else
 #endif
@@ -451,7 +451,7 @@ public:
 	)
 	{
 		typename types::PROCESS_BASIC_INFORMATION processInfo;
-		if (
+		if (const auto Status =
 			(
 #ifndef _WIN64
 				Ipc == x64? pNtWow64QueryInformationProcess64 :
@@ -462,7 +462,7 @@ public:
 				ProcessBasicInformation,
 				&processInfo,
 				sizeof(processInfo), {}
-			) != STATUS_SUCCESS)
+			); !NT_SUCCESS(Status))
 			return false;
 
 		//FindModule, obtained from PSAPI.DLL
@@ -565,7 +565,7 @@ public:
 		}
 	}
 
-	static void PrintModules(HANDLE Process, HANDLE InfoFile, options& Opt)
+	static void PrintModules(HANDLE Process, HANDLE InfoFile, options& LocalOpt)
 	{
 		typename types::LDR_MODULE Data;
 		typename types::PTR pProcessParams{};
@@ -577,7 +577,7 @@ public:
 
 			do
 			{
-				print_module(InfoFile, Data.BaseAddress, Data.SizeOfImage, Opt, [&](wchar_t* const Buffer, size_t const BufferSize)
+				print_module(InfoFile, Data.BaseAddress, Data.SizeOfImage, LocalOpt, [&](wchar_t* const Buffer, size_t const BufferSize)
 				{
 					return read_process_memory(Process, Data.FullDllName.Buffer, Buffer, BufferSize * sizeof(*Buffer));
 				});

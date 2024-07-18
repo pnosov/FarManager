@@ -32,12 +32,17 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "placement.hpp"
+
 //----------------------------------------------------------------------------
 
 namespace nifty_counter
 {
 	template<typename type>
-	using buffer = std::aligned_storage_t<sizeof(type), alignof(type)>;
+	struct buffer
+	{
+		alignas(type) std::byte data[sizeof(type)];
+	};
 }
 
 #define NIFTY_DECLARE(Type, Instance)\
@@ -53,6 +58,11 @@ namespace Instance##_nifty_objects\
 \
 extern Type& Instance
 
+#ifdef _DEBUG
+#define NIFTY_DEBUG(str) OutputDebugString(str "\n")
+#else
+#define NIFTY_DEBUG(str)
+#endif
 
 #define NIFTY_DEFINE(Type, Instance)\
 namespace Instance##_nifty_objects\
@@ -63,16 +73,22 @@ namespace Instance##_nifty_objects\
 	initialiser::initialiser()\
 	{\
 		if (!InitCounter++)\
+		{\
+			NIFTY_DEBUG(L"Construct " #Type); \
 			placement::construct(Instance);\
+		}\
 	}\
 \
 	initialiser::~initialiser()\
 	{\
 		if (!--InitCounter)\
+		{\
+			NIFTY_DEBUG(L"Destruct " #Type); \
 			placement::destruct(Instance);\
+		}\
 	}\
 }\
 \
-Type& Instance = reinterpret_cast<Type&>(Instance##_nifty_objects::InitBuffer)
+Type& Instance = *static_cast<Type*>(static_cast<void*>(&Instance##_nifty_objects::InitBuffer.data))
 
 #endif // NIFTY_COUNTER_HPP_81EED24A_897B_4E3E_A23D_4117272E29D9

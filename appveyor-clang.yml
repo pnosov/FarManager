@@ -9,9 +9,10 @@ skip_non_tags: false
 
 max_jobs: 8
 
-image: Visual Studio 2019
+image: Visual Studio 2022
 
 init:
+  - git config --global core.autocrlf true
 
 clone_folder: c:\projects\FarManager
 
@@ -20,7 +21,7 @@ clone_depth: 1
 
 install:
   - cd far && for /f "tokens=1,2,4 delims=, " %%i in ('tools\m4 -P farversion.inc.m4') do appveyor UpdateBuild -Version %%i.%%j.%%k.%APPVEYOR_BUILD_NUMBER% && cd ..
-  - call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvars%bit%.bat"
+  - call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars%bit%.bat"
   - set Path=C:\Program Files\LLVM\bin;%Path%
 
 environment:
@@ -60,7 +61,7 @@ after_build:
   - appveyor SetVariable -Name NAME_PREFIX -Value "%NAME_PREFIX%"
   #archive Far
   #save artifacts only for release as we keep on reaching the appveyor limit
-  - if "%configuration%" == "Release" 7z a "%APPVEYOR_BUILD_FOLDER%\%NAME_PREFIX%.7z" -x!obj\
+  - if "%configuration%" == "Release" 7z a -m0=LZMA -mf=BCJ2 -mx9 "%APPVEYOR_BUILD_FOLDER%\%NAME_PREFIX%.7z" -x!obj\
   - cd ..\..
 
 artifacts:

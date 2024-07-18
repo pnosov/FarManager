@@ -38,22 +38,23 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 // Internal:
 #include "plugin.hpp"
+#include "exception.hpp"
 
 // Platform:
 
 // Common:
+#include "common/string_utils.hpp"
 
 // External:
+#include "stack_allocator.hpp"
 
 //----------------------------------------------------------------------------
 
 //#define RE_DEBUG
 
-//! Possible compile and runtime errors returned by LastError.
+//! Possible compile and runtime errors
 enum REError
 {
-	//! No errors
-	errNone=0,
 	//! RegExp wasn't even tried to compile
 	errNotCompiled,
 	//! expression contain syntax error
@@ -72,44 +73,91 @@ enum REError
 	errInvalidRange,
 	//! Quantifier applied to invalid object. f.e. lookahead assertion
 	errInvalidQuantifiersCombination,
-	//! Size of match array isn't large enough.
-	errNotEnoughMatches,
-	//! Attempt to match RegExp with Named Brackets, and no storage class provided.
-	errNoStorageForNB,
+	//! Incomplete group structure
+	errIncompleteGroupStructure,
+	//! A subpattern name must be unique
+	errSubpatternGroupNameMustBeUnique,
 	//! Reference to undefined named bracket
 	errReferenceToUndefinedNamedBracket,
 	//! Only fixed length look behind assertions are supported
 	errVariableLengthLookBehind,
-
-	errCancelled
 };
 
 enum
 {
+	OP_NONE         = 0,
 	//! Match in a case insensitive manner
-	OP_IGNORECASE   =0x0001,
+	OP_IGNORECASE   = 0x0001,
 	//! Single line mode, dot meta-character will match newline symbol
-	OP_SINGLELINE   =0x0002,
+	OP_SINGLELINE   = 0x0002,
 	//! MultiLine mode, ^ and $ can match line start and line end
-	OP_MULTILINE    =0x0004,
+	OP_MULTILINE    = 0x0004,
 	//! Extended syntax, spaces symbols are ignored unless escaped
-	OP_XTENDEDSYNTAX=0x0008,
+	OP_XTENDEDSYNTAX= 0x0008,
 	//! Perl style RegExp provided. i.e. /expression/imsx
-	OP_PERLSTYLE    =0x0010,
+	OP_PERLSTYLE    = 0x0010,
 	//! Optimize after compile
-	OP_OPTIMIZE     =0x0020,
+	OP_OPTIMIZE     = 0x0020,
 	//! Strict escapes - only unrecognized escape will produce errInvalidEscape error
-	OP_STRICT       =0x0040,
-	//! Replace backslash with slash, used
-	//! when RegExp source embedded in c++ sources
-	OP_CPPMODE      =0x0080,
+	OP_STRICT       = 0x0040,
 };
 
-//! Hash table with match info
-struct MatchHash
+class regex_match
 {
-	std::unordered_map<std::wstring, RegExpMatch> Matches;
+public:
+	using matches = std::vector<RegExpMatch, stack_allocator<RegExpMatch, 4096>>;
+
+private:
+	matches::allocator_type::arena_type m_Arena;
+
+public:
+	matches Matches{ m_Arena };
 };
+
+class named_regex_match
+{
+public:
+	using matches = std::unordered_map<
+		string,
+		size_t,
+		string_comparer,
+		string_comparer,
+		stack_allocator<std::pair<string const, size_t>, 4096>
+	>;
+
+private:
+	matches::allocator_type::arena_type m_Arena;
+
+public:
+	matches Matches{ m_Arena };
+};
+
+class regex_exception: public far_exception
+{
+public:
+	explicit regex_exception(REError const Code, size_t const Position, source_location const& Location = source_location::current()):
+		far_exception(to_string(Code), false, Location),
+		m_Code(Code),
+		m_Position(Position)
+	{}
+
+	REError code() const
+	{
+		return m_Code;
+	}
+
+	size_t position() const
+	{
+		return m_Position;
+	}
+
+private:
+	static string_view to_string(REError Code);
+
+	REError m_Code;
+	size_t m_Position;
+};
+
 
 /*! Regular expressions support class.
 
@@ -122,12 +170,13 @@ public:
 	struct REOpCode;
 	struct UniSet;
 	struct StateStackItem;
+	class state_stack;
 
 private:
+
+
 		// code
 		std::vector<REOpCode> code;
-		char slashChar;
-		char backslashChar;
 
 		std::unique_ptr<UniSet> firstptr;
 		UniSet& first;
@@ -137,31 +186,21 @@ private:
 
 		int minlength{};
 
-		// error info
-		mutable int errorcode;
-		mutable int errorpos{};
-		int srcstart{};
-
 		// options
 		int ignorecase{};
 
 		int bracketscount{};
 		int maxbackref{};
-		int havenamedbrackets{};
 #ifdef RE_DEBUG
-		std::wstring resrc;
+		string resrc;
 #endif
 
 		int CalcLength(string_view src);
-		bool InnerCompile(const wchar_t* start, const wchar_t* src, int srclength, int options);
+		void InnerCompile(const wchar_t* start, const wchar_t* src, int srclength, int options);
 
-		bool InnerMatch(const wchar_t* start, const wchar_t* str, const wchar_t* strend, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch, std::vector<StateStackItem>& stack) const;
+		bool InnerMatch(const wchar_t* start, const wchar_t* str, const wchar_t* strend, regex_match& RegexMatch, named_regex_match& NamedMatch, state_stack& Statetack) const;
 
 		void TrimTail(const wchar_t* start, const wchar_t*& strend) const;
-
-		// BUGBUG not thread safe!
-		// TODO: split to compile errors (stateful) and match errors (stateless)
-		bool SetError(int _code, int pos) const { errorcode = _code; errorpos = pos; return false; }
 
 		int StrCmp(const wchar_t*& str,const wchar_t* start,const wchar_t* end) const;
 
@@ -179,72 +218,53 @@ private:
 		    \param src - source of expression
 		    \param options - compile options
 
-		    If compilation fails error code can be obtained with LastError function,
-		    position of error in a expression can be obtained with ErrorPosition function.
+		    If compilation fails an exception is thrown, error and position can be obtained from it.
 		    See error codes in REError enumeration.
 		    \sa LastError
 		    \sa REError
 		    \sa ErrorPosition
 		    \sa options
 		*/
-		bool Compile(string_view src, int options=OP_PERLSTYLE|OP_OPTIMIZE);
+		void Compile(string_view src, int options = OP_NONE);
 
 		/*! Try to optimize regular expression
-		    Significally speedup Search mode in some cases.
+		    Significantly speedup Search mode in some cases.
 		*/
 		bool Optimize();
 
 		/*! Try to match string with regular expression
 		    \param text - string to match
 		    \param match - array of SMatch structures that receive brackets positions.
-		    \param matchcount - in/out parameter that indicate number of items in
-		    match array on input, and number of brackets on output.
-		    \param hmatch - storage of named brackets.
+		    \param NamedMatch - storage of named brackets.
 		    \sa SMatch
 		*/
-		bool Match(string_view text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch = nullptr) const;
+		bool Match(string_view text, regex_match& match, named_regex_match* NamedMatch = {}) const;
 		/*! Advanced version of match. Can be used for multiple matches
 		    on one string (to imitate /g modifier of perl regexp
 		*/
-		bool MatchEx(string_view text, size_t From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch = nullptr) const;
+		bool MatchEx(string_view text, size_t From, regex_match& match, named_regex_match* NamedMatch = {}) const;
 		/*! Try to find substring that will match regexp.
 		    Parameters and return value are the same as for Match.
 		    It is highly recommended to call Optimize before Search.
 		*/
-		bool Search(string_view text, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch = nullptr) const;
+		bool Search(string_view text, regex_match& match, named_regex_match* NamedMatch = {}) const;
 		/*! Advanced version of search. Can be used for multiple searches
 		    on one string (to imitate /g modifier of perl regexp
 		*/
-		bool SearchEx(string_view text, size_t From, RegExpMatch* match, intptr_t& matchcount, MatchHash* hmatch = nullptr) const;
+		bool SearchEx(string_view text, size_t From, regex_match& match, named_regex_match* NamedMatch = {}) const;
 
 		bool Search(string_view Str) const;
 
-		/*! Get last error
-		    \return code of the last error
-		    Check REError for explanation
-		    \sa REError
-		    \sa ErrorPosition
-		*/
-		int LastError() const {return errorcode;}
-		/*! Get last error position.
-		    \return position of the last error in the regexp source.
-		    \sa LastError
-		*/
-		int ErrorPosition() const { return srcstart + errorpos; }
-		/*! Get number of brackets in expression
-		    \return number of brackets, excluding brackets of type (:expr)
-		    and named brackets.
-		*/
 		int GetBracketsCount() const {return bracketscount;}
-		using BracketHandler = bool(*)(void* data,int action,int brindex,int start,int end);
-		void SetBracketHandler(BracketHandler bh,void* data)
-		{
-			brhandler=bh;
-			brhdata=data;
-		}
-	protected:
-		BracketHandler brhandler{};
-		void* brhdata{};
 };
+
+constexpr string_view get_match(string_view const Str, RegExpMatch const& Match)
+{
+	if (Match.start < 0)
+		return Str.substr(Str.size());
+
+	assert(Match.end >= Match.start);
+	return Str.substr(Match.start, Match.end - Match.start);
+}
 
 #endif // REGEXP_HPP_18B41BD7_69F8_461A_8A81_069B447D5554

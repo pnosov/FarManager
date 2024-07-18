@@ -73,13 +73,13 @@ static TypeString checkTypeString(const string& TestStr)
 		auto ptrTestStr = TestStr.c_str();
 		wchar_t ch, ch2;
 		bool isNum     = true;
-//		bool isDec     = false;
+		//bool isDec     = false;
 		bool isBegDec  = false;
-//		bool isHex     = false;
+		//bool isHex     = false;
 		bool isBegHex  = false;
-//		bool isOct     = false;
+		//bool isOct     = false;
 		bool isBegOct  = false;
-//		bool isE       = false;
+		//bool isE       = false;
 		bool isExp     = false;
 		bool isPoint   = false;
 		bool isSign    = false;
@@ -311,7 +311,7 @@ const string& TVar::asString() const
 		// For doubles fmt::to_wstring adds ".0" even if there's no fractional part
 		// (e.g. 1234.0 to "1234.0"), and it's a feature (see issue #1153).
 		// For historical reasons we prefer the shortest possible representation, hence "g".
-		str = isInteger()? ::str(inum) : format(FSTR(L"{0:.6g}"), dnum);
+		str = isInteger()? ::str(inum) : far::format(L"{:.6g}"sv, dnum);
 	}
 	return str;
 }

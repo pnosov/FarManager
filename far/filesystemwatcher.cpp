@@ -37,153 +37,218 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "filesystemwatcher.hpp"
 
 // Internal:
-#include "flink.hpp"
 #include "elevation.hpp"
 #include "exception_handler.hpp"
 #include "pathmix.hpp"
-#include "exception.hpp"
+#include "log.hpp"
+#include "notification.hpp"
 
 // Platform:
+#include "platform.hpp"
+#include "platform.concurrency.hpp"
+#include "platform.debug.hpp"
 #include "platform.fs.hpp"
 
 // Common:
+#include "common/scope_exit.hpp"
+#include "common/singleton.hpp"
 #include "common/string_utils.hpp"
 
 // External:
 
 //----------------------------------------------------------------------------
 
-FileSystemWatcher::FileSystemWatcher():
-	m_WatchSubtree(false),
-	m_Cancelled(os::event::type::manual, os::event::state::nonsignaled)
+class background_watcher: public singleton<background_watcher>
 {
+	IMPLEMENTS_SINGLETON;
+
+public:
+	void add(const FileSystemWatcher* Client)
+	{
+		SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+		m_Clients.emplace_back(Client);
+
+		if (!m_Thread.joinable() || m_Thread.is_signaled())
+			m_Thread = os::thread(&background_watcher::process, this);
+
+		m_Update.set();
+	}
+
+	void remove(const FileSystemWatcher* Client)
+	{
+		{
+			SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+			std::erase(m_Clients, Client);
+		}
+
+		m_UpdateDone.reset();
+		m_Update.set();
+
+		// We have to ensure that the client event handle is no longer used by the watcher before letting the client go
+		(void)os::handle::wait_any({ m_UpdateDone.native_handle(), m_Thread.native_handle()});
+	}
+
+private:
+	void process()
+	{
+		os::debug::set_thread_name(L"FS watcher");
+
+		for (;;)
+		{
+			{
+				m_UpdateDone.reset();
+				SCOPE_EXIT{ m_UpdateDone.set(); };
+
+				{
+					SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+					if (m_Clients.empty())
+					{
+						LOGDEBUG(L"FS Watcher exit"sv);
+						return;
+					}
+
+					m_Handles.resize(1);
+					std::ranges::transform(m_Clients, std::back_inserter(m_Handles), [](const FileSystemWatcher* const Client) { return Client->m_Event.native_handle(); });
+				}
+			}
+
+			const auto Result = os::handle::wait_any(m_Handles);
+
+			if (Result == 0)
+			{
+				if (m_Exit)
+					return;
+
+				continue;
+			}
+
+			{
+				SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+				m_Clients[Result - 1]->callback_notify();
+
+				for (const auto& Client : m_Clients)
+				{
+					if (Client != m_Clients[Result - 1] && Client->m_Event.is_signaled())
+						Client->callback_notify();
+				}
+			}
+
+			// FS changes can occur at a high rate.
+			// We don't care about individual events, so we wait a little here to let them collapse to one event per sec at most:
+			(void)m_Update.is_signaled(1s);
+		}
+	}
+
+	~background_watcher()
+	{
+		m_Exit = true;
+		m_Update.set();
+	}
+
+	os::critical_section m_CS;
+	os::event
+		m_Update{ os::event::type::automatic, os::event::state::nonsignaled },
+		m_UpdateDone{ os::event::type::automatic, os::event::state::nonsignaled };
+	std::vector<const FileSystemWatcher*> m_Clients;
+	std::vector<HANDLE> m_Handles{ m_Update.native_handle() };
+	std::atomic_bool m_Exit{};
+	os::thread m_Thread;
+};
+
+static os::handle open(const string_view Directory)
+{
+	SCOPED_ACTION(elevation::suppress);
+
+	auto DirectoryHandle = os::fs::create_file(
+		Directory,
+		FILE_LIST_DIRECTORY,
+		os::fs::file_share_all,
+		{},
+		OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED
+	);
+
+	if (!DirectoryHandle)
+		LOGERROR(L"create_file({}): {}"sv, Directory, os::last_error());
+
+	return DirectoryHandle;
 }
 
+FileSystemWatcher::FileSystemWatcher(const string_view EventId, const string_view Directory, const bool WatchSubtree):
+	m_EventId(EventId),
+	m_Directory(nt_path(Directory)),
+	m_WatchSubtree(WatchSubtree),
+	m_DirectoryHandle(open(m_Directory))
+{
+	if (!m_DirectoryHandle)
+	{
+		LOGWARNING(L"Skip monitoring of {}"sv, Directory);
+		return;
+	}
+
+	m_Overlapped.hEvent = m_Event.native_handle();
+	read_async();
+
+	LOGDEBUG(L"Start monitoring {}"sv, m_Directory);
+	background_watcher::instance().add(this);
+}
 
 FileSystemWatcher::~FileSystemWatcher()
 {
-	try
+	if (!m_DirectoryHandle)
+		return;
+
+	LOGDEBUG(L"Stop monitoring {}"sv, m_Directory);
+	background_watcher::instance().remove(this);
+}
+
+void FileSystemWatcher::read_async() const
+{
+	if (!ReadDirectoryChangesW(
+		m_DirectoryHandle.native_handle(),
+		&Buffer,
+		sizeof(Buffer),
+		m_WatchSubtree,
+		FILE_NOTIFY_CHANGE_FILE_NAME |
+		FILE_NOTIFY_CHANGE_DIR_NAME |
+		FILE_NOTIFY_CHANGE_ATTRIBUTES |
+		FILE_NOTIFY_CHANGE_SIZE |
+		FILE_NOTIFY_CHANGE_LAST_WRITE |
+		FILE_NOTIFY_CHANGE_LAST_ACCESS |
+		FILE_NOTIFY_CHANGE_CREATION |
+		FILE_NOTIFY_CHANGE_SECURITY,
+		{},
+		&m_Overlapped,
+		{}
+	))
 	{
-		Release();
-	}
-	catch (...)
-	{
-		// TODO: log
+		LOGERROR(L"ReadDirectoryChangesW({}): {}"sv, m_Directory, os::last_error());
 	}
 }
 
-void FileSystemWatcher::Set(string_view const Directory, bool const WatchSubtree)
+void FileSystemWatcher::callback_notify() const
 {
-	Release();
-
-	m_Directory = NTPath(Directory);
-	m_WatchSubtree = WatchSubtree;
-
-	if (os::fs::GetFileTimeSimple(Directory, nullptr, nullptr, &m_PreviousLastWriteTime, nullptr))
-		m_CurrentLastWriteTime = m_PreviousLastWriteTime;
-
-	m_IsFatFilesystem.reset();
-}
-
-void FileSystemWatcher::Watch(bool got_focus, bool check_time)
-{
-	PropagateException();
-
-	SCOPED_ACTION(elevation::suppress);
-
-	if(!m_RegistrationThread)
-		m_RegistrationThread = os::thread(os::thread::mode::join, &FileSystemWatcher::Register, this);
-
-	if (got_focus)
+	if (DWORD BytesReturned = 0; !GetOverlappedResult(m_DirectoryHandle.native_handle(), &m_Overlapped, &BytesReturned, false))
 	{
-		if (!m_IsFatFilesystem.has_value())
+		const auto LastError = os::last_error();
+		if (!(LastError.Win32Error == ERROR_ACCESS_DENIED && LastError.NtError == STATUS_DELETE_PENDING))
 		{
-			m_IsFatFilesystem = false;
-
-			const auto strRoot = GetPathRoot(m_Directory);
-			if (!strRoot.empty())
-			{
-				string strFileSystem;
-				if (os::fs::GetVolumeInformation(strRoot, nullptr, nullptr, nullptr, nullptr, &strFileSystem))
-					m_IsFatFilesystem = starts_with(strFileSystem, L"FAT"sv);
-			}
+			LOGWARNING(L"GetOverlappedResult({}): {}"sv, m_Directory, LastError);
 		}
 
-		if (*m_IsFatFilesystem)
-		{
-			// emulate FAT folder time change
-			// otherwise changes missed (FAT folder time is NOT modified)
-			// the price is directory reload on each GOT_FOCUS event
-			check_time = false;
-			m_PreviousLastWriteTime = m_CurrentLastWriteTime - 1s;
-		}
+		LOGDEBUG(L"Stop monitoring {}"sv, m_Directory);
+		return;
 	}
 
-	if (check_time)
-	{
-		if (!os::fs::GetFileTimeSimple(m_Directory, nullptr, nullptr, &m_CurrentLastWriteTime, nullptr))
-		{
-			m_PreviousLastWriteTime = {};
-			m_CurrentLastWriteTime = {};
-		}
-	}
-}
+	LOGDEBUG(L"Change event in {}"sv, m_Directory);
 
-void FileSystemWatcher::Release()
-{
-	PropagateException();
+	LOGDEBUG(L"Notifying the listener {}"sv, m_EventId);
+	message_manager::instance().notify(m_EventId);
 
-	if (m_RegistrationThread)
-	{
-		m_Cancelled.set();
-		m_RegistrationThread = {};
-	}
-
-	m_Cancelled.reset();
-	m_Notification = {};
-	m_PreviousLastWriteTime = m_CurrentLastWriteTime;
-}
-
-bool FileSystemWatcher::Signaled() const
-{
-	PropagateException();
-
-	return (m_Notification && m_Notification.is_signaled()) || m_PreviousLastWriteTime != m_CurrentLastWriteTime;
-}
-
-void FileSystemWatcher::Register()
-{
-	seh_try_thread(m_ExceptionPtr, [this]
-	{
-		cpp_try(
-		[&]
-		{
-			m_Notification = os::fs::FindFirstChangeNotification(m_Directory, m_WatchSubtree,
-				FILE_NOTIFY_CHANGE_FILE_NAME |
-				FILE_NOTIFY_CHANGE_DIR_NAME |
-				FILE_NOTIFY_CHANGE_ATTRIBUTES |
-				FILE_NOTIFY_CHANGE_SIZE |
-				FILE_NOTIFY_CHANGE_LAST_WRITE);
-
-			if (!m_Notification)
-				return;
-
-			(void)os::handle::wait_any({ m_Notification.native_handle(), m_Cancelled.native_handle() });
-		},
-		[&]
-		{
-			SAVE_EXCEPTION_TO(m_ExceptionPtr);
-			m_IsRegularException = true;
-		});
-	});
-}
-
-void FileSystemWatcher::PropagateException() const
-{
-	if (m_ExceptionPtr && !m_IsRegularException)
-	{
-		// You're someone else's problem
-		m_RegistrationThread.detach();
-	}
-	rethrow_if(m_ExceptionPtr);
+	LOGDEBUG(L"Continue monitoring {}"sv, m_Directory);
+	read_async();
 }

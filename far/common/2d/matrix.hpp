@@ -34,29 +34,27 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "../preprocessor.hpp"
-#include "../range.hpp"
-#include "../rel_ops.hpp"
+#include "../span.hpp"
+
+#include <algorithm>
+#include <vector>
+
+#include <cassert>
 
 //----------------------------------------------------------------------------
 
 namespace detail
 {
 	template<typename T>
-	class matrix_row: public span<T>
+	class matrix_row: public std::span<T>
 	{
 	public:
-		using span<T>::span;
+		using std::span<T>::span;
 
 		[[nodiscard]]
 		bool operator==(const matrix_row& rhs) const
 		{
-			return std::equal(ALL_CONST_RANGE(*this), ALL_CONST_RANGE(rhs));
-		}
-
-		[[nodiscard]]
-		bool operator!=(const matrix_row& rhs) const
-		{
-			return !(*this == rhs);
+			return std::ranges::equal(*this, rhs);
 		}
 	};
 
@@ -65,7 +63,7 @@ namespace detail
 	matrix_row(T*, size_t) -> matrix_row<T>;
 
 	template<typename T>
-	class matrix_iterator: public rel_ops<matrix_iterator<T>>
+	class matrix_iterator
 	{
 	public:
 		using iterator_category = std::random_access_iterator_tag;
@@ -97,19 +95,29 @@ namespace detail
 		auto& operator++() { m_Data += m_Width; return *this; }
 		auto& operator--() { m_Data -= m_Width; return *this; }
 
+		POSTFIX_OPS()
+
 		auto& operator+=(size_t const n) { m_Data += n * m_Width; return *this; }
 		auto& operator-=(size_t const n) { m_Data -= n * m_Width; return *this; }
 
 		auto operator+(size_t const n) const { return matrix_iterator(m_Data + n * m_Width, m_Width); }
 		auto operator-(size_t const n) const { return matrix_iterator(m_Data - n * m_Width, m_Width); }
 
-		auto operator-(const matrix_iterator& rhs) const { return m_Data - rhs.m_Data; }
+		auto operator-(const matrix_iterator& rhs) const
+		{
+			assert(m_Width == rhs.m_Width);
+			return m_Data - rhs.m_Data;
+		}
 
 		[[nodiscard]]
-		auto operator==(const matrix_iterator& rhs) const { return m_Data == rhs.m_Data; }
+		bool operator==(const matrix_iterator&) const = default;
 
 		[[nodiscard]]
-		auto operator<(const matrix_iterator& rhs) const { return m_Data < rhs.m_Data; }
+		auto operator<(const matrix_iterator& rhs) const
+		{
+			assert(m_Width == rhs.m_Width);
+			return m_Data < rhs.m_Data;
+		}
 
 	private:
 		T* m_Data{};
@@ -148,6 +156,18 @@ public:
 	// BUGBUG assert for <= is due to the fact that &row[size] can be used as an 'end' iterator
 	// TODO: use iterators
 	auto operator[](size_t const Index) const { assert(Index <= m_Rows); return detail::matrix_row(m_Data + m_Cols * Index, m_Cols); }
+
+	const auto& at(size_t const Row, size_t const Col) const
+	{
+		assert(Row < m_Rows);
+		assert(Col < m_Cols);
+		return m_Data[m_Cols * Row + Col];
+	}
+
+	auto& at(size_t const Row, size_t const Col)
+	{
+		return const_cast<T&>(std::as_const(*this).at(Row, Col));
+	}
 
 	[[nodiscard]]
 	auto height() const { return m_Rows; }
@@ -217,7 +237,7 @@ public:
 	{
 	}
 
-	template<typename Y, REQUIRES(std::is_same_v<std::remove_const_t<Y>, T>)>
+	template<typename Y> requires std::same_as<std::remove_const_t<Y>, T>
 	explicit matrix(const matrix_view<Y>& rhs):
 		detail::matrix_data<T>(rhs.data(), rhs.data() + rhs.size()),
 		matrix_view<T>(this->m_Buffer.data(), rhs.height(), rhs.width())
@@ -232,7 +252,7 @@ public:
 
 	COPY_ASSIGNABLE_SWAP(matrix)
 
-	template<typename Y, REQUIRES(std::is_same_v<std::remove_const_t<Y>, T>)>
+	template<typename Y> requires std::same_as<std::remove_const_t<Y>, T>
 	matrix& operator=(const matrix_view<Y>& rhs)
 	{
 		return *this = matrix<T>(rhs);

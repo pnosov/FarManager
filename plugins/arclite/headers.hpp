@@ -1,8 +1,6 @@
 ﻿#pragma once
 
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
+#include <compiler.hpp>
 
 #include <windows.h>
 #include <shobjidl.h>
@@ -27,16 +25,27 @@
 #include <iterator>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <cmath>
 #include <cstring>
 
-using namespace std::literals;
+WARNING_PUSH()
+WARNING_DISABLE_MSC(5204) // 'type-name': class has virtual functions, but its trivial destructor is not virtual; instances of objects derived from this class may not be destructed correctly
+WARNING_DISABLE_GCC("-Wsuggest-override")
+WARNING_DISABLE_CLANG("-Weverything")
 
-#define INITGUID
 #include <basetyps.h>
-#include "CPP/7zip/Archive/IArchive.h"
-#include "CPP/7zip/IPassword.h"
-#include "CPP/7zip/ICoder.h"
 
-#include "plugin.hpp"
-#include "farcolor.hpp"
+#include "7z/h/CPP/7zip/Archive/IArchive.h"
+#include "7z/h/CPP/7zip/IPassword.h"
+#include "7z/h/CPP/7zip/ICoder.h"
+
+WARNING_POP()
+
+#include <plugin.hpp>
+#include <farcolor.hpp>
+
+inline namespace literals
+{
+	using namespace std::literals;
+}

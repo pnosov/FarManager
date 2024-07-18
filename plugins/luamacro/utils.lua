@@ -7,6 +7,7 @@ local F = far.Flags
 local type = type
 local string_find, string_sub = string.find, string.sub
 local band, bor = bit64.band, bit64.bor
+local JoinPath = win.JoinPath
 local MacroCallFar = Shared.MacroCallFar
 local gmeta = { __index=_G }
 local LastMessage = {}
@@ -55,7 +56,8 @@ local function GetAreaCode(Area)     return AllAreaNames[Area:lower()] end
 local MCODE_F_CHECKALL     = 0x80C64
 local MCODE_F_GETOPTIONS   = 0x80C65
 local MCODE_F_MACROSETTINGS = 0x80C6A
-Shared.OnlyEditorViewerUsed = band(MacroCallFar(MCODE_F_GETOPTIONS),0x3) ~= 0
+
+local ReadOnlyConfig = band(MacroCallFar(MCODE_F_GETOPTIONS),0x10) ~= 0
 
 local Areas
 local LoadedMacros
@@ -63,7 +65,7 @@ local LoadMacrosDone
 local LoadingInProgress
 local EnumState = {}
 local Events
-local EventGroups = {"dialogevent","editorevent","editorinput","exitfar","viewerevent", "consoleinput"}
+local EventGroups = {"dialogevent","editorevent","editorinput","exitfar","viewerevent", "consoleinput", "folderchanged"}
 local AddedMenuItems
 local AddedPrefixes
 local IdSet
@@ -272,6 +274,12 @@ local function export_ProcessConsoleInput (Rec, Flags)
   return EV_Handler(Events.consoleinput, nil, Rec, Flags)
 end
 
+local function export_ProcessSynchroEvent (Event, Data)
+  if Event==F.SE_FOLDERCHANGED then
+    EV_Handler(Events.folderchanged)
+  end
+end
+
 local function export_GetContentFields (colnames)
   for _,m in ipairs(ContentColumns) do
     if m.GetContentFields(colnames) then return true end
@@ -377,7 +385,7 @@ local function AddRegularMacro (srctable, FileName)
       end
     end
   else
-    return
+    macro.action = function() end -- intended use: do all the things in condition()
   end
 
   local arFound = {} -- prevent multiple inclusions, i.e. area="Editor Editor"
@@ -583,6 +591,8 @@ local function AddContentColumns (srctable, FileName)
     and type(srctable.GetContentData) == "function"
   then
      if type(srctable.filemask)~="string" then srctable.filemask=nil; end
+     if type(srctable.description)~="string" then srctable.description=nil; end
+     if FileName then srctable.FileName=FileName; end
      table.insert(ContentColumns, srctable)
   end
 end
@@ -631,26 +641,32 @@ local function ErrMsgLoad (msg, filename, isMoonScript, mode)
   end
 
   if mode=="run" then
-    local found = false
-    local fname,line = msg:match("^(.-):(%d+):")
+    local fname, line, found
+    fname = msg:match("^error loading module .- from file '([^\n]+)':")
     if fname then
-      line = tonumber(line)
-      if string_sub(fname,1,3) ~= "..." then
-        found = true
-      else
-        fname = string_sub(fname,4)
-        -- for k=1,5 do
-        --   if fname:utf8valid() then break end
-        --   fname = string_sub(fname,2)
-        -- end
-        fname = fname:gsub("/", "\\")
-        local middle = fname:match([=[^[^\\]*\[^\\]+\]=])
-        if middle then
-          local from = string_find(filename:lower(), middle:lower(), 1, true)
-          if from then
-            fname = string_sub(filename,1,from-1) .. fname
-            local attr = win.GetFileAttr(fname)
-            found = attr and not attr:find("d")
+      found = true
+      line = tonumber(msg:match("^.-\n.-:(%d+):"))
+    else
+      fname,line = msg:match("^(.-):(%d+):")
+      if fname then
+        line = tonumber(line)
+        if string_sub(fname,1,3) ~= "..." then
+          found = true
+        else
+          fname = string_sub(fname,4)
+          -- for k=1,5 do
+          --   if fname:utf8valid() then break end
+          --   fname = string_sub(fname,2)
+          -- end
+          fname = fname:gsub("/", "\\")
+          local middle = fname:match([=[^[^\\]*\[^\\]+\]=])
+          if middle then
+            local from = string_find(filename:lower(), middle:lower(), 1, true)
+            if from then
+              fname = string_sub(filename,1,from-1) .. fname
+              local attr = win.GetFileAttr(fname)
+              found = attr and not attr:find("d")
+            end
           end
         end
       end
@@ -667,7 +683,7 @@ local function ErrMsgLoad (msg, filename, isMoonScript, mode)
     if 2 == far.Message(msg, title, "OK;Edit", "wl") then
       local pattern = isMoonScript and "%[(%d+)%] >>" or "^[^\n]-:(%d+):"
       local line = tonumber(msg:match(pattern))
-      if line and isMoonScript and mode=="run" then line = GetMoonscriptLineNumber(filename,line) end
+      if line and isMoonScript then line = GetMoonscriptLineNumber(filename,line) end
       editor.Editor(filename,nil,nil,nil,nil,nil,nil,line or 1,nil,65001)
     end
   end
@@ -695,7 +711,6 @@ local function LoadMacros (unload, paths)
   export.GetContentFields = nil
   export.GetContentData = nil
 
-  local allAreas = band(MacroCallFar(MCODE_F_GETOPTIONS),0x3) == 0
   local numerrors=0
   local newAreas = {}
   Events = {}
@@ -708,7 +723,7 @@ local function LoadMacros (unload, paths)
   ContentColumns = {}
   if Shared.panelsort then Shared.panelsort.DeleteSortModes() end
 
-  local AreaNames = allAreas and AllAreaNames or SomeAreaNames
+  local AreaNames = panel.CheckPanelsExist() and AllAreaNames or SomeAreaNames
   for _,name in pairs(AreaNames) do newAreas[name]={} end
   for _,name in ipairs(EventGroups) do Events[name]={} end
   for k in pairs(package.loaded) do
@@ -741,12 +756,12 @@ local function LoadMacros (unload, paths)
   if not unload then
     LoadCounter = LoadCounter + 1
     local DummyFunc = function() end
-    local DirMacros = win.GetEnv("farprofile").."\\Macros\\"
-    if 0 == band(MacroCallFar(MCODE_F_GETOPTIONS),0x10) then -- not ReadOnlyConfig
+    local DirMacros = JoinPath(win.GetEnv("FARPROFILE"), "Macros")
+    if not ReadOnlyConfig then
       for _,v in ipairs {"scripts", "modules", "lib32", "lib64"} do
-        win.CreateDir(DirMacros..v)
+        win.CreateDir(JoinPath(DirMacros, v))
       end
-      win.CreateDir(win.GetEnv("farprofile").."\\Menus")
+      win.CreateDir(JoinPath(win.GetEnv("FARPROFILE"), "Menus"))
     end
 
     local moonscript = require "moonscript"
@@ -825,8 +840,8 @@ local function LoadMacros (unload, paths)
     if paths then
       paths = ExpandEnv(paths)
     else
-      paths = DirMacros.."scripts"
-      local cfg, msg = ReadIniFile(far.PluginStartupInfo().ModuleDir.."luamacro.ini")
+      paths = JoinPath(DirMacros, "scripts")
+      local cfg, msg = ReadIniFile(JoinPath(far.PluginStartupInfo().ModuleDir,"luamacro.ini"))
       if cfg then
         if cfg.General then
           local p = cfg.General.MacroPath
@@ -839,7 +854,7 @@ local function LoadMacros (unload, paths)
 
     for p in paths:gmatch("[^;]+") do
       p = far.ConvertPath(p, F.CPM_FULL) -- needed for relative paths
-      local macroinit = p:gsub("[\\/]*$", "\\_macroinit.lua")
+      local macroinit = JoinPath(p, "_macroinit.lua")
       local info = win.GetFileInfo(macroinit)
       if info and not info.FileAttributes:find("d") then
         LoadRegularFile(info, macroinit, nil)
@@ -849,13 +864,14 @@ local function LoadMacros (unload, paths)
       far.RecursiveSearch (p, "*.lua,*.moon", LoadRegularFile, bor(F.FRS_RECUR,F.FRS_SCANSYMLINK), macroinit)
     end
 
-    far.RecursiveSearch (DirMacros.."internal", "*.lua", LoadRecordedFile, 0)
+    far.RecursiveSearch (JoinPath(DirMacros,"internal"), "*.lua", LoadRecordedFile, 0)
 
     export.ExitFAR = Events.exitfar[1] and export_ExitFAR
     export.ProcessDialogEvent = Events.dialogevent[1] and export_ProcessDialogEvent
     export.ProcessEditorInput = Events.editorinput[1] and export_ProcessEditorInput
     export.ProcessViewerEvent = Events.viewerevent[1] and export_ProcessViewerEvent
     export.ProcessConsoleInput = Events.consoleinput[1] and export_ProcessConsoleInput
+    export.ProcessSynchroEvent = Events.folderchanged[1] and export_ProcessSynchroEvent
     if ContentColumns[1] then
       export.GetContentFields = export_GetContentFields
       export.GetContentData   = export_GetContentData
@@ -899,9 +915,9 @@ Macro {
 end
 
 local function WriteMacros()
-  if 0 ~= band(MacroCallFar(MCODE_F_GETOPTIONS),0x10) then return end -- ReadOnlyConfig
+  if ReadOnlyConfig then return end
 
-  local dir = win.GetEnv("farprofile").."\\Macros\\internal"
+  local dir = JoinPath(win.GetEnv("FARPROFILE"), "Macros", "internal")
   if not win.CreateDir(dir, true) then return end
 
   for areaname,area in pairs(Areas) do
@@ -1179,8 +1195,10 @@ local function RunStartMacro()
   if not LoadMacrosDone then return end
 
   local mode = far.MacroGetArea()
-  local opt = band(MacroCallFar(MCODE_F_GETOPTIONS),0x3)
-  local mtable = opt==1 and Areas.editor or opt==2 and Areas.viewer or Areas.shell
+  local mtable = (mode==F.MACROAREA_EDITOR and Areas.editor)
+    or (mode==F.MACROAREA_VIEWER and Areas.viewer) or Areas.shell
+
+  if mtable == nil then return end
 
   for k=1,2 do
     if k==2 then mtable = Areas.common end
@@ -1216,6 +1234,54 @@ local function GetMacroCopy (index)
   return nil
 end
 
+
+local function EnumScripts (ScriptType)
+  local ScriptOrigin = {
+    CustomSortModes = Shared.panelsort and Shared.panelsort.GetCustomSortModes(),
+    Event = LoadedMacros,
+    Macro = LoadedMacros,
+    MenuItem = AddedMenuItems,
+    CommandLine = AddedPrefixes,
+    PanelModule = LoadedPanelModules,
+    ContentColumns = ContentColumns,
+  }
+
+  local ScriptFilter = {
+    Event = function (index) return LoadedMacros[index].group end,
+    Macro = function (index) return LoadedMacros[index].area end,
+    MenuItem = function (index) return type(index) == "number" end,
+    CommandLine =  function (index) return index ~= 1 end,
+    PanelModule =  function (index) return type(index) == "number" end,
+  }
+
+  local function copy(source)
+    local t={}
+    for k,v in pairs(source) do
+      if type(v) == "table" then
+        v = k=="data" and v or copy(v)
+      end
+      t[k]=v
+    end
+    return t
+  end
+
+  local origin = ScriptOrigin[ScriptType]
+  if not origin then
+    error("Wrong argument: " .. tostring(ScriptType))
+  end
+  local index
+  return function()
+    while true do
+      index = next(origin, index)
+      if not index then return nil end
+      local filter = ScriptFilter[ScriptType]
+      if not filter or filter(index) then
+        return copy(origin[index]), index
+      end
+    end
+  end
+end
+
 local function EditUnsavedMacro (index)
   local m = LoadedMacros[index]
   if m and m.code then
@@ -1232,6 +1298,7 @@ return {
   DelMacro = DelMacro,
   EditUnsavedMacro = EditUnsavedMacro,
   EnumMacros = EnumMacros,
+  EnumScripts = EnumScripts,
   FixInitialModules = FixInitialModules,
   FlagsToString = FlagsToString,
   GetAreaCode = GetAreaCode,

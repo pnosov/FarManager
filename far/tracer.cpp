@@ -35,12 +35,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "tracer.hpp"
 
 // Internal:
-#include "imports.hpp"
-#include "encoding.hpp"
 #include "pathmix.hpp"
+#include "map_file.hpp"
 
 // Platform:
 #include "platform.fs.hpp"
+#include "platform.memory.hpp"
 
 // Common:
 #include "common.hpp"
@@ -51,204 +51,183 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-static auto platform_specific_data(CONTEXT const& ContextRecord)
+static constexpr auto BitsPerHexChar = 4;
+
+template<typename T>
+static constexpr auto width_in_hex_chars = std::numeric_limits<T>::digits / BitsPerHexChar;
+
+static auto format_address(uintptr_t const Value)
 {
-	const struct
-	{
-		DWORD MachineType;
-		DWORD64 PC, Frame, Stack;
-	}
-	Data
-	{
-#if defined _M_X64
-		IMAGE_FILE_MACHINE_AMD64,
-		ContextRecord.Rip,
-		ContextRecord.Rbp,
-		ContextRecord.Rsp
-#elif defined _M_IX86
-		IMAGE_FILE_MACHINE_I386,
-		ContextRecord.Eip,
-		ContextRecord.Ebp,
-		ContextRecord.Esp
-#elif defined _M_ARM64
-		IMAGE_FILE_MACHINE_ARM64,
-		ContextRecord.Pc,
-		ContextRecord.Fp,
-		ContextRecord.Sp
-#elif defined _M_ARM
-		IMAGE_FILE_MACHINE_ARM,
-		ContextRecord.Pc,
-		ContextRecord.R11,
-		ContextRecord.Sp
-#else
-		IMAGE_FILE_MACHINE_UNKNOWN
+	// It is unlikely that RVAs will be above 4 GiB,
+	// so we can save some screen space here.
+	const auto Width =
+#ifdef _WIN64
+		Value > std::numeric_limits<uint32_t>::max()?
+			width_in_hex_chars<decltype(Value)> :
 #endif
-	};
+			width_in_hex_chars<uint32_t>;
 
-	return Data;
+	return far::format(L"{:0{}X}"sv, Value, Width);
 }
 
-// StackWalk64() may modify context record passed to it, so we will use a copy.
-static auto GetBackTrace(CONTEXT ContextRecord, HANDLE ThreadHandle)
+static auto format_symbol(uintptr_t const Address, string_view const ImageName, os::debug::symbols::symbol const Symbol)
 {
-	std::vector<DWORD64> Result;
-
-	const auto Data = platform_specific_data(ContextRecord);
-
-	if (Data.MachineType == IMAGE_FILE_MACHINE_UNKNOWN || (!Data.PC && !Data.Frame && !Data.Stack))
-		return Result;
-
-	const auto address = [](DWORD64 const Offset)
-	{
-		return ADDRESS64{ Offset, 0, AddrModeFlat };
-	};
-
-	STACKFRAME64 StackFrame{};
-	StackFrame.AddrPC    = address(Data.PC);
-	StackFrame.AddrFrame = address(Data.Frame);
-	StackFrame.AddrStack = address(Data.Stack);
-
-	while (imports.StackWalk64(Data.MachineType, GetCurrentProcess(), ThreadHandle, &StackFrame, &ContextRecord, nullptr, imports.SymFunctionTableAccess64, imports.SymGetModuleBase64, nullptr))
-	{
-		Result.emplace_back(StackFrame.AddrPC.Offset);
-	}
-
-	return Result;
-}
-
-static void GetSymbols(string_view const ModuleName, span<DWORD64 const> const BackTrace, function_ref<void(string&&, string&&, string&&)> const Consumer)
-{
-	SCOPED_ACTION(tracer::with_symbols)(ModuleName);
-
-	const auto Process = GetCurrentProcess();
-	const auto MaxNameLen = MAX_SYM_NAME;
-	const auto BufferSize = sizeof(SYMBOL_INFO) + MaxNameLen + 1;
-
-	imports.SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_INCLUDE_32BIT_MODULES);
-
-	block_ptr<SYMBOL_INFOW, BufferSize> SymbolW(BufferSize);
-	SymbolW->SizeOfStruct = sizeof(SYMBOL_INFOW);
-	SymbolW->MaxNameLen = MaxNameLen;
-
-	block_ptr<SYMBOL_INFO, BufferSize> Symbol(BufferSize);
-	Symbol->SizeOfStruct = sizeof(SYMBOL_INFO);
-	Symbol->MaxNameLen = MaxNameLen;
-
-	const auto FormatAddress = [](DWORD64 const Value)
-	{
-		// It is unlikely that RVAs will be above 4 GiB,
-		// so we can save some screen space here.
-		return format(FSTR(L"0x{0:0{1}X}"), Value, (Value & 0xffffffff00000000)? 16 : 8);
-	};
-
-	const auto GetName = [&](DWORD64 const Address)
-	{
-		if (imports.SymFromAddrW && imports.SymFromAddrW(Process, Address, nullptr, SymbolW.data()))
-			return string(SymbolW->Name);
-
-		if (imports.SymFromAddr && imports.SymFromAddr(Process, Address, nullptr, Symbol.data()))
-			return encoding::ansi::get_chars(Symbol->Name);
-
-		return L"<unknown> (get the pdb)"s;
-	};
-
-	const auto GetLocation = [&](DWORD64 const Address)
-	{
-		const auto Location = [](string_view const File, unsigned const Line)
-		{
-			return format(FSTR(L"{0}:{1}"), File, Line);
-		};
-
-		DWORD Displacement;
-
-		IMAGEHLP_LINEW64 LineW{ sizeof(LineW) };
-		if (imports.SymGetLineFromAddrW64 && imports.SymGetLineFromAddrW64(Process, Address, &Displacement, &LineW))
-			return Location(LineW.FileName, LineW.LineNumber);
-
-		IMAGEHLP_LINE64 Line{ sizeof(Line) };
-		if (imports.SymGetLineFromAddr64 && imports.SymGetLineFromAddr64(Process, Address, &Displacement, &Line))
-			return Location(encoding::ansi::get_chars(Line.FileName), Line.LineNumber);
-
+	// If it's not a legit pointer, it's likely a member of a struct at nullptr or something like that, no point in suggesting PDBs.
+	if (ImageName.empty() && Symbol.Name.empty() && !os::memory::is_pointer(ToPtr(Address)))
 		return L""s;
-	};
 
-	for (const auto Address: BackTrace)
-	{
-		IMAGEHLP_MODULEW64 Module{ static_cast<DWORD>(aligned_size(offsetof(IMAGEHLP_MODULEW64, LoadedImageName), 8)) }; // use the pre-07-Jun-2002 struct size, aligned to 8
-		const auto HasModuleInfo = imports.SymGetModuleInfoW64(Process, Address, &Module);
-
-		Consumer(
-			FormatAddress(Address - Module.BaseOfImage),
-			Address? concat(HasModuleInfo? PointToName(Module.ImageName) : L"<unknown>"sv, L'!', GetName(Address)) : L""s,
-			GetLocation(Address)
-		);
-	}
+	return far::format(
+		L"{}!{}{}"sv,
+		!ImageName.empty()?
+			PointToName(ImageName):
+			L"<unknown>"sv,
+		!Symbol.Name.empty()?
+			Symbol.Name :
+			L"<unknown> (get the pdb)"sv,
+		!Symbol.Name.empty()?
+			far::format(L"+0x{:X}"sv, Symbol.Displacement) :
+			L""s
+	);
 }
 
-std::vector<DWORD64> tracer::get(string_view const Module, const EXCEPTION_POINTERS& Pointers, HANDLE ThreadHandle)
+static auto format_location(os::debug::symbols::location const Location)
 {
-	SCOPED_ACTION(tracer::with_symbols)(Module);
-
-	return GetBackTrace(*Pointers.ContextRecord, ThreadHandle);
+	return !Location.FileName.empty()?
+		concat(Location.FileName, Location.Line? far::format(L"({})"sv, *Location.Line) : L""s) :
+		L""s;
 }
 
-void tracer::get_symbols(string_view const Module, span<DWORD64 const> const Trace, function_ref<void(string&& Line)> const Consumer)
+tracer_detail::tracer::tracer():
+	m_MapFiles(std::make_unique<std::unordered_map<uintptr_t, map_file>>())
 {
-	GetSymbols(Module, Trace, [&](string&& Address, string&& Name, string&& Source)
+}
+
+tracer_detail::tracer::~tracer() = default;
+
+void tracer_detail::tracer::get_symbols(string_view const Module, std::span<os::debug::stack_frame const> const Trace, function_ref<void(string&& Line)> const Consumer) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	os::debug::symbols::get(Module, Trace, *m_MapFiles, [&](uintptr_t const Address, string_view const ImageName, bool const InlineFrame, os::debug::symbols::symbol const Symbol, os::debug::symbols::location const Location)
 	{
-		if (!Name.empty())
-			append(Address, L' ', Name);
+		auto Result = format_address(Address);
 
-		if (!Source.empty())
-			append(Address, L" ("sv, Source, L')');
+		if (Address)
+		{
+			if (const auto FormattedSymbol = format_symbol(Address, ImageName, Symbol); !FormattedSymbol.empty())
+				append(Result, InlineFrame? L" I "sv : L"   "sv, FormattedSymbol);
 
-		Consumer(std::move(Address));
+			if (const auto LocationStr = format_location(Location); !LocationStr.empty())
+				append(Result, L" ("sv, LocationStr, L')');
+		}
+
+		Consumer(std::move(Result));
 	});
 }
 
-void tracer::get_symbol(string_view const Module, const void* Ptr, string& Address, string& Name, string& Source)
+void tracer_detail::tracer::get_symbol(string_view const Module, const void* Ptr, string& AddressStr, string& Name, string& Source) const
 {
-	DWORD64 const Stack[]{ reinterpret_cast<DWORD_PTR>(Ptr) };
-	GetSymbols(Module, Stack, [&](string&& StrAddress, string&& StrName, string&& StrSource)
+	SCOPED_ACTION(with_symbols)(Module);
+
+	os::debug::stack_frame const Stack[]{ { std::bit_cast<uintptr_t>(Ptr), INLINE_FRAME_CONTEXT_INIT } };
+
+	os::debug::symbols::get(Module, Stack, *m_MapFiles, [&](uintptr_t const Address, string_view const ImageName, bool const InlineFrame, os::debug::symbols::symbol const Symbol, os::debug::symbols::location const Location)
 	{
-		Address = std::move(StrAddress);
-		Name = std::move(StrName);
-		Source = std::move(StrSource);
+		AddressStr = format_address(Address);
+
+		if (Address)
+		{
+			Name = format_symbol(Address, ImageName, Symbol);
+			Source = format_location(Location);
+		}
+		else
+		{
+			Name.clear();
+			Source.clear();
+		}
 	});
 }
 
-static int s_SymInitialised = 0;
-
-void tracer::sym_initialise(string_view Module)
+std::vector<os::debug::stack_frame> tracer_detail::tracer::current_stacktrace(string_view const Module, size_t const FramesToSkip, size_t const FramesToCapture) const
 {
-	if (s_SymInitialised)
-	{
-		++s_SymInitialised;
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return os::debug::current_stacktrace(FramesToSkip, FramesToCapture);
+}
+
+std::vector<os::debug::stack_frame> tracer_detail::tracer::stacktrace(string_view const Module, CONTEXT const ContextRecord, HANDLE const ThreadHandle) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return os::debug::stacktrace(ContextRecord, ThreadHandle);
+}
+
+std::vector<os::debug::stack_frame> tracer_detail::tracer::exception_stacktrace(string_view const Module) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return os::debug::exception_stacktrace();
+}
+
+void tracer_detail::tracer::current_stacktrace(string_view Module, function_ref<void(string&& Line)> const Consumer, size_t const FramesToSkip, size_t const FramesToCapture) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return get_symbols(Module, os::debug::current_stacktrace(FramesToSkip + 1, FramesToCapture), Consumer);
+}
+
+void tracer_detail::tracer::stacktrace(string_view Module, function_ref<void(string&& Line)> const Consumer, CONTEXT const ContextRecord, HANDLE const ThreadHandle) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return get_symbols(Module, os::debug::stacktrace(ContextRecord, ThreadHandle), Consumer);
+}
+
+void tracer_detail::tracer::exception_stacktrace(string_view Module, function_ref<void(string&& Line)> const Consumer) const
+{
+	SCOPED_ACTION(with_symbols)(Module);
+
+	return get_symbols(Module, os::debug::exception_stacktrace(), Consumer);
+}
+
+void tracer_detail::tracer::sym_initialise(string_view Module)
+{
+	SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+	// SymInitialize / SymCleanup do not support recursion, so we have to do it ourselves.
+	++m_SymInitializeLevel;
+
+	if (!m_SymInitialized)
+		m_SymInitialized = os::debug::symbols::initialize(Module);
+}
+
+void tracer_detail::tracer::sym_cleanup()
+{
+	SCOPED_ACTION(std::scoped_lock)(m_CS);
+
+	if (m_SymInitializeLevel)
+		--m_SymInitializeLevel;
+
+	if (m_SymInitializeLevel)
 		return;
-	}
 
-	string Path;
-	(void)os::fs::GetModuleFileName(nullptr, nullptr, Path);
-	CutToParent(Path);
-
-	if (!Module.empty())
+	if (m_SymInitialized)
 	{
-		CutToParent(Module);
-		append(Path, L';', Module);
+		os::debug::symbols::clean();
+		m_SymInitialized = false;
 	}
 
-	if (
-		(imports.SymInitializeW && imports.SymInitializeW(GetCurrentProcess(), EmptyToNull(Path), TRUE)) ||
-		(imports.SymInitialize && imports.SymInitialize(GetCurrentProcess(), EmptyToNull(encoding::ansi::get_bytes(Path)), TRUE))
-	)
-		++s_SymInitialised;
+	m_MapFiles->clear();
 }
 
-void tracer::sym_cleanup()
+tracer_detail::tracer::with_symbols::with_symbols(string_view const Module)
 {
-	if (s_SymInitialised)
-		--s_SymInitialised;
-
-	if (!s_SymInitialised)
-		imports.SymCleanup(GetCurrentProcess());
+	::tracer.sym_initialise(Module);
 }
+
+tracer_detail::tracer::with_symbols::~with_symbols()
+{
+	::tracer.sym_cleanup();
+}
+
+NIFTY_DEFINE(tracer_detail::tracer, tracer);

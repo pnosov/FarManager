@@ -40,8 +40,9 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/noncopyable.hpp"
+#include "common/function_ref.hpp"
 #include "common/smart_ptr.hpp"
+#include "common/span.hpp"
 #include "common/utility.hpp"
 
 // External:
@@ -68,16 +69,21 @@ namespace os
 
 	namespace detail
 	{
-		template<typename buffer_type, typename receiver, typename condition, typename assigner>
+		template<typename buffer_type>
 		[[nodiscard]]
-		bool ApiDynamicReceiver(buffer_type&& Buffer, const receiver& Receiver, const condition& Condition, const assigner& Assigner)
+		bool ApiDynamicReceiver(
+			buffer_type&& Buffer,
+			function_ref<size_t(std::span<std::ranges::range_value_t<buffer_type>> WritableBuffer)> const Receiver,
+			function_ref<bool(size_t ReturnedSize, size_t AllocatedSize)> const Condition,
+			function_ref<void(std::span<std::ranges::range_value_t<buffer_type> const> ReadableBuffer)> const Assigner
+		)
 		{
-			size_t Size = Receiver(Buffer);
+			size_t Size = Receiver({ Buffer.data(), Buffer.size() });
 
 			while (Condition(Size, Buffer.size()))
 			{
 				Buffer.reset(Size? Size : Buffer.size() * 2);
-				Size = Receiver(Buffer);
+				Size = Receiver({ Buffer.data(), Buffer.size() });
 			}
 
 			if (!Size)
@@ -87,65 +93,45 @@ namespace os
 			return true;
 		}
 
-		template<typename T>
 		[[nodiscard]]
-		bool ApiDynamicStringReceiver(string& Destination, const T& Callable)
-		{
-			return ApiDynamicReceiver(
-				buffer<wchar_t>(),
-				Callable,
-				[](size_t ReturnedSize, size_t AllocatedSize)
-				{
-					// Why such condition?
-					// Usually API functions return string length (without \0) on success and
-					// required buffer size (i. e. string length + \0) on failure.
-					// Some of them, however, always return buffer size.
-					// It's Callable's responsibility to handle and fix that.
-					return ReturnedSize >= AllocatedSize;
-				},
-				[&](string_view const Buffer)
-				{
-					Destination = Buffer;
-				});
-		}
+		bool ApiDynamicStringReceiver(string& Destination, function_ref<size_t(std::span<wchar_t> WritableBuffer)> Callable);
 
-		template<typename T>
 		[[nodiscard]]
-		bool ApiDynamicErrorBasedStringReceiver(DWORD ExpectedErrorCode, string& Destination, const T& Callable)
-		{
-			return ApiDynamicReceiver(
-				buffer<wchar_t>(),
-				Callable,
-				[&](size_t ReturnedSize, size_t AllocatedSize)
-				{
-					return !ReturnedSize && GetLastError() == ExpectedErrorCode;
-				},
-				[&](string_view const Buffer)
-				{
-					Destination = Buffer;
-				});
-		}
+		bool ApiDynamicErrorBasedStringReceiver(DWORD ExpectedErrorCode, string& Destination, function_ref<size_t(std::span<wchar_t> WritableBuffer)> Callable);
 
 		class handle_implementation
 		{
+		public:
+			static void wait(HANDLE Handle);
+
+			[[nodiscard]]
+			static bool is_signaled(HANDLE Handle, std::chrono::milliseconds Timeout = 0ms);
+
+			[[nodiscard]]
+			static std::optional<size_t> wait_any(span<HANDLE const> Handles, std::optional<std::chrono::milliseconds> Timeout);
+
+			[[nodiscard]]
+			static size_t wait_any(span<HANDLE const> Handles);
+
+			[[nodiscard]]
+			static bool wait_all(span<HANDLE const> Handles, std::optional<std::chrono::milliseconds> Timeout);
+
+			static void wait_all(span<HANDLE const> Handles);
+
 		protected:
 			[[nodiscard]]
 			static HANDLE normalise(HANDLE Handle);
-			[[nodiscard]]
-			static bool wait(HANDLE Handle, std::optional<std::chrono::milliseconds> Timeout = {});
-			[[nodiscard]]
-			static std::optional<size_t> wait(span<HANDLE const> Handles, bool WaitAll, std::optional<std::chrono::milliseconds> Timeout = {});
 		};
 
 		template<class deleter>
-		class handle_t: handle_implementation, public base<std::unique_ptr<std::remove_pointer_t<HANDLE>, deleter>>
+		class handle_t: public handle_implementation, public base<std::unique_ptr<std::remove_pointer_t<HANDLE>, deleter>>
 		{
 		public:
 			MOVABLE(handle_t);
 
 			constexpr handle_t() = default;
 
-			constexpr handle_t(std::nullptr_t)
+			constexpr explicit(false) handle_t(std::nullptr_t)
 			{
 			}
 
@@ -170,45 +156,19 @@ namespace os
 				reset(nullptr);
 			}
 
+			using handle_implementation::wait;
+
 			void wait() const
 			{
-				(void)handle_implementation::wait(native_handle());
+				wait(native_handle());
 			}
+
+			using handle_implementation::is_signaled;
 
 			[[nodiscard]]
 			bool is_signaled(std::chrono::milliseconds Timeout = 0ms) const
 			{
-				return handle_implementation::wait(native_handle(), Timeout);
-			}
-
-			[[nodiscard]]
-			static bool is_signaled(HANDLE const Handle, std::chrono::milliseconds const Timeout)
-			{
-				return handle_implementation::wait(Handle, Timeout);
-			}
-
-			[[nodiscard]]
-			static auto wait_any(span<HANDLE const> const Handles, std::chrono::milliseconds const Timeout)
-			{
-				return handle_implementation::wait(Handles, false, Timeout);
-			}
-
-			[[nodiscard]]
-			static auto wait_any(span<HANDLE const> const Handles)
-			{
-				return *handle_implementation::wait(Handles, false);
-			}
-
-			[[nodiscard]]
-			static auto wait_all(span<HANDLE const> const Handles, std::chrono::milliseconds const Timeout)
-			{
-				return handle_implementation::wait(Handles, true, Timeout);
-			}
-
-			[[nodiscard]]
-			static auto wait_all(span<HANDLE const> const Handles)
-			{
-				return *handle_implementation::wait(Handles, true);
+				return is_signaled(native_handle(), Timeout);
 			}
 		};
 
@@ -230,12 +190,44 @@ namespace os
 	void unset_error_mode(unsigned Mask);
 
 	[[nodiscard]]
-	NTSTATUS GetLastNtStatus();
+	NTSTATUS get_last_nt_status(void const* Teb);
 
 	[[nodiscard]]
-	string GetErrorString(bool Nt, DWORD Code);
+	DWORD get_last_error(void const* Teb);
 
-	string format_system_error(unsigned int ErrorCode, string_view ErrorMessage);
+	[[nodiscard]]
+	NTSTATUS get_last_nt_status();
+
+	void set_last_nt_status(NTSTATUS Status);
+	void set_last_error_from_ntstatus(NTSTATUS Status);
+
+	[[nodiscard]]
+	string format_errno(int ErrorCode);
+
+	[[nodiscard]]
+	string format_error(DWORD ErrorCode);
+
+	[[nodiscard]]
+	string format_ntstatus(NTSTATUS Status);
+
+	struct error_state
+	{
+		DWORD Win32Error = ERROR_SUCCESS;
+		NTSTATUS NtError = STATUS_SUCCESS;
+
+		[[nodiscard]]
+		bool any() const
+		{
+			return Win32Error != ERROR_SUCCESS || !NT_SUCCESS(NtError);
+		}
+
+		[[nodiscard]] string Win32ErrorStr() const;
+		[[nodiscard]] string NtErrorStr() const;
+
+		[[nodiscard]] string to_string() const;
+	};
+
+	error_state last_error();
 
 	class last_error_guard
 	{
@@ -248,11 +240,8 @@ namespace os
 		void dismiss();
 
 	private:
-		DWORD m_LastError;
-		NTSTATUS m_LastStatus;
-		bool m_Active;
+		std::optional<error_state> m_Error;
 	};
-
 
 	bool WNetGetConnection(string_view LocalName, string &RemoteName);
 
@@ -311,67 +300,72 @@ namespace os
 			NONCOPYABLE(module);
 			MOVABLE(module);
 
-			explicit module(string_view const Name, bool AlternativeLoad = false):
-				m_name(Name),
-				m_tried(),
-				m_AlternativeLoad(AlternativeLoad)
-			{}
+			explicit module(string_view Name, bool AlternativeLoad = false);
 
 			template<typename T>
 			[[nodiscard]]
-			T GetProcAddress(const char* name) const { return reinterpret_cast<T>(reinterpret_cast<void*>(::GetProcAddress(get_module(), name))); }
+			T GetProcAddress(const char* name) const
+			{
+				return std::bit_cast<T>(get_proc_address(name));
+			}
 
 			[[nodiscard]]
-			explicit operator bool() const noexcept { return get_module() != nullptr; }
+			explicit operator bool() const noexcept;
+
+			[[nodiscard]]
+			const string& name() const;
 
 		private:
 			[[nodiscard]]
-			HMODULE get_module() const noexcept;
+			HMODULE get_module(bool Mandatory) const;
 
-			struct module_deleter { void operator()(HMODULE Module) const; };
+			FARPROC get_proc_address(const char* Name) const;
+
+			struct module_deleter
+			{
+				void operator()(HMODULE Module) const;
+			};
+
 			using module_ptr = std::unique_ptr<std::remove_pointer_t<HMODULE>, module_deleter>;
 
 			string m_name;
-			mutable module_ptr m_module;
-			mutable bool m_tried;
+			mutable std::optional<module_ptr> m_module;
 			bool m_AlternativeLoad;
 		};
 
-		template<typename T>
-		class function_pointer: noncopyable
+		class opaque_function_pointer
 		{
 		public:
-			function_pointer(const module& Module, const char* Name):
-				m_Module(&Module),
-				m_Name(Name)
-			{}
+			NONCOPYABLE(opaque_function_pointer);
+
+			opaque_function_pointer(const module& Module, const char* Name);
 
 			[[nodiscard]]
-			operator T() const { return get_pointer(); }
-
-			[[nodiscard]]
-			explicit operator bool() const noexcept { return get_pointer() != nullptr; }
+			explicit operator bool() const noexcept;
 
 			[[nodiscard]]
 			std::string_view name() const { return m_Name; }
 
-		private:
+		protected:
 			[[nodiscard]]
-			T get_pointer() const
-			{
-				if (!m_Tried)
-				{
-					m_Pointer = m_Module->GetProcAddress<T>(m_Name);
-					m_Tried = true;
-				}
+			void* get_pointer(bool Mandatory) const;
 
-				return m_Pointer;
-			}
-
+		private:
 			const module* m_Module;
 			const char* m_Name;
-			mutable T m_Pointer{};
-			mutable bool m_Tried{};
+			mutable std::optional<void*> m_Pointer;
+		};
+
+		template<typename T>
+		class function_pointer: public opaque_function_pointer
+		{
+			using raw_function_pointer = std::conditional_t<std::is_pointer_v<T>, T, T*>;
+
+		public:
+			using opaque_function_pointer::opaque_function_pointer;
+
+			[[nodiscard]]
+			explicit(false) operator raw_function_pointer() const { return std::bit_cast<raw_function_pointer>(get_pointer(true)); }
 		};
 	}
 
@@ -393,55 +387,20 @@ namespace os
 		using ptr = std::unique_ptr<T, detail::deleter<T>>;
 	}
 
-	namespace com
-	{
-		class initialize: noncopyable
-		{
-		public:
-			initialize();
-			~initialize();
-
-		private:
-			const bool m_Initialised;
-		};
-
-		namespace detail
-		{
-			template<typename T>
-			struct releaser
-			{
-				void operator()(T* Object) const
-				{
-					Object->Release();
-				}
-			};
-
-			struct memory_releaser
-			{
-				void operator()(const void* Object) const;
-			};
-		}
-
-		template<typename T>
-		using ptr = std::unique_ptr<T, detail::releaser<T>>;
-
-		template<typename T>
-		using memory = std::unique_ptr<std::remove_pointer_t<T>, detail::memory_releaser>;
-	}
-
 	namespace uuid
 	{
 		[[nodiscard]]
 		UUID generate();
 	}
 
-	namespace debug
-	{
-		bool debugger_present();
-		void breakpoint(bool Always = true);
-		void print(const wchar_t* Str);
-		void print(string const& Str);
-	}
+	HKL make_hkl(int32_t Layout);
+	HKL make_hkl(string_view LayoutStr);
+	std::vector<HKL> get_keyboard_layout_list();
+
+	int to_unicode(unsigned VirtKey, unsigned ScanCode, BYTE const* KeyState, span<wchar_t> Buffer, unsigned Flags, HKL Hkl);
+	bool is_dead_key(KEY_EVENT_RECORD const& Key, HKL Layout);
+
+	bool is_interactive_user_session();
 }
 
 #endif // PLATFORM_HPP_632CB91D_08A9_4793_8FC7_2E38C30CE234

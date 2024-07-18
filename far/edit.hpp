@@ -54,7 +54,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 struct FarColor;
 class RegExp;
 struct RegExpMatch;
-struct MatchHash;
+struct position_parser_state;
+class positions_cache;
 
 // Младший байт (маска 0xFF) юзается классом ScreenObject!!!
 enum FLAGS_CLASS_EDITLINE
@@ -76,8 +77,16 @@ enum FLAGS_CLASS_EDITLINE
 	// явно не в диалоге юзается.
 	FEDITLINE_PARENT_SINGLELINE    = 21_bit,  // обычная строка ввода в диалоге
 	FEDITLINE_PARENT_MULTILINE     = 22_bit,  // для будущего Memo-Edit (DI_EDITOR или DIF_MULTILINE)
-	FEDITLINE_PARENT_EDITOR        = 23_bit,  // "вверху" обычный редактор
+
+	// eol storage
+	// We pack it into scrobj flags to not waste space in Edit class
+	FEDITLINE_EOL_DATA0            = 29_bit,
+	FEDITLINE_EOL_DATA1            = 30_bit,
+	FEDITLINE_EOL_DATA2            = 31_bit,
+	FEDITLINE_EOL_MASK = FEDITLINE_EOL_DATA0 | FEDITLINE_EOL_DATA1 | FEDITLINE_EOL_DATA2
 };
+
+static_assert(std::to_underlying(eol::eol_type::count) < 0b111);
 
 struct ColorItem
 {
@@ -101,7 +110,7 @@ struct ColorItem
 	const FarColor& GetColor() const { return *Color; }
 	void SetColor(const FarColor& Value);
 
-	bool operator <(const ColorItem& rhs) const
+	bool operator<(const ColorItem& rhs) const
 	{
 		return Priority < rhs.Priority;
 	}
@@ -119,8 +128,6 @@ class Edit: public SimpleScreenObject
 public:
 	NONCOPYABLE(Edit);
 	MOVE_CONSTRUCTIBLE(Edit);
-
-	using delete_color_condition = function_ref<bool(const ColorItem&)>;
 
 	explicit Edit(window_ptr Owner);
 
@@ -148,6 +155,8 @@ public:
 	string GetSelString() const;
 	int GetLength() const;
 
+	void ProcessMask(string_view Str, string_view Mask, size_t From);
+
 	void SetString(string_view Str, bool KeepSelection = false);
 	void InsertString(string_view Str);
 	void AppendString(string_view Str);
@@ -164,8 +173,8 @@ public:
 	void SetPasswordMode(bool Mode) {m_Flags.Change(FEDITLINE_PASSWORDMODE,Mode);}
 	void SetOvertypeMode(bool Mode) {m_Flags.Change(FEDITLINE_OVERTYPE, Mode);}
 	bool GetOvertypeMode() const {return m_Flags.Check(FEDITLINE_OVERTYPE);}
-	int RealPosToTab(int Pos) const;
-	int TabPosToReal(int Pos) const;
+	int RealPosToVisual(int Pos, position_parser_state* State = {}) const;
+	int VisualPosToReal(int Pos, position_parser_state* State = {}) const;
 	void Select(int Start,int End);
 	void RemoveSelection();
 	void AddSelect(int Start,int End);
@@ -176,9 +185,6 @@ public:
 	void SetEditorMode(bool Mode) {m_Flags.Change(FEDITLINE_EDITORMODE, Mode);}
 	bool ReplaceTabs();
 	void InsertTab();
-	void AddColor(const ColorItem& col);
-	void DeleteColor(delete_color_condition Condition);
-	bool GetColor(ColorItem& col, size_t Item) const;
 	void Xlat(bool All=false);
 	void SetDialogParent(DWORD Sets);
 	void SetCursorType(bool Visible, size_t Size);
@@ -186,16 +192,18 @@ public:
 	bool GetReadOnly() const {return m_Flags.Check(FEDITLINE_READONLY);}
 	void SetReadOnly(bool NewReadOnly) {m_Flags.Change(FEDITLINE_READONLY,NewReadOnly);}
 	void SetHorizontalPosition(int X1, int X2) { SetPosition({ X1, m_Where.top, X2, m_Where.bottom }); }
+	static bool is_clear_selection_key(unsigned Key);
 
 protected:
 	virtual void RefreshStrByMask(int InitMode=FALSE) {}
 
 	[[nodiscard]]
-	auto CallbackSuppressor() { return make_raii_wrapper(this, &Edit::SuppressCallback, &Edit::RevertCallback); }
+	auto CallbackSuppressor() { return make_raii_wrapper<&Edit::SuppressCallback, &Edit::RevertCallback>(this); }
 
 	void DeleteBlock();
 
 	static int CheckCharMask(wchar_t Chr);
+	static int MaskDefaultChar(wchar_t Mask);
 
 private:
 	void DisplayObject() override;
@@ -221,15 +229,19 @@ private:
 
 	bool InsertKey(wchar_t Key);
 	bool RecurseProcessKey(int Key);
-	void ApplyColor(const FarColor& SelColor, int XPos, int FocusedLeftPos);
+	void ApplyColor(std::multiset<ColorItem> const& Colors, int XPos, int FocusedLeftPos, positions_cache& RealToVisual);
 	int GetNextCursorPos(int Position,int Where) const;
 	static bool CharInMask(wchar_t Char, wchar_t Mask);
 	bool ProcessCtrlQ();
 	bool ProcessInsPath(unsigned int Key,int PrevSelStart=-1,int PrevSelEnd=0);
-	int RealPosToTab(int PrevLength, int PrevPos, int Pos, int* CorrectPos = {}) const;
 	void FixLeftPos(int TabCurPos=-1);
 	void SetRightCoord(int Value) { SetPosition({ m_Where.left, m_Where.top, Value, m_Where.bottom }); }
 	Editor* GetEditor() const;
+
+	bool is_valid_surrogate_pair_at(size_t Position) const;
+
+	eol::eol_type get_eol() const;
+	void set_eol(eol::eol_type Eol);
 
 protected:
 	// BUGBUG: the whole purpose of this class is to avoid zillions of casts in existing code by returning size() as int
@@ -239,22 +251,23 @@ protected:
 	public:
 		using string::string;
 		int size() const { return static_cast<int>(string::size()); }
+		auto usize() const { return string::size(); }
 	};
 	edit_string m_Str;
 
-	// KEEP ALIGNED!
-	int m_CurPos;
 private:
 	friend class DlgEdit;
 	friend class Editor;
 	friend class FileEditor;
 
+protected:
 	// KEEP ALIGNED!
-	std::multiset<ColorItem> ColorList;
-	int m_SelStart;
-	int m_SelEnd;
-	int LeftPos;
-	eol m_Eol;
+	int m_CurPos{};
+
+private:
+	int m_SelStart{-1};
+	int m_SelEnd{};
+	int LeftPos{};
 };
 
 #endif // EDIT_HPP_5A787FA0_4FFF_4A61_811F_F8BAEDEF241B

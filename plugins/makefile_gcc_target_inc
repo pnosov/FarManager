@@ -1,33 +1,45 @@
-all: $(DLLFULLNAME)
+DSTDOCS = $(patsubst %,$(DLLDIR)/%,$(notdir $(filter %,$(DOCS))))
+
+all: $(DLLFULLNAME) $(DSTDOCS)
+
+ifdef PRECOMPILED_HEADER
+$(OBJDIR)/$(PRECOMPILED_HEADER).gch: $(PRECOMPILED_HEADER).cpp $(PRECOMPILED_HEADER).hpp
+	@echo Making precompiled headers
+	$(CXX) -x c++-header -c $(CPPFLAGS) -o $@ $<
+
+$(OBJS): $(OBJDIR)/$(PRECOMPILED_HEADER).gch
+
+PCHFLAGS = -include $(OBJDIR)/$(PRECOMPILED_HEADER)
+endif
 
 ifndef DISABLEAUTODEPS
 ifeq ($(findstring clean,$(MAKECMDGOALS)),)
 $(OBJDIR)/%.d: %.cpp
 	@echo making depends for $<
-	@$(MKDIR) $(@D)
-	@$(CXX) -c -MM $(CXXFLAGS) $< | $(GAWK) -f $(DEP_FILTER) -v n=$(notdir $(basename $@)) -v r=$(OBJDIR) > $(call os_name,$@)
+	$(MKDIR) $(@D)
+	$(CXX) -c -MM $(CPPFLAGS) $< | $(GAWK) -f $(DEP_FILTER) -v n=$(notdir $(basename $@)) -v r=$(OBJDIR) > $(call os_name,$@)
 
 $(OBJDIR)/%.d: %.c
 	@echo making depends for $<
-	@$(MKDIR) $(@D)
-	@$(CC) -c -MM $(CCFLAGS) $< | $(GAWK) -f $(DEP_FILTER) -v n=$(notdir $(basename $@)) -v r=$(OBJDIR) > $(call os_name,$@)
+	$(MKDIR) $(@D)
+	$(CC) -c -MM $(CFLAGS) $< | $(GAWK) -f $(DEP_FILTER) -v n=$(notdir $(basename $@)) -v r=$(OBJDIR) > $(call os_name,$@)
 endif
 endif
 
 $(OBJDIR)/%.o: %.cpp
-	@echo compiling $<
-	@$(MKDIR) -p $(@D)
-	@$(CXX) $(CXXFLAGS) -c -o $@ $<
+	@echo $<
+	$(MKDIR) -p $(@D)
+	$(CXX) -c $(PCHFLAGS) $(CPPFLAGS) -o $@ $<
 
 $(OBJDIR)/%.o: %.c
-	@echo compiling $<
-	@$(MKDIR) -p $(@D)
-	@$(CC) $(CCFLAGS) -c -o $@ $<
+	@echo $<
+	$(MKDIR) -p $(@D)
+	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(RES): $(RC_NAME).rc $(COMINC)/farversion.hpp $(COMINC)/plugin.hpp
-	@echo compiling $<
-	@$(MKDIR) -p $(@D)
-	@$(WINDRES) $(RCFLAGS) -i $< -o $@
+$(RES): $(RC_NAME).rc $(COMMON)/farversion.hpp $(COMINC)/plugin.hpp
+	@echo $<
+	$(MKDIR) -p $(@D)
+	$(WINDRES) $(RCFLAGS) -i $< -o $@
 
 ifdef USE_OBJDUMP_MAPS
 X_OPT =
@@ -35,25 +47,29 @@ else
 X_OPT = $(if $(MAP),-Xlinker -Map -Xlinker $(MAP),)
 endif
 
-$(DLLFULLNAME): $(OBJS) $(DEF)
-	@echo linking $@
-	@$(MKDIR) -p $(@D)
-	@$(CXX) -o $@ $(DEF) $(OBJS) $(LNKFLAGS) -Wl,--kill-at -shared $(X_OPT)
+$(DLLFULLNAME): $(OBJS) $(DEF) $(USERTARGETS)
+	@echo Linking $@
+	$(MKDIR) -p $(@D)
+	$(CXX) -o $@ $(DEF) $(OBJS) $(LNKFLAGS) -Wl,--kill-at -shared $(X_OPT)
 ifdef USE_OBJDUMP_MAPS
 	@echo Generating map file
-	objdump --syms --demangle $(DLLFULLNAME) > $(MAP)
+	$(OBJDUMP) --syms --demangle $(DLLFULLNAME) > $(MAP)
 ifndef DEBUG
-	strip $(DLLFULLNAME)
+	$(STRIP) $(DLLFULLNAME)
 endif
-endif
-ifdef DOCS
-	@$(CP) $(DOCS) $(DLLDIR)
 endif
 
-ifndef SKIPCLEAN
-clean:
-	@$(RM) -r $(BASEDIR)/obj $(BASEDIR)/lib $(BASEDIR)/Formats $(BASEDIR)/*
-endif
+$(foreach \
+	prereq, \
+	$(DOCS), \
+	$(eval \
+	$(DLLDIR)/$(notdir $(prereq)): $(prereq); \
+		echo $$< && $(CP) $$< $$@ \
+	) \
+)
+
+clean::
+	$(RM) -r $(BASEDIR)/obj $(BASEDIR)/lib $(BASEDIR)/Formats $(BASEDIR)/*
 
 ifndef DISABLEAUTODEPS
 -include $(DEPS)

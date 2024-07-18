@@ -36,11 +36,15 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 // Internal:
+#include "windowsfwd.hpp"
+#include "dialog.hpp"
 
 // Platform:
 
 // Common:
+#include "common/bytes_view.hpp"
 #include "common/function_ref.hpp"
+#include "common/preprocessor.hpp"
 #include "common/utility.hpp"
 
 // External:
@@ -48,82 +52,83 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //----------------------------------------------------------------------------
 
 enum class lng : int;
-class RegExp;
+class regex_exception;
 struct error_state_ex;
 
+struct SearchReplaceDlgProps
+{
+	bool ReplaceMode{};
+	bool ShowButtonsPrevNext{};
+	bool ShowButtonAll{};
+};
+
+struct SearchReplaceDlgParams
+{
+	string SearchStr;
+	std::optional<bytes> SearchBytes;
+	std::optional<string> ReplaceStr;
+	std::optional<bool> Hex;
+	std::optional<bool> CaseSensitive;
+	std::optional<bool> WholeWords;
+	std::optional<bool> Regex;
+	std::optional<bool> Fuzzy;
+	std::optional<bool> PreserveStyle;
+
+	enum class SharedGroup { view_edit, find_file, help, count };
+
+	static const SearchReplaceDlgParams& GetShared(SharedGroup Group);
+	void SaveToShared(SharedGroup Group) const;
+
+	// Uses Hex.value_or(false)
+	void SetSearchPattern(string_view TextString, string_view HexString, uintptr_t CodePage);
+
+	auto IsSearchPatternEmpty() const noexcept
+	{
+		return Hex.value_or(false) ? SearchBytes.value().empty() : SearchStr.empty();
+	}
+};
+
+
+enum class SearchReplaceDlgResult
+{
+	Cancel,
+	Ok,
+	Prev,
+	Next,
+	All,
+};
+
 /*
-  Функция GetSearchReplaceString выводит диалог поиска или замены, принимает
-  от пользователя данные и в случае успешного выполнения диалога возвращает
-  TRUE.
-  Параметры:
-    IsReplaceMode
-      true  - если хотим заменять
-      false - если хотим искать
+  Shows Search / Replace dialog, collects user's input, and returns the action selected by the user.
 
-    Title
-      Заголовок диалога.
-      Если пустая строка, то применяется MEditReplaceTitle или MEditSearchTitle в зависимости от параметра IsReplaceMode
+  Parameters:
+    Props
+      Define various aspects of dialog UX
 
-    SearchStr
-      Строка поиска.
-      Результат отработки диалога заносится в нее же.
-
-    ReplaceStr,
-      Строка замены.
-      Результат отработки диалога заносится в нее же.
-      Для случая, если IsReplaceMode=FALSE может быть равна nullptr
+    Params
+      InOut parameter. Specifies which options to show in the dialog and provides initial values.
+      If the dialog was closed by one of the action buttons, contains the values selected by the user.
+      If the dialog was dismissed, the values stay unchanged.
 
     TextHistoryName
       Имя истории строки поиска.
-      Если пустая строка, то принимается значение "SearchText"
 
     ReplaceHistoryName
       Имя истории строки замены.
-      Если пустая строка, то принимается значение "ReplaceText"
-
-    Case
-      Ссылка на переменную, указывающую на значение опции "Case sensitive"
-
-    WholeWords
-      Ссылка на переменную, указывающую на значение опции "Whole words"
-
-    Reverse
-      Ссылка на переменную, указывающую на значение опции "Reverse search"
-
-    SelectFound
-      Ссылка на переменную, указывающую на значение опции "Select found"
-
-    Regexp
-      Ссылка на переменную, указывающую на значение опции "Regular expressions"
-
-    Regexp
-      Ссылка на переменную, указывающую на значение опции "Preserve style"
 
     HelpTopic
       Имя темы помощи.
       Если пустая строка - тема помощи не назначается.
 
-  Возвращаемое значение:
-  0 - пользователь отказался от диалога (Esc)
-    1  - пользователь подтвердил свои намерения
-    2 - выбран поиск всех вхождений
-
+  Returns the action selected by the user.
 */
-int GetSearchReplaceString(
-	bool IsReplaceMode,
-	string_view Title,
-	string_view SubTitle,
-	string& SearchStr,
-	string& ReplaceStr,
+SearchReplaceDlgResult GetSearchReplaceString(
+	SearchReplaceDlgProps Props,
+	SearchReplaceDlgParams& Params,
 	string_view TextHistoryName,
 	string_view ReplaceHistoryName,
-	bool* pCase,
-	bool* pWholeWords,
-	bool* pReverse,
-	bool* pRegexp,
-	bool* pPreserveStyle,
+	uintptr_t CodePage,
 	string_view HelpTopic = {},
-	bool HideAll=false,
 	const UUID* Id = nullptr,
 	function_ref<string(bool)> Picker = nullptr
 );
@@ -160,7 +165,7 @@ enum class operation
 
 operation OperationFailed(const error_state_ex& ErrorState, string_view Object, lng Title, string Description, bool AllowSkip = true, bool AllowSkipAll = true);
 
-class operation_cancelled: public std::exception
+class operation_cancelled final: public std::exception
 {
 };
 
@@ -170,8 +175,12 @@ inline void cancel_operation()
 	throw operation_cancelled{};
 }
 
-void ReCompileErrorMessage(const RegExp& re, string_view str);
-void ReMatchErrorMessage(const RegExp& re);
+// true: success
+// false: skip
+// operation_cancelled exception: cancelled
+bool retryable_ui_operation(function_ref<bool()> Action, string_view Name, lng ErrorDescription, bool& SkipErrors);
+
+void ReCompileErrorMessage(regex_exception const& e, string_view str);
 
 struct goto_coord
 {
@@ -183,6 +192,42 @@ struct goto_coord
 
 bool GoToRowCol(goto_coord& Row, goto_coord& Col, bool& Hex, string_view HelpTopic);
 
+bool ConfirmAbort();
+bool CheckForEscAndConfirmAbort();
 bool RetryAbort(std::vector<string>&& Messages);
+
+void regex_playground();
+
+class progress_impl
+{
+protected:
+	NONCOPYABLE(progress_impl);
+
+	progress_impl() = default;
+	~progress_impl();
+
+	void init(std::span<DialogItemEx> Items, rectangle Position, const UUID* Id = nullptr);
+
+	dialog_ptr m_Dialog;
+};
+
+class single_progress: progress_impl
+{
+public:
+	single_progress(string_view Title, string_view Msg, size_t Percent);
+
+	void update(string_view Msg) const;
+	void update(size_t Percent) const;
+};
+
+class dirinfo_progress: progress_impl
+{
+public:
+	explicit dirinfo_progress(string_view Title);
+
+	void set_name(string_view Msg) const;
+	void set_count(unsigned long long Count) const;
+	void set_size(unsigned long long Size) const;
+};
 
 #endif // STDDLG_HPP_D7E3481D_D478_4F57_8C20_7E0A21FAE788

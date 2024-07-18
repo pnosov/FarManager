@@ -8,6 +8,8 @@
 #include "Proclist.hpp"
 #include "perfthread.hpp"
 
+#include <smart_ptr.hpp>
+
 class bstr
 {
 public:
@@ -35,7 +37,7 @@ private:
 
 static auto ProcessPath(DWORD const Pid)
 {
-	return bstr(format(FSTR(L"Win32_Process.Handle={0}"), Pid).c_str());
+	return bstr(far::format(L"Win32_Process.Handle={0}"sv, Pid).c_str());
 }
 
 struct com_closer
@@ -258,7 +260,7 @@ bool WMIConnection::Connect(const wchar_t* pMachineName, const wchar_t* pUser, c
 		if (norm_m_prefix(pMachineName))
 			pMachineName += 2;
 
-		const auto Namespace = format(FSTR(L"\\\\{0}\\root\\cimv2"), pMachineName);
+		const auto Namespace = far::format(L"\\\\{0}\\root\\cimv2"sv, pMachineName);
 
 		if ((hrLast = IWbemLocator->ConnectServer(bstr(Namespace.c_str()), bstr(pUser), bstr(pPassword), {}, 0, {}, {}, &pIWbemServices)) == S_OK)
 		{

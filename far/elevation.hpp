@@ -64,7 +64,6 @@ class elevation: public singleton<elevation>
 	IMPLEMENTS_SINGLETON;
 
 public:
-	~elevation();
 	void ResetApprove();
 	bool Elevated() const {return m_Elevation;}
 
@@ -96,15 +95,17 @@ public:
 	public:
 		NONCOPYABLE(suppress);
 
-		suppress();
+		explicit(false) suppress(bool Completely = false);
 		~suppress();
 
 	private:
 		elevation* m_owner;
+		bool m_Completely;
 	};
 
 private:
 	elevation() = default;
+	~elevation();
 
 	template<typename T>
 	T Read() const;
@@ -112,8 +113,7 @@ private:
 	template<typename T>
 	void Read(T& Data) const { Data = Read<T>(); }
 
-	template<typename... args>
-	void Write(const args&... Args) const;
+	void Write(const auto&... Args) const;
 
 	void RetrieveLastError() const;
 
@@ -124,12 +124,12 @@ private:
 	bool ElevationApproveDlg(lng Why, string_view Object);
 	void TerminateChildProcess() const;
 
-	template<typename T, typename F1, typename F2>
-	auto execute(lng Why, string_view Object, T Fallback, const F1& PrivilegedHander, const F2& ElevatedHandler);
+	auto execute(lng Why, string_view Object, auto Fallback, const auto& PrivilegedHander, const auto& ElevatedHandler);
 
 	void progress_routine(LPPROGRESS_ROUTINE ProgressRoutine) const;
 
-	std::atomic_ulong m_Suppressions{};
+	std::atomic_size_t m_Suppressions{};
+	std::atomic_size_t m_CompleteSuppressions{};
 	os::handle m_Pipe;
 	os::handle m_Process;
 	os::handle m_Job;
@@ -138,6 +138,7 @@ private:
 	bool m_AskApprove{true};
 	bool m_Elevation{};
 	bool m_DontAskAgain{};
+	bool m_DuplicateHandleGranted{};
 	int m_Recurse{};
 	os::critical_section m_CS;
 	string m_PipeName;

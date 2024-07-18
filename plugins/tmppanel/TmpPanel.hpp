@@ -1,51 +1,42 @@
-﻿/*
+﻿#ifndef TMPPANEL_HPP_DEEE2CB2_2167_4B14_B8D6_08676A9F3CEB
+#define TMPPANEL_HPP_DEEE2CB2_2167_4B14_B8D6_08676A9F3CEB
+#pragma once
+
+/*
 TMPPANEL.HPP
 
 Temporary panel header file
 
 */
 
-#ifndef __TMPPANEL_HPP__
-#define __TMPPANEL_HPP__
+#include "headers.hpp"
 
-#define COMMONPANELSNUMBER 10
-
-typedef struct _MyInitDialogItem
+struct PluginPanel
 {
-	unsigned char Type;
-	unsigned char X1,Y1,X2,Y2;
-	DWORD Flags;
-	signed char Data;
-} MyInitDialogItem;
+	void clear()
+	{
+		Items.clear();
+		StringData.clear();
+		OwnerData.clear();
+	}
 
-typedef struct _PluginPanels
-{
-	PluginPanelItem *Items;
-	unsigned int ItemsNumber;
+	std::vector<PluginPanelItem> Items;
+	// Lists for stable item addresses
+	std::list<string> StringData;
+	std::list<string> OwnerData;
 	unsigned int OpenFrom;
-} PluginPanels;
+};
 
-extern PluginPanels CommonPanels[COMMONPANELSNUMBER];
+struct shared_data
+{
+	PluginPanel CommonPanels[10];
+	size_t CurrentCommonPanel{};
+};
 
-extern unsigned int CurrentCommonPanel;
+inline shared_data* SharedData;
 
-extern struct PluginStartupInfo Info;
-extern struct FarStandardFunctions FSF;
-
-extern int StartupOptFullScreenPanel,StartupOptCommonPanel,StartupOpenFrom;
-extern wchar_t *PluginRootKey;
-
-const wchar_t *GetMsg(int MsgId);
-
-int Config();
-void GoToFile(const wchar_t *Target, BOOL AnotherPanel);
-void FreePanelItems(PluginPanelItem *Items, size_t Total);
-
-wchar_t *ParseParam(wchar_t *& str);
-void GetOptions(void);
-void WFD2FFD(WIN32_FIND_DATA &wfd, PluginPanelItem &ffd);
-
-bool IsTextUTF8(const char* Buffer,size_t Length);
+inline PluginStartupInfo PsInfo;
+inline FarStandardFunctions FSF;
 
 #define NT_MAX_PATH 32768
 
@@ -54,54 +45,15 @@ bool IsTextUTF8(const char* Buffer,size_t Length);
 #define SIGN_UTF8_LO    0xBBEF
 #define SIGN_UTF8_HI    0xBF
 
+const wchar_t* GetMsg(int MsgId);
+std::pair<string_view, string_view> ParseParam(string_view Str);
+void GoToFile(const string& Target, bool AnotherPanel);
+void WFD2FFD(const WIN32_FIND_DATA &wfd, PluginPanelItem &ffd, string* NameData);
+string FormNtPath(string_view Path);
+string ExpandEnvStrs(string_view Input);
+string FindListFile(const string& Filename);
+string GetFullPath(string_view Input);
+bool IsTextUTF8(const char* Buffer,size_t Length);
+bool GetFileInfoAndValidate(string_view FilePath, PluginPanelItem& FindData, string& NameData, bool Any);
 
-class StrBuf
-{
-	private:
-		wchar_t *ptr;
-		size_t len;
-
-	private:
-		StrBuf(const StrBuf &);
-		StrBuf & operator=(const StrBuf &);
-
-	public:
-		StrBuf() { ptr = NULL; len = 0; }
-		StrBuf(size_t len) { ptr = NULL; Reset(len); }
-		~StrBuf() { free(ptr); }
-
-	public:
-		void Reset(size_t len) { if (ptr) free(ptr); ptr = (wchar_t *) malloc(len * sizeof(wchar_t)); *ptr = 0; this->len = len; }
-		void Grow(size_t len) { if (len > this->len) Reset(len); }
-		operator wchar_t*() { return ptr; }
-		wchar_t *Ptr() { return ptr; }
-		size_t Size() const { return len; }
-};
-
-class PtrGuard
-{
-	private:
-		wchar_t *ptr;
-
-	private:
-		PtrGuard(const PtrGuard &);
-		PtrGuard & operator=(const PtrGuard &);
-
-	public:
-		PtrGuard() { ptr = NULL; }
-		PtrGuard(wchar_t *ptr) { this->ptr = ptr; }
-		PtrGuard & operator=(wchar_t *ptr) { free(this->ptr); this->ptr = ptr; return *this; }
-		~PtrGuard() { free(ptr); }
-
-	public:
-		operator wchar_t*() { return ptr; }
-		wchar_t *Ptr() { return ptr; }
-		wchar_t **PtrPtr() { return &ptr; }
-};
-
-wchar_t* FormNtPath(const wchar_t* path, StrBuf& buf);
-wchar_t* GetFullPath(const wchar_t* input, StrBuf& output);
-wchar_t* ExpandEnvStrs(const wchar_t* input, StrBuf& output);
-bool FindListFile(const wchar_t *FileName, StrBuf &output);
-
-#endif /* __TMPPANEL_HPP__ */
+#endif // TMPPANEL_HPP_DEEE2CB2_2167_4B14_B8D6_08676A9F3CEB

@@ -1,23 +1,8 @@
-!include ../makefile_vc_base
-
 NAME = AutoWrap
 
-LINK_OBJS = $(OBJDIR)\AutoWrap.obj
-
-DOCS = \
-	WrapEng.lng \
-	WrapRus.lng \
-	WrapSky.lng \
-	WrapSpa.lng \
-	WrapIta.lng \
-	WrapPol.lng \
-	WrapBel.lng \
-	WrapGer.lng \
-	WrapUkr.lng \
-	changelog
+LINK_OBJS = $(INTDIR)\AutoWrap.obj
 
 !include ..\makefile_vc_def_inc
-
 !include ..\makefile_vc_target_inc
 
-$(OBJDIR)\AutoWrap.obj: AutoWrap.cpp WrapLng.hpp guid.hpp version.hpp $(COMINC)\plugin.hpp $(COMINC)\PluginSettings.hpp $(COMINC)\DlgBuilder.hpp
+$(INTDIR)\AutoWrap.obj: AutoWrap.cpp WrapLng.hpp guid.hpp version.hpp $(COMINC)\plugin.hpp $(COMINC)\PluginSettings.hpp $(COMINC)\DlgBuilder.hpp

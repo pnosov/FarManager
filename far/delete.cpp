@@ -42,7 +42,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scantree.hpp"
 #include "treelist.hpp"
 #include "constitle.hpp"
-#include "TPreRedrawFunc.hpp"
 #include "taskbar.hpp"
 #include "interf.hpp"
 #include "keyboard.hpp"
@@ -53,7 +52,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "panelmix.hpp"
 #include "mix.hpp"
 #include "dirinfo.hpp"
-#include "elevation.hpp"
 #include "wakeful.hpp"
 #include "stddlg.hpp"
 #include "lang.hpp"
@@ -64,27 +62,20 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "fileattr.hpp"
 #include "copy_progress.hpp"
 #include "global.hpp"
+#include "log.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.fs.hpp"
 
 // Common:
 #include "common/scope_exit.hpp"
+#include "common/view/enumerate.hpp"
 
 // External:
 #include "format.hpp"
 
 //----------------------------------------------------------------------------
-
-enum DEL_MODE
-{
-	DEL_SCAN,
-	DEL_DEL,
-	DEL_WIPE,
-	DEL_WIPEPROCESS
-};
-
-static void PR_ShellDeleteMsg();
 
 struct total_items
 {
@@ -92,32 +83,118 @@ struct total_items
 	size_t Size{};
 };
 
+struct progress
+{
+	size_t Value;
+	size_t Total;
+};
+
+class delete_progress: progress_impl
+{
+	enum
+	{
+		DlgW = 76,
+		DlgH = 10,
+	};
+
+	enum items
+	{
+		pr_console_title,
+		pr_doublebox,
+		pr_message,
+		pr_file,
+		pr_wipe_progress,
+		pr_separator,
+		pr_total_files,
+		pr_total_progress,
+
+		pr_count
+	};
+
+public:
+	delete_progress(bool const Wipe, bool const Total)
+	{
+		auto ProgressDlgItems = MakeDialogItems<items::pr_count>(
+		{
+			{ DI_TEXT,      {{ 0, 0 }, { 0,               0 }}, DIF_HIDDEN,    {}, },
+			{ DI_DOUBLEBOX, {{ 3, 1 }, { DlgW - 4, DlgH - 2 }}, DIF_NONE,      msg(Wipe? lng::MDeleteWipeTitle : lng::MDeleteTitle), },
+			{ DI_TEXT,      {{ 5, 2 }, { DlgW - 6,        2 }}, DIF_NONE,      msg(Wipe? lng::MDeletingWiping : lng::MDeleting) },
+			{ DI_TEXT,      {{ 5, 3 }, { DlgW - 6,        3 }}, DIF_SHOWAMPERSAND, {} },
+			{ DI_TEXT,      {{ 5, 4 }, { DlgW - 6,        4 }}, DIF_NONE,      {} },
+			{ DI_TEXT,      {{ 5, 5 }, { DlgW - 6,        5 }}, DIF_SEPARATOR, {} },
+			{ DI_TEXT,      {{ 5, 6 }, { DlgW - 6,        6 }}, DIF_NONE,      {} },
+			{ DI_TEXT,      {{ 5, 7 }, { DlgW - 6,        7 }}, DIF_NONE,      {} },
+		});
+
+		if (!Wipe)
+		{
+			ProgressDlgItems[items::pr_wipe_progress].Flags |= DIF_HIDDEN;
+
+			for (const auto i: std::views::iota(pr_separator + 0, pr_total_progress + 1))
+			{
+				--ProgressDlgItems[i].Y1;
+				--ProgressDlgItems[i].Y2;
+			}
+
+			--ProgressDlgItems[items::pr_doublebox].Y2;
+		}
+
+		if (!Total)
+		{
+			ProgressDlgItems[items::pr_total_progress].Flags |= DIF_HIDDEN;
+			--ProgressDlgItems[items::pr_doublebox].Y2;
+			ProgressDlgItems[items::pr_console_title].strData = ProgressDlgItems[items::pr_doublebox].strData;
+		}
+
+		const int DialogHeight = ProgressDlgItems[items::pr_doublebox].Y2 - ProgressDlgItems[items::pr_doublebox].Y1 + 1 + 2;
+
+		init(ProgressDlgItems, { -1, -1, DlgW, DialogHeight });
+	}
+
+	void set_wipe_percent(size_t const Percent) const
+	{
+		m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_wipe_progress, UNSAFE_CSTR(make_progressbar(DlgW - 10, Percent, true, true)));
+	}
+
+	void update(string_view const Name, progress const Files) const
+	{
+		m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_file, UNSAFE_CSTR(null_terminated(Name)));
+
+		if (Files.Total)
+		{
+			const auto Percent = ToPercent(Files.Value, Files.Total);
+			const auto Title = std::bit_cast<const wchar_t*>(m_Dialog->SendMessage(DM_GETCONSTTEXTPTR, items::pr_doublebox, {}));
+			m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_console_title, UNSAFE_CSTR(concat(L'{', str(Percent), L"%} "sv, Title)));
+			m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_total_progress, UNSAFE_CSTR(make_progressbar(DlgW - 10, Percent, true, true)));
+		}
+
+		const auto Str = copy_progress::FormatCounter(lng::MCopyFilesTotalInfo, lng::MCopyBytesTotalInfo, Files.Value, Files.Total, Files.Total != 0, copy_progress::CanvasWidth() - 5);
+		m_Dialog->SendMessage(DM_SETTEXTPTR, items::pr_total_files, UNSAFE_CSTR(Str));
+	}
+};
+
 class ShellDelete : noncopyable
 {
 public:
 	ShellDelete(panel_ptr SrcPanel, delete_type Type);
 
-	struct progress
-	{
-		size_t Value;
-		size_t Total;
-	};
-
 private:
 	bool ConfirmDeleteReadOnlyFile(string_view Name, os::fs::attributes Attr);
-	bool ShellRemoveFile(string_view Name, progress Files);
+	bool ShellRemoveFile(string_view Name, progress Files, delete_progress const& Progress);
 	bool ERemoveDirectory(string_view Name, delete_type Type, bool& RetryRecycleAsRemove);
 	bool RemoveToRecycleBin(string_view Name, bool dir, bool& RetryRecycleAsRemove, bool& Skip);
 	void process_item(
 		panel_ptr SrcPanel,
 		const os::fs::find_data& SelFindData,
 		const total_items& Total,
+		delete_progress const& Progress,
 		const time_check& TimeCheck,
 		bool CannotRecycleTryRemove = false
 	);
 
-	int ReadOnlyDeleteMode{-1};
-	int SkipWipeMode{-1};
+	std::optional<bool>
+		m_DeleteReadOnly,
+		m_SkipWipe;
 	bool m_SkipFileErrors{};
 	bool m_SkipFolderErrors{};
 	bool m_DeleteFolders{};
@@ -126,86 +203,11 @@ private:
 	delete_type m_DeleteType;
 };
 
-struct DelPreRedrawItem : public PreRedrawItem
-{
-	DelPreRedrawItem():
-		PreRedrawItem(PR_ShellDeleteMsg)
-	{}
-
-	string name;
-	DEL_MODE Mode{};
-	ShellDelete::progress Files{};
-	int WipePercent{};
-};
-
-static void ShellDeleteMsgImpl(string_view const Name, DEL_MODE Mode, ShellDelete::progress Files, int WipePercent)
-{
-	string strProgress, strWipeProgress;
-	const auto Width = copy_progress::CanvasWidth();
-
-	if(Mode==DEL_WIPEPROCESS || Mode==DEL_WIPE)
-	{
-		strWipeProgress = make_progressbar(Width, WipePercent, true, !Files.Total);
-	}
-
-	if (Mode!=DEL_SCAN && Files.Total)
-	{
-		const auto Percent = ToPercent(Files.Value, Files.Total);
-		strProgress = make_progressbar(Width, Percent, true, true);
-		ConsoleTitle::SetFarTitle(concat(L'{', str(Percent), L"%} "sv, msg(Mode == DEL_WIPE || Mode == DEL_WIPEPROCESS? lng::MDeleteWipeTitle : lng::MDeleteTitle)));
-	}
-
-	{
-		std::vector MsgItems
-		{
-			msg(Mode == DEL_SCAN ? lng::MScanningFolder : (Mode == DEL_WIPE || Mode == DEL_WIPEPROCESS) ? lng::MDeletingWiping : lng::MDeleting),
-			fit_to_left(truncate_path(Name, Width), Width)
-		};
-
-		if (!strWipeProgress.empty())
-			MsgItems.emplace_back(strWipeProgress);
-
-		MsgItems.emplace_back(L"\x1"sv);
-		MsgItems.emplace_back(copy_progress::FormatCounter(lng::MCopyFilesTotalInfo, lng::MCopyBytesTotalInfo, Files.Value, Files.Total, Files.Total != 0, copy_progress::CanvasWidth() - 5));
-
-		if (!strProgress.empty())
-			MsgItems.emplace_back(strProgress);
-
-		Message(MSG_LEFTALIGN,
-			msg((Mode == DEL_WIPE || Mode == DEL_WIPEPROCESS) ? lng::MDeleteWipeTitle : lng::MDeleteTitle),
-			std::move(MsgItems),
-			{});
-	}
-}
-
-static void ShellDeleteMsg(string_view const Name, DEL_MODE Mode, ShellDelete::progress Files, int WipePercent)
-{
-	if (CheckForEscSilent() && ConfirmAbortOp())
-		cancel_operation();
-
-	ShellDeleteMsgImpl(Name, Mode, Files, WipePercent);
-
-	TPreRedrawFunc::instance()([&](DelPreRedrawItem& Item)
-	{
-		Item.name = Name;
-		Item.Mode = Mode;
-		Item.Files = Files;
-		Item.WipePercent = WipePercent;
-	});
-}
-
-static void PR_ShellDeleteMsg()
-{
-	TPreRedrawFunc::instance()([](const DelPreRedrawItem& Item)
-	{
-		ShellDeleteMsgImpl(Item.name, Item.Mode, Item.Files, Item.WipePercent);
-	});
-}
-
-static bool EraseFileData(string_view const Name, ShellDelete::progress Files)
+static bool EraseFileData(string_view const Name, progress Files, delete_progress const& Progress)
 {
 	os::fs::file_walker File;
-	if (!File.Open(Name, FILE_READ_DATA | FILE_WRITE_DATA, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_SEQUENTIAL_SCAN))
+	// FILE_READ_DATA is for sparse files
+	if (!File.Open(Name, FILE_READ_DATA | FILE_WRITE_DATA, os::fs::file_share_read, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH | FILE_FLAG_SEQUENTIAL_SCAN))
 		return false;
 
 	unsigned long long FileSize;
@@ -233,7 +235,7 @@ static bool EraseFileData(string_view const Name, ShellDelete::progress Files)
 		{
 			if (Global->Opt->WipeSymbol == -1)
 			{
-				std::generate(ALL_RANGE(Buf), [&]{ return CharDist(mt); });
+				std::ranges::generate(Buf, [&]{ return CharDist(mt); });
 			}
 			else
 			{
@@ -246,7 +248,13 @@ static bool EraseFileData(string_view const Name, ShellDelete::progress Files)
 			return false;
 
 		if (TimeCheck)
-			ShellDeleteMsg(Name, DEL_WIPEPROCESS, Files, File.GetPercent());
+		{
+			if (CheckForEscAndConfirmAbort())
+				cancel_operation();
+
+			Progress.update(Name, Files);
+			Progress.set_wipe_percent(File.GetPercent());
+		}
 	}
 	while(File.Step());
 
@@ -259,12 +267,12 @@ static bool EraseFileData(string_view const Name, ShellDelete::progress Files)
 	return true;
 }
 
-static bool EraseFile(string_view const Name, ShellDelete::progress Files)
+static bool EraseFile(string_view const Name, progress Files, delete_progress const& Progress)
 {
 	if (!os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL))
 		return false;
 
-	if (!EraseFileData(Name, Files))
+	if (!EraseFileData(Name, Files, Progress))
 		return false;
 
 	const auto strTempName = MakeTemp({}, false);
@@ -304,95 +312,53 @@ static void show_confirmation(
 	if (!Global->Opt->Confirm.Delete)
 		return;
 
-	string strDeleteFilesMsg;
-
-	if (SelCount == 1)
-	{
-		strDeleteFilesMsg = QuoteOuterSpace(SingleSelData.FileName);
-	}
-	else
-	{
-		// в зависимости от числа ставим нужное окончание
-		auto StrItems = str(SelCount);
-		auto Ends = msg(lng::MAskDeleteItemsA);
-		if (const auto LenItems = StrItems.size())
-		{
-			if ((LenItems >= 2 && StrItems[LenItems - 2] == L'1') ||
-				StrItems[LenItems - 1] >= L'5' ||
-				StrItems[LenItems - 1] == L'0')
-				Ends = msg(lng::MAskDeleteItemsS);
-			else if (StrItems[LenItems - 1] == L'1')
-				Ends = msg(lng::MAskDeleteItems0);
-		}
-		strDeleteFilesMsg = format(msg(lng::MAskDeleteItems), SelCount, Ends);
-	}
-
-	lng mTitle, mDText, mDBttn;
+	lng TitleId, MessageId, ButtonId;
 	const UUID* Id;
 
 	if (DeleteType == delete_type::erase)
 	{
-		mTitle = lng::MDeleteWipeTitle;
-		mDBttn = lng::MDeleteWipe;
+		TitleId = lng::MDeleteWipeTitle;
+		MessageId = lng::MAskWipe;
+		ButtonId = lng::MDeleteWipe;
 		Id = &DeleteWipeId;
 	}
 	else if (DeleteType == delete_type::remove)
 	{
-		mTitle = lng::MDeleteTitle;
-		mDBttn = lng::MDelete;
+		TitleId = lng::MDeleteTitle;
+		MessageId = lng::MAskDelete;
+		ButtonId = lng::MDelete;
 		Id = &DeleteFileFolderId;
 	}
 	else if (DeleteType == delete_type::recycle)
 	{
-		mTitle = lng::MDeleteTitle;
-		mDBttn = lng::MDeleteRecycle;
+		TitleId = lng::MDeleteTitle;
+		MessageId = lng::MAskDeleteRecycle;
+		ButtonId = lng::MDeleteRecycle;
 		Id = &DeleteRecycleId;
 	}
 	else
-		UNREACHABLE;
+		std::unreachable();
 
-	std::vector items{ strDeleteFilesMsg };
+	std::vector<string> items;
 
-	string tText;
 	bool HighlightSelected = Global->Opt->DelOpt.HighlightSelected;
-	const size_t MaxItems = std::min(std::max(static_cast<int>(Global->Opt->DelOpt.ShowSelected), 1), ScrY / 2);
 
 	if (SelCount == 1)
 	{
-		const auto folder = (SingleSelData.Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-
-		if (DeleteType == delete_type::erase)
-			mDText = folder? lng::MAskWipeFolder : lng::MAskWipeFile;
-		else if (DeleteType == delete_type::remove)
-			mDText = folder? lng::MAskDeleteFolder : lng::MAskDeleteFile;
-		else if (DeleteType == delete_type::recycle)
-			mDText = folder? lng::MAskDeleteRecycleFolder : lng::MAskDeleteRecycleFile;
-		else
-			UNREACHABLE;
+		const auto IsFolder = (SingleSelData.Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+		items.emplace_back(far::vformat(msg(MessageId), msg(IsFolder? lng::MAskDeleteFolder : lng::MAskDeleteFile)));
+		items.emplace_back(QuoteOuterSpace(SingleSelData.FileName));
 
 		if (SingleSelData.Attributes & FILE_ATTRIBUTE_REPARSE_POINT)
 		{
-			if (DeleteType == delete_type::erase)
-			{
-				mDText = folder? lng::MAskDeleteFolder : lng::MAskDeleteFile;
-				mDBttn = lng::MDelete;
-			}
-
 			Id = &DeleteLinkId;
 
 			auto FullName = ConvertNameToFull(SingleSelData.FileName);
-			auto Str = msg(lng::MAskDeleteLink);
 
 			if (GetReparsePointInfo(FullName, FullName))
-			{
 				NormalizeSymlinkName(FullName);
 
-				const os::fs::file_status Status(FullName);
-				if (os::fs::exists(Status))
-					append(Str, L' ', msg(is_directory(Status) ? lng::MAskDeleteLinkFolder : lng::MAskDeleteLinkFile));
-			}
-
-			items.emplace_back(std::move(Str));
+			items.emplace_back(msg(lng::MAskDeleteLink));
 			items.emplace_back(std::move(FullName));
 		}
 
@@ -402,71 +368,73 @@ static void show_confirmation(
 			if (SrcPanel->GetCurName(name, sname))
 			{
 				inplace::QuoteOuterSpace(name);
-				HighlightSelected = strDeleteFilesMsg != name;
+				HighlightSelected = SingleSelData.FileName != name;
 			}
 		}
 	}
 	else
 	{
-		if (DeleteType == delete_type::erase)
-			mDText = lng::MAskWipe;
-		else if (DeleteType == delete_type::remove)
-			mDText = lng::MAskDelete;
-		else if (DeleteType == delete_type::recycle)
-			mDText = lng::MAskDeleteRecycle;
-		else
-			UNREACHABLE;
+		items.emplace_back(far::vformat(msg(MessageId), msg(lng::MAskDeleteObjects)));
 
-		if (MaxItems > 1)
+		const auto ItemsToShow = std::min(std::min(std::max(static_cast<size_t>(Global->Opt->DelOpt.ShowSelected), 1uz), SelCount), size_t{ScrY / 2u});
+		const auto ItemsMore = SelCount - ItemsToShow;
+
+		for (const auto& i: SrcPanel->enum_selected())
 		{
-			tText = concat(msg(mDText), L' ', strDeleteFilesMsg);
-			items.clear();
+			items.emplace_back(QuoteOuterSpace(i.FileName));
 
-			for (const auto& i: SrcPanel->enum_selected())
+			if (items.size() - 1 == ItemsToShow)
 			{
-				items.emplace_back(QuoteOuterSpace(i.FileName));
+				if (ItemsMore)
+					items.emplace_back(far::vformat(msg(lng::MAskDeleteAndMore), ItemsMore));
 
-				if (items.size() + 1 == MaxItems && items.size() + 1 < SelCount)
-				{
-					items.emplace_back(L"…"sv);
-					break;
-				}
+				break;
 			}
 		}
 	}
 
-	intptr_t start_hilite = 0, end_hilite = 0;
+	intptr_t FirstHighlighted = 0, LastHighlighted = 0;
 
-	DialogBuilder Builder(mTitle, {}, [&](Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2)
+	DialogBuilder Builder(TitleId, {}, [&](Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2)
 	{
-		if (HighlightSelected && Msg == DN_CTLCOLORDLGITEM && Param1 >= start_hilite && Param1 <= end_hilite)
+		if (HighlightSelected && Msg == DN_CTLCOLORDLGITEM && in_closed_range(FirstHighlighted, Param1, LastHighlighted))
 		{
-			auto& Colors = *static_cast<const FarDialogItemColors*>(Param2);
+			const auto& Colors = *static_cast<FarDialogItemColors const*>(Param2);
 			Colors.Colors[0] = Colors.Colors[1];
 		}
 		return Dlg->DefProc(Msg, Param1, Param2);
 	});
 
-	if (tText.empty())
-		tText = msg(mDText);
+	const auto MaxWidth = ScrX + 1 - 6 * 2;
 
-	Builder.AddText(tText)->Flags = DIF_CENTERTEXT;
-
-	if (MaxItems > 1 && SelCount > 1)
-		Builder.AddSeparator();
-
-	for (auto& i: items)
+	if (SelCount == 1)
 	{
-		inplace::truncate_center(i, ScrX + 1 - 6 * 2);
-		const auto dx = Builder.AddText(i);
-		dx->Flags = (SelCount <= 1 || MaxItems <= 1 ? DIF_CENTERTEXT : 0) | DIF_SHOWAMPERSAND;
-		size_t index = Builder.GetLastID();
-		end_hilite = index;
-		if (!start_hilite)
-			start_hilite = index;
+		for (const auto& [Item, Index]: enumerate(items))
+		{
+			inplace::truncate_center(Item, MaxWidth);
+			Builder.AddText(Item).Flags = DIF_CENTERTEXT | DIF_SHOWAMPERSAND;
+			if (Index == 1)
+				FirstHighlighted = LastHighlighted = Builder.GetLastID();
+		}
+	}
+	else
+	{
+		for (const auto& [Item, Index]: enumerate(items))
+		{
+			if (Index == 1)
+				Builder.AddSeparator();
+
+			inplace::truncate_center(Item, MaxWidth);
+			Builder.AddText(Item).Flags = DIF_SHOWAMPERSAND;
+
+			if (Index == 1)
+				FirstHighlighted = Builder.GetLastID();
+		}
+
+		LastHighlighted = Builder.GetLastID();
 	}
 
-	Builder.AddOKCancel(mDBttn, lng::MCancel);
+	Builder.AddOKCancel(ButtonId, lng::MCancel);
 	Builder.SetId(*Id);
 
 	if (DeleteType != delete_type::recycle)
@@ -476,19 +444,20 @@ static void show_confirmation(
 		cancel_operation();
 }
 
-static auto calculate_total(panel_ptr const SrcPanel)
+static total_items calculate_total(panel_ptr const SrcPanel)
 {
-	total_items Total;
-
-	if (!Global->Opt->DelOpt.ShowTotal)
-		return Total;
-
 	const time_check TimeCheck;
+	total_items Total;
+	dirinfo_progress const DirinfoProgress(msg(lng::MDeletingTitle));
 
 	const auto DirInfoCallback = [&](string_view const Name, unsigned long long const ItemsCount, unsigned long long const Size)
 	{
-		if (TimeCheck)
-			DirInfoMsg(msg(lng::MDeletingTitle), Name, Total.Items + ItemsCount, Total.Size + Size);
+		if (!TimeCheck)
+			return;
+
+		DirinfoProgress.set_name(Name);
+		DirinfoProgress.set_count(Total.Items + ItemsCount);
+		DirinfoProgress.set_size(Total.Size + Size);
 	};
 
 	// BUGBUG
@@ -498,10 +467,10 @@ static auto calculate_total(panel_ptr const SrcPanel)
 
 		if (i.Attributes & FILE_ATTRIBUTE_DIRECTORY && !os::fs::is_directory_symbolic_link(i))
 		{
-			DirInfoData Data = {};
+			DirInfoData Data{};
 
 			if (GetDirInfo(i.FileName, Data, nullptr, DirInfoCallback, 0) <= 0)
-				continue;
+				return {};
 
 			Total.Items += Data.FileCount + Data.DirCount;
 			Total.Size += Data.FileSize;
@@ -515,6 +484,7 @@ void ShellDelete::process_item(
 	panel_ptr const SrcPanel,
 	const os::fs::find_data& SelFindData,
 	const total_items& Total,
+	delete_progress const& Progress,
 	const time_check& TimeCheck,
 	bool const CannotRecycleTryRemove
 )
@@ -526,13 +496,18 @@ void ShellDelete::process_item(
 		return;
 
 	if (TimeCheck)
-		ShellDeleteMsg(strSelName, m_DeleteType == delete_type::erase? DEL_WIPE : DEL_DEL, { ProcessedItems, Total.Items }, 0);
+	{
+		if (CheckForEscAndConfirmAbort())
+			cancel_operation();
+
+		Progress.update(strSelName, { ProcessedItems, Total.Items });
+	}
 
 	if (!(SelFindData.Attributes & FILE_ATTRIBUTE_DIRECTORY))
 	{
 		if (ConfirmDeleteReadOnlyFile(strSelName, SelFindData.Attributes))
 		{
-			if (ShellRemoveFile(strSelName, { ProcessedItems, Total.Items }) && m_UpdateDiz)
+			if (ShellRemoveFile(strSelName, { ProcessedItems, Total.Items }, Progress) && m_UpdateDiz)
 				SrcPanel->DeleteDiz(strSelName, strSelShortName);
 		}
 
@@ -547,7 +522,7 @@ void ShellDelete::process_item(
 
 		if (os::fs::is_not_empty_directory(strFullName))
 		{
-			int MsgCode = 0; // для symlink не нужно подтверждение
+			auto MsgCode = message_result::first_button; // для symlink не нужно подтверждение
 			if (!DirSymLink)
 			{
 				auto Uuid = &DeleteFolderId;
@@ -580,15 +555,15 @@ void ShellDelete::process_item(
 					{}, Uuid);
 			}
 
-			if (MsgCode == Message::first_button)
+			if (MsgCode == message_result::first_button)
 			{
 				// Nop
 			}
-			else if (MsgCode == Message::second_button)
+			else if (MsgCode == message_result::second_button)
 			{
 				m_DeleteFolders = true;
 			}
-			else if (MsgCode == Message::third_button)
+			else if (MsgCode == message_result::third_button)
 			{
 				return;
 			}
@@ -601,13 +576,14 @@ void ShellDelete::process_item(
 
 	if (!DirSymLink && m_DeleteType != delete_type::recycle)
 	{
-		ScanTree ScTree(true, true, FALSE, false);
+		ScanTree ScTree(true, true, FALSE);
 
 		const auto strSelFullName = IsAbsolutePath(strSelName)?
 			strSelName :
 			path::join(SrcPanel->GetCurDir(), strSelName);
 
 		ScTree.SetFindPath(strSelFullName, L"*"sv);
+
 		const time_check TreeTimeCheck(time_check::mode::immediate);
 
 		os::fs::find_data FindData;
@@ -615,14 +591,21 @@ void ShellDelete::process_item(
 		while (ScTree.GetNextName(FindData,strFullName))
 		{
 			if (TreeTimeCheck)
-				ShellDeleteMsg(strFullName, m_DeleteType == delete_type::erase? DEL_WIPE : DEL_DEL, { ProcessedItems, Total.Items }, 0);
+			{
+				if (CheckForEscAndConfirmAbort())
+					cancel_operation();
+
+				Progress.update(strFullName, { ProcessedItems, Total.Items });
+			}
 
 			if (FindData.Attributes & FILE_ATTRIBUTE_DIRECTORY)
 			{
 				if (os::fs::is_directory_symbolic_link(FindData))
 				{
-					if (FindData.Attributes & FILE_ATTRIBUTE_READONLY)
-						(void)os::fs::set_file_attributes(strFullName,FILE_ATTRIBUTE_NORMAL); //BUGBUG
+					if (FindData.Attributes & FILE_ATTRIBUTE_READONLY && !os::fs::set_file_attributes(strFullName, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+					{
+						LOGWARNING(L"set_file_attributes({}): {}"sv, strFullName, os::last_error());
+					}
 
 					bool Dummy = false;
 					if (!ERemoveDirectory(strFullName, m_DeleteType, Dummy))
@@ -650,15 +633,15 @@ void ShellDelete::process_item(
 						{ m_DeleteType == delete_type::erase? lng::MDeleteFileWipe : lng::MDeleteFileDelete, lng::MDeleteFileAll, lng::MDeleteFileSkip, lng::MDeleteFileCancel },
 						{}, m_DeleteType == delete_type::erase? &WipeFolderId : &DeleteFolderId); // ??? other UUID ???
 
-					if (MsgCode == Message::first_button)
+					if (MsgCode == message_result::first_button)
 					{
 						// Nop
 					}
-					else if (MsgCode == Message::second_button)
+					else if (MsgCode == message_result::second_button)
 					{
 						m_DeleteFolders = true;
 					}
-					else if (MsgCode == Message::third_button)
+					else if (MsgCode == message_result::third_button)
 					{
 						ScTree.SkipDir();
 						continue;
@@ -671,8 +654,10 @@ void ShellDelete::process_item(
 
 				if (ScTree.IsDirSearchDone())
 				{
-					if (FindData.Attributes & FILE_ATTRIBUTE_READONLY)
-						(void)os::fs::set_file_attributes(strFullName,FILE_ATTRIBUTE_NORMAL); //BUGBUG
+					if (FindData.Attributes & FILE_ATTRIBUTE_READONLY && !os::fs::set_file_attributes(strFullName, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+					{
+						LOGWARNING(L"set_file_attributes({}): {}"sv, strFullName, os::last_error());
+					}
 
 					bool Dummy = false;
 					if (!ERemoveDirectory(strFullName, m_DeleteType, Dummy))
@@ -689,25 +674,26 @@ void ShellDelete::process_item(
 				if (ConfirmDeleteReadOnlyFile(strFullName,FindData.Attributes))
 				{
 					// BUGBUG check result
-					ShellRemoveFile(strFullName, { ProcessedItems, Total.Items });
+					ShellRemoveFile(strFullName, { ProcessedItems, Total.Items }, Progress);
 				}
 			}
 		}
 	}
 
-	if (SelFindData.Attributes & FILE_ATTRIBUTE_READONLY)
-		(void)os::fs::set_file_attributes(strSelName,FILE_ATTRIBUTE_NORMAL); //BUGBUG
+	if (SelFindData.Attributes & FILE_ATTRIBUTE_READONLY && !os::fs::set_file_attributes(strSelName, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+	{
+		LOGWARNING(L"set_file_attributes({}): {}"sv, strSelName, os::last_error());
+	}
 
 	bool RetryRecycleAsRemove = false;
-	const auto Removed = ERemoveDirectory(
+
+	if (ERemoveDirectory(
 		strSelName,
 		m_DeleteType == delete_type::recycle && DirSymLink && !IsWindowsVistaOrGreater()?
-			delete_type::remove :
-			m_DeleteType,
+		delete_type::remove :
+		m_DeleteType,
 		RetryRecycleAsRemove
-	);
-
-	if (Removed)
+	))
 	{
 		TreeList::DelTreeName(strSelName);
 
@@ -718,10 +704,9 @@ void ShellDelete::process_item(
 	{
 		--ProcessedItems;
 		m_DeleteType = delete_type::remove;
-		process_item(SrcPanel, SelFindData, Total, TimeCheck, true);
+		process_item(SrcPanel, SelFindData, Total, Progress, TimeCheck, true);
 		m_DeleteType = delete_type::recycle;
 	}
-
 }
 
 ShellDelete::ShellDelete(panel_ptr SrcPanel, delete_type const Type):
@@ -735,9 +720,6 @@ ShellDelete::ShellDelete(panel_ptr SrcPanel, delete_type const Type):
 	const auto strDizName = SrcPanel->GetDizName();
 	const auto CheckDiz = [&] { return !strDizName.empty() && os::fs::exists(strDizName); };
 	const auto DizPresent = CheckDiz();
-
-	SCOPED_ACTION(TPreRedrawFuncGuard)(std::make_unique<DelPreRedrawItem>());
-
 	const auto SelCount = SrcPanel->GetSelCount();
 	if (!SelCount)
 		return;
@@ -767,15 +749,15 @@ ShellDelete::ShellDelete(panel_ptr SrcPanel, delete_type const Type):
 	ConsoleTitle::SetFarTitle(msg(lng::MDeletingTitle));
 	SCOPED_ACTION(taskbar::indeterminate);
 	SCOPED_ACTION(wakeful);
-	SetCursorType(false, 0);
+	HideCursor();
 
-	const auto Total = calculate_total(SrcPanel);
-
+	delete_progress const Progress(m_DeleteType == delete_type::erase, Global->Opt->DelOpt.ShowTotal);
+	const auto Total = Global->Opt->DelOpt.ShowTotal? calculate_total(SrcPanel) : total_items{};
 	const time_check TimeCheck(time_check::mode::immediate);
 
 	for (const auto& i: SrcPanel->enum_selected())
 	{
-		process_item(SrcPanel, i, Total, TimeCheck);
+		process_item(SrcPanel, i, Total, Progress, TimeCheck);
 	}
 }
 
@@ -785,13 +767,13 @@ bool ShellDelete::ConfirmDeleteReadOnlyFile(string_view const Name, os::fs::attr
 		return true;
 
 	if (!Global->Opt->Confirm.RO)
-		ReadOnlyDeleteMode = Message::first_button;
+		m_DeleteReadOnly = true;
 
-	int MsgCode;
+	message_result MsgCode;
 
-	if (ReadOnlyDeleteMode != -1)
+	if (m_DeleteReadOnly)
 	{
-		MsgCode = ReadOnlyDeleteMode;
+		MsgCode = *m_DeleteReadOnly? message_result::first_button : message_result::third_button;
 	}
 	else
 	{
@@ -814,17 +796,21 @@ bool ShellDelete::ConfirmDeleteReadOnlyFile(string_view const Name, os::fs::attr
 
 	switch (MsgCode)
 	{
-	case Message::second_button:
-		ReadOnlyDeleteMode = Message::first_button;
+	case message_result::second_button:
+		m_DeleteReadOnly = true;
 		[[fallthrough]];
-	case Message::first_button:
-		(void)os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL); //BUGBUG
+	case message_result::first_button:
+		if (!os::fs::set_file_attributes(Name, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+		{
+			LOGWARNING(L"set_file_attributes({}): {}"sv, Name, os::last_error());
+		}
+
 		return true;
 
-	case Message::fourth_button:
-		ReadOnlyDeleteMode = Message::third_button;
+	case message_result::fourth_button:
+		m_DeleteReadOnly = false;
 		[[fallthrough]];
-	case Message::third_button:
+	case message_result::third_button:
 		return false;
 
 	default:
@@ -832,107 +818,94 @@ bool ShellDelete::ConfirmDeleteReadOnlyFile(string_view const Name, os::fs::attr
 	}
 }
 
-static int confirm_erase_file_with_hardlinks(string_view const File)
+static bool confirm_erase_file_with_hardlinks(string_view const File, std::optional<bool>& Wipe)
 {
-	const auto Hardlinks = GetNumberOfLinks(File);
-	if (!Hardlinks || *Hardlinks < 2)
-		return Message::first_button;
+	message_result MsgCode;
 
-	return Message(MSG_WARNING,
-		msg(lng::MError),
+	if (Wipe)
+	{
+		MsgCode = *Wipe? message_result::first_button : message_result::third_button;
+	}
+	else
+	{
+		MsgCode = [&]
 		{
-			string(File),
-			msg(lng::MDeleteHardLink1),
-			msg(lng::MDeleteHardLink2),
-			msg(lng::MDeleteHardLink3)
-		},
-		{ lng::MDeleteFileWipe, lng::MDeleteFileAll, lng::MDeleteFileSkip, lng::MDeleteFileSkipAll, lng::MDeleteCancel },
-		{}, &WipeHardLinkId);
+			const auto Hardlinks = GetNumberOfLinks(File);
+			return !Hardlinks || *Hardlinks < 2?
+				message_result::first_button :
+				Message(MSG_WARNING,
+				msg(lng::MError),
+				{
+					string(File),
+					msg(lng::MDeleteHardLink1),
+					msg(lng::MDeleteHardLink2),
+					msg(lng::MDeleteHardLink3)
+				},
+				{ lng::MDeleteFileWipe, lng::MDeleteFileAll, lng::MDeleteFileSkip, lng::MDeleteFileSkipAll, lng::MDeleteCancel },
+				{}, &WipeHardLinkId);
+		}();
+	}
+
+	switch(MsgCode)
+	{
+	case message_result::second_button:
+		Wipe = true;
+		[[fallthrough]];
+	case message_result::first_button:
+		return true;
+
+	case message_result::fourth_button:
+		Wipe = false;
+		[[fallthrough]];
+	case message_result::third_button:
+		return false;
+
+	default:
+		cancel_operation();
+	}
 }
 
-bool ShellDelete::ShellRemoveFile(string_view const Name, progress Files)
+static bool erase_file_with_retry(string_view const Name, std::optional<bool>& Wipe, progress const Files, delete_progress const& Progress, bool& SkipErrors)
+{
+	return
+		confirm_erase_file_with_hardlinks(Name, Wipe) &&
+		retryable_ui_operation([&]{ return EraseFile(Name, Files, Progress); }, Name, lng::MCannotDeleteFile, SkipErrors);
+}
+
+static bool delete_file_with_retry(string_view const Name, bool& SkipErrors)
+{
+	return retryable_ui_operation([&]{ return os::fs::delete_file(Name); }, Name, lng::MCannotDeleteFile, SkipErrors);
+}
+
+bool ShellDelete::ShellRemoveFile(string_view const Name, progress Files, delete_progress const& Progress)
 {
 	ProcessedItems++;
 	const auto strFullName = ConvertNameToFull(Name);
 
-	for (;;)
+	switch (m_DeleteType)
 	{
-		bool recycle_bin = false;
-		if (m_DeleteType == delete_type::erase)
-		{
-			int MsgCode;
+	case delete_type::erase:
+		return erase_file_with_retry(strFullName, m_SkipWipe, Files, Progress, m_SkipFileErrors);
 
-			if (SkipWipeMode != -1)
-			{
-				MsgCode = SkipWipeMode;
-			}
-			else
-			{
-				MsgCode = confirm_erase_file_with_hardlinks(strFullName);
-			}
+	case delete_type::remove:
+		return delete_file_with_retry(strFullName, m_SkipFileErrors);
 
-			switch (MsgCode)
-			{
-			case Message::second_button:
-				SkipWipeMode = Message::first_button;
-				[[fallthrough]];
-			case Message::first_button:
-				if (EraseFile(strFullName, Files))
-					return true;
-				break;
-			case Message::fourth_button:
-				SkipWipeMode = Message::third_button;
-				[[fallthrough]];
-			case Message::third_button:
-				return false;
+	case delete_type::recycle:
+		{
+			auto RetryRecycleAsRemove = false, Skip = false;
 
-			default:
-				cancel_operation();
-			}
-		}
-		else if (m_DeleteType == delete_type::remove)
-		{
-			if (os::fs::delete_file(strFullName))
-				return true;
-		}
-		else
-		{
-			recycle_bin = true;
-			bool RetryRecycleAsRemove = false;
-			bool Skip = false;
-			if (RemoveToRecycleBin(strFullName, false, RetryRecycleAsRemove, Skip))
+			const auto Result = retryable_ui_operation([&]{ return RemoveToRecycleBin(strFullName, false, RetryRecycleAsRemove, Skip) || RetryRecycleAsRemove || Skip; }, strFullName, lng::MCannotRecycleFile, m_SkipFileErrors);
+			if (Result && !RetryRecycleAsRemove && !Skip)
 				return true;
 
 			if (RetryRecycleAsRemove)
-			{
-				recycle_bin = false;
-				if (os::fs::delete_file(strFullName))
-					return true;
-			}
+				return delete_file_with_retry(strFullName, m_SkipFileErrors);
 
-			if (Skip)
-				return false;
+			return false;
 		}
 
-		if (m_SkipFileErrors)
-			return false;
-
-		const auto ErrorState = error_state::fetch();
-
-		switch (OperationFailed(ErrorState, strFullName, lng::MError, msg(recycle_bin? lng::MCannotRecycleFile : lng::MCannotDeleteFile)))
-		{
-		case operation::retry:
-			continue;
-
-		case operation::skip_all:
-			m_SkipFileErrors = true;
-			[[fallthrough]];
-		case operation::skip:
-			return false;
-
-		case operation::cancel:
-			cancel_operation();
-		}
+	default:
+		std::unreachable();
 	}
 }
 
@@ -940,67 +913,22 @@ bool ShellDelete::ERemoveDirectory(string_view const Name, delete_type const Typ
 {
 	ProcessedItems++;
 
-	for (;;)
+	switch (Type)
 	{
-		bool recycle_bin = false;
-		switch(Type)
+	case delete_type::remove:
+	case delete_type::erase:
+		return retryable_ui_operation([&]{ return (Type == delete_type::erase? EraseDirectory : os::fs::remove_directory)(Name); }, Name, lng::MCannotDeleteFolder, m_SkipFolderErrors);
+
+	case delete_type::recycle:
 		{
-		case delete_type::remove:
-			if (os::fs::remove_directory(Name))
-				return true;
-			break;
-
-		case delete_type::erase:
-			if (EraseDirectory(Name))
-				return true;
-			break;
-
-		case delete_type::recycle:
-			{
-				recycle_bin = true;
-				bool Skip = false;
-				if (RemoveToRecycleBin(Name, true, RetryRecycleAsRemove, Skip))
-					return true;
-
-				if (RetryRecycleAsRemove)
-					return false;
-
-				if (Skip)
-					return false;
-			}
-			break;
-
-		default:
-			UNREACHABLE;
+			auto Skip = false;
+			return
+				retryable_ui_operation([&]{ return RemoveToRecycleBin(Name, true, RetryRecycleAsRemove, Skip) || RetryRecycleAsRemove || Skip; }, Name, lng::MCannotRecycleFolder, m_SkipFolderErrors) &&
+				!Skip &&
+				!RetryRecycleAsRemove;
 		}
-
-		operation MsgCode;
-
-		if (!m_SkipFolderErrors)
-		{
-			const auto ErrorState = error_state::fetch();
-
-			MsgCode = OperationFailed(ErrorState, Name, lng::MError, msg(recycle_bin? lng::MCannotRecycleFolder : lng::MCannotDeleteFolder));
-		}
-		else
-		{
-			MsgCode = operation::skip;
-		}
-
-		switch (MsgCode)
-		{
-		case operation::retry:
-			break;
-
-		case operation::skip_all:
-			m_SkipFolderErrors = true;
-			[[fallthrough]];
-		case operation::skip:
-			return false;
-
-		case operation::cancel:
-			cancel_operation();
-		}
+	default:
+		std::unreachable();
 	}
 }
 
@@ -1012,7 +940,7 @@ static void break_links_for_old_os(string_view const Name)
 
 	string strFullName2;
 	os::fs::find_data FindData;
-	ScanTree ScTree(true, true, FALSE, false);
+	ScanTree ScTree(true, true, FALSE);
 	ScTree.SetFindPath(Name, L"*"sv);
 
 	bool MessageShown = false;
@@ -1036,7 +964,7 @@ static void break_links_for_old_os(string_view const Name)
 				},
 				{ lng::MYes, lng::MCancel },
 				{}, &RecycleFolderConfirmDeleteLinkId
-			) != Message::first_button)
+			) != message_result::first_button)
 			{
 				cancel_operation();
 			}
@@ -1059,9 +987,9 @@ bool ShellDelete::RemoveToRecycleBin(string_view const Name, bool dir, bool& Ret
 	if (dir? m_SkipFolderErrors : m_SkipFileErrors)
 		return false;
 
-	const auto ErrorState = error_state::fetch();
+	const auto ErrorState = os::last_error();
 
-	const int MsgCode = Message(MSG_WARNING, ErrorState,
+	switch (Message(MSG_WARNING, ErrorState,
 		msg(lng::MError),
 		{
 			msg(dir? lng::MCannotRecycleFolder : lng::MCannotRecycleFile),
@@ -1069,18 +997,16 @@ bool ShellDelete::RemoveToRecycleBin(string_view const Name, bool dir, bool& Ret
 			msg(lng::MTryToDeletePermanently)
 		},
 		{ lng::MDeleteFileDelete, lng::MDeleteSkip, lng::MDeleteSkipAll, lng::MDeleteCancel },
-		{}, dir? &CannotRecycleFolderId : &CannotRecycleFileId);
-
-	switch (MsgCode)
+		{}, dir? &CannotRecycleFolderId : &CannotRecycleFileId))
 	{
-	case Message::first_button:     // {Delete}
+	case message_result::first_button:     // {Delete}
 		RetryRecycleAsRemove = true;
 		return false;
 
-	case Message::third_button:     // [Skip All]
+	case message_result::third_button:     // [Skip All]
 		(dir? m_SkipFolderErrors : m_SkipFileErrors) = true;
 		[[fallthrough]];
-	case Message::second_button:    // [Skip]
+	case message_result::second_button:    // [Skip]
 		Skip = true;
 		return false;
 
@@ -1092,40 +1018,61 @@ bool ShellDelete::RemoveToRecycleBin(string_view const Name, bool dir, bool& Ret
 void DeleteDirTree(string_view const Dir)
 {
 	if (Dir.empty() ||
-	        (Dir.size() == 1 && IsSlash(Dir[0])) ||
-	        (Dir.size() == 3 && Dir[1]==L':' && IsSlash(Dir[2])))
+	        (Dir.size() == 1 && path::is_separator(Dir[0])) ||
+	        (Dir.size() == 3 && Dir[1]==L':' && path::is_separator(Dir[2])))
 		return;
 
 	string strFullName;
 	os::fs::find_data FindData;
-	ScanTree ScTree(true, true, FALSE, false);
+	ScanTree ScTree(true, true, FALSE);
 	ScTree.SetFindPath(Dir, L"*"sv);
 
 	while (ScTree.GetNextName(FindData, strFullName))
 	{
-		(void)os::fs::set_file_attributes(strFullName,FILE_ATTRIBUTE_NORMAL); //BUGBUG
+		if (!os::fs::set_file_attributes(strFullName, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+		{
+			LOGWARNING(L"set_file_attributes({}): {}"sv, strFullName, os::last_error());
+		}
 
 		if (FindData.Attributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			if (ScTree.IsDirSearchDone())
-				// BUGBUG check result
-				(void)os::fs::remove_directory(strFullName);
+			// BUGBUG check result
+			if (ScTree.IsDirSearchDone() && !os::fs::remove_directory(strFullName))
+			{
+				LOGWARNING(L"remove_directory({}): {}"sv, strFullName, os::last_error());
+			}
 		}
 		else
+		{
 			// BUGBUG check result
-			(void)os::fs::delete_file(strFullName);
+			if (!os::fs::delete_file(strFullName))
+			{
+				LOGWARNING(L"delete_file({}): {}"sv, strFullName, os::last_error());
+			}
+		}
 	}
 
 	// BUGBUG check result
-	(void)os::fs::set_file_attributes(Dir,FILE_ATTRIBUTE_NORMAL);
+	if (!os::fs::set_file_attributes(Dir, FILE_ATTRIBUTE_NORMAL))
+	{
+		LOGWARNING(L"set_file_attributes({}): {}"sv, Dir, os::last_error());
+	}
+
 	// BUGBUG check result
-	(void)os::fs::remove_directory(Dir);
+	if (!os::fs::remove_directory(Dir))
+	{
+		LOGWARNING(L"remove_directory({}): {}"sv, Dir, os::last_error());
+	}
+
 }
 
 bool DeleteFileWithFolder(string_view const FileName)
 {
 	auto strFileOrFolderName = unquote(FileName);
-	(void)os::fs::set_file_attributes(strFileOrFolderName, FILE_ATTRIBUTE_NORMAL); //BUGBUG
+	if (!os::fs::set_file_attributes(strFileOrFolderName, FILE_ATTRIBUTE_NORMAL)) //BUGBUG
+	{
+		LOGWARNING(L"set_file_attributes({}): {}"sv, strFileOrFolderName, os::last_error());
+	}
 
 	if (!os::fs::delete_file(strFileOrFolderName))
 		return false;
@@ -1146,7 +1093,14 @@ delayed_deleter::~delayed_deleter()
 		{
 			auto Folder = i;
 			if (CutToParent(Folder))
-				(void)os::fs::remove_directory(Folder);
+			{
+				if (!os::fs::remove_directory(Folder))
+					LOGWARNING(L"remove_directory({}): {}"sv, i, os::last_error());
+			}
+		}
+		else
+		{
+			LOGWARNING(L"delete_file({}): {}"sv, i, os::last_error());
 		}
 	}
 }
@@ -1167,7 +1121,7 @@ void Delete(const panel_ptr& SrcPanel, delete_type const Type)
 	{
 		ShellDelete(SrcPanel, Type);
 	}
-	catch (const operation_cancelled&)
+	catch (operation_cancelled const&)
 	{
 		// Nop
 	}

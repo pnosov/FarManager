@@ -44,7 +44,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "lang.hpp"
 #include "colormix.hpp"
 #include "interf.hpp"
-#include "syslog.hpp"
 #include "strmix.hpp"
 #include "global.hpp"
 
@@ -72,15 +71,13 @@ MenuItemEx& VMenu2::current()
 	return ListBox().current();
 }
 
-int VMenu2::GetShowItemCount()
+int VMenu2::GetShowItemCount() const
 {
 	return ListBox().GetShowItemCount();
 }
 
 intptr_t VMenu2::VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2)
 {
-	_DIALOG(CleverSysLog CL(L"VMenu2::VMenu2DlgProc()"));
-	_DIALOG(SysLog(L"hDlg=%p, Msg=%s, Param1=%d (0x%08X), Param2=%d (0x%08X)",Dlg,_DLGMSG_ToName(Msg),Param1,Param1,Param2,Param2));
 	switch(Msg)
 	{
 	case DN_CTLCOLORDIALOG:
@@ -108,15 +105,15 @@ intptr_t VMenu2::VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void*
 				COL_MENUSELECTEDGRAYTEXT,                  // выбранный "серый"
 			};
 
-			const auto colors = static_cast<FarDialogItemColors*>(Param2);
-			std::transform(MenuColors, MenuColors + std::min(colors->ColorsCount, std::size(MenuColors)), colors->Colors, &colors::PaletteColorToFarColor);
+			const auto& colors = *static_cast<FarDialogItemColors const*>(Param2);
+			std::ranges::transform(MenuColors | std::views::take(std::min(colors.ColorsCount, std::size(MenuColors))), colors.Colors, &colors::PaletteColorToFarColor);
 			return true;
 		}
 
 	case DN_CLOSE:
 		if(!ForceClosing && !Param1 && GetItemFlags() & (LIF_GRAYED|LIF_DISABLE))
 			return false;
-		if(Call(Msg, reinterpret_cast<void*>(Param1 < 0? Param1 : GetSelectPos())))
+		if(Call(Msg, std::bit_cast<void*>(Param1 < 0? Param1 : GetSelectPos())))
 			return false;
 		break;
 
@@ -129,11 +126,12 @@ intptr_t VMenu2::VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void*
 	case DN_DRAWDIALOGDONE:
 		if(DefRec.EventType)
 		{
-			INPUT_RECORD rec=DefRec;
+			auto rec = DefRec;
 			DefRec = {};
 			if(!Call(DN_INPUT, &rec))
 				Dlg->SendMessage( DM_KEY, 1, &rec);
 		}
+		Call(Msg, Param2);
 		break;
 
 	case DN_INPUT:
@@ -154,10 +152,6 @@ intptr_t VMenu2::VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void*
 		break;
 
 	case DN_LISTCHANGE:
-		if (Dlg->CheckDialogMode(DMODE_ISMENU))
-			break;
-		[[fallthrough]];
-	case DN_ENTERIDLE:
 		if(!cancel)
 		{
 			if(Call(Msg, Param2))
@@ -168,18 +162,13 @@ intptr_t VMenu2::VMenu2DlgProc(Dialog* Dlg, intptr_t Msg, intptr_t Param1, void*
 	case DN_RESIZECONSOLE:
 		if(!cancel)
 		{
-			INPUT_RECORD ReadRec={WINDOW_BUFFER_SIZE_EVENT};
+			INPUT_RECORD ReadRec{ WINDOW_BUFFER_SIZE_EVENT };
 			ReadRec.Event.WindowBufferSizeEvent.dwSize = *static_cast<COORD*>(Param2);
 			if(Call(DN_INPUT, &ReadRec))
 				return false;
 			else
 				Resize();
 		}
-		break;
-
-	default:
-		if(Global->CloseFARMenu)
-			ProcessKey(Manager::Key(KEY_ESC));
 		break;
 	}
 	return Dlg->DefProc(Msg, Param1, Param2);
@@ -237,10 +226,6 @@ void VMenu2::Resize(bool force)
 	}
 	NeedResize=false;
 
-	FarListInfo info={sizeof(FarListInfo)};
-	SendMessage(DM_LISTINFO, 0, &info);
-
-
 	int X1 = m_X1;
 	int Y1 = m_Y1;
 	if(m_BoxType == box_type::full)
@@ -251,14 +236,12 @@ void VMenu2::Resize(bool force)
 			Y1-=1;
 	}
 
-
-	int width = info.MaxLength + (m_BoxType == box_type::none? 0 : m_BoxType == box_type::thin? 2 : 6) + 3;
-	if(m_X2>0)
-		width=m_X2-X1+1;
-
-	if(width>ScrX+1)
-		width=ScrX+1;
-
+	const auto width = std::min(
+		ScrX + 1,
+		m_X2 > 0?
+			m_X2 - X1 + 1 :
+			static_cast<int>(ListBox().GetNaturalMenuWidth() + (m_BoxType == box_type::full? 4 : 0))
+	);
 
 	int height=GetShowItemCount();
 	if(MaxHeight && height>MaxHeight)
@@ -325,7 +308,7 @@ LISTITEMFLAGS VMenu2::GetItemFlags(int Position)
 	if(Position<0)
 		Position=GetSelectPos();
 
-	FarListGetItem flgi={sizeof(FarListGetItem), Position};
+	FarListGetItem flgi{ sizeof(flgi), Position };
 	SendMessage(DM_LISTGETITEM, 0, &flgi);
 	return flgi.Item.Flags;
 }
@@ -333,7 +316,7 @@ LISTITEMFLAGS VMenu2::GetItemFlags(int Position)
 string VMenu2::GetMenuTitle(bool bottom)
 {
 	wchar_t_ptr_n<256> title;
-	FarListTitles titles={sizeof(FarListTitles)};
+	FarListTitles titles{ sizeof(titles) };
 	if(!SendMessage(DM_LISTGETTITLES, 0, &titles))
 		return {};
 	size_t size;
@@ -360,21 +343,11 @@ static const FarDialogItem VMenu2DialogItems[]
 
 VMenu2::VMenu2(private_tag, int MaxHeight):
 	Dialog(Dialog::private_tag(), span(VMenu2DialogItems), [this](Dialog* Dlg, intptr_t Msg, intptr_t Param1, void* Param2) { return VMenu2DlgProc(Dlg, Msg, Param1, Param2); }, nullptr),
-	MaxHeight(MaxHeight),
-	cancel(0),
-	m_X1(-1),
-	m_Y1(-1),
-	m_X2(0),
-	m_Y2(0),
-	DefRec(),
-	InsideCall(0),
-	NeedResize(false),
-	closing(false),
-	ForceClosing(false)
+	MaxHeight(MaxHeight)
 {
 }
 
-vmenu2_ptr VMenu2::create(const string& Title, span<const menu_item> const Data, int MaxHeight, DWORD Flags)
+vmenu2_ptr VMenu2::create(const string& Title, std::span<const menu_item> const Data, int MaxHeight, DWORD Flags)
 {
 	auto VMenu2Ptr = std::make_shared<VMenu2>(private_tag(), MaxHeight);
 
@@ -388,9 +361,9 @@ vmenu2_ptr VMenu2::create(const string& Title, span<const menu_item> const Data,
 
 	std::vector<FarListItem> fli;
 	fli.reserve(Data.size());
-	std::transform(ALL_CONST_RANGE(Data), std::back_inserter(fli), [](const auto& i) { return FarListItem{ i.Flags, i.Name.c_str() }; });
+	std::ranges::transform(Data, std::back_inserter(fli), [](const auto& i) { return FarListItem{ i.Flags, i.Name.c_str() }; });
 
-	FarList fl = { sizeof(FarList), fli.size(), fli.data() };
+	FarList fl{ sizeof(fl), fli.size(), fli.data() };
 
 	VMenu2Ptr->SendMessage(DM_LISTSET, 0, &fl);
 
@@ -406,7 +379,7 @@ vmenu2_ptr VMenu2::create(const string& Title, span<const menu_item> const Data,
 
 void VMenu2::SetTitle(const string& Title)
 {
-	FarListTitles titles={sizeof(FarListTitles)};
+	FarListTitles titles{ sizeof(titles) };
 	const auto t = GetMenuTitle(true);
 	titles.Bottom=t.c_str();
 	titles.Title=Title.c_str();
@@ -415,7 +388,7 @@ void VMenu2::SetTitle(const string& Title)
 
 void VMenu2::SetBottomTitle(const string& Title)
 {
-	FarListTitles titles={sizeof(FarListTitles)};
+	FarListTitles titles{ sizeof(titles) };
 	const auto t = GetMenuTitle();
 	titles.Bottom=Title.c_str();
 	titles.Title=t.c_str();
@@ -440,7 +413,7 @@ void VMenu2::SetMenuFlags(DWORD Flags)
 	if (Flags&VMENU_NOMERGEBORDER)
 		fdi.Flags|=DIF_LISTNOMERGEBORDER;
 
-	ListBox().SetMenuFlags(Flags & (VMENU_REVERSEHIGHLIGHT | VMENU_LISTSINGLEBOX));
+	ListBox().SetMenuFlags(Flags & (VMENU_REVERSEHIGHLIGHT | VMENU_LISTSINGLEBOX | VMENU_ENABLEALIGNANNOTATIONS));
 
 	SendMessage(DM_SETDLGITEMSHORT, 0, &fdi);
 }
@@ -458,7 +431,7 @@ void VMenu2::clear()
 
 int VMenu2::DeleteItem(int ID, int Count)
 {
-	FarListDelete fld={sizeof(FarListDelete), ID, Count};
+	FarListDelete fld{ sizeof(fld), ID, Count };
 	SendMessage(DM_LISTDELETE, 0, &fld);
 	Resize();
 	return static_cast<int>(size());
@@ -475,7 +448,7 @@ int VMenu2::AddItem(const MenuItemEx& NewItem, int PosAdd)
 		PosAdd=n;
 
 
-	FarListInsert fli{ sizeof(FarListInsert), PosAdd, { NewItem.Flags, NewItem.Name.c_str(), NewItem.SimpleUserData } };
+	FarListInsert fli{ sizeof(fli), PosAdd, { NewItem.Flags, NewItem.Name.c_str(), NewItem.SimpleUserData } };
 	if(SendMessage(DM_LISTINSERT, 0, &fli)<0)
 		return -1;
 
@@ -503,20 +476,20 @@ int VMenu2::AddItem(const string& NewStrItem)
 
 int VMenu2::FindItem(int StartIndex, const string& Pattern, unsigned long long Flags)
 {
-	FarListFind flf{sizeof(FarListFind), StartIndex, Pattern.c_str(), Flags};
+	FarListFind flf{ sizeof(flf), StartIndex, Pattern.c_str(), Flags };
 	return SendMessage(DM_LISTFINDSTRING, 0, &flf);
 }
 
 size_t VMenu2::size()
 {
-	FarListInfo info={sizeof(FarListInfo)};
+	FarListInfo info{ sizeof(info) };
 	SendMessage(DM_LISTINFO, 0, &info);
 	return info.ItemsNumber;
 }
 
 int VMenu2::GetSelectPos()
 {
-	FarListPos flp={sizeof(FarListPos)};
+	FarListPos flp{ sizeof(flp) };
 	SendMessage(DM_LISTGETCURPOS, 0, &flp);
 	return flp.SelectPos;
 }
@@ -524,7 +497,7 @@ int VMenu2::GetSelectPos()
 int VMenu2::SetSelectPos(int Pos, int Direct)
 {
 /*
-	FarListPos flp={sizeof(FarListPos), Pos, -1};
+	FarListPos flp{ sizeof(flp), Pos, -1 };
 	return SendMessage(DM_LISTSETCURPOS, 0, &flp); //!! DM_LISTSETCURPOS не работает для скрытого диалога
 */
 	return ListBox().SetSelectPos(Pos, Direct);
@@ -560,15 +533,21 @@ void VMenu2::ClearCheck(int Position)
 	UpdateItemFlags(Position, Flags & ~LIF_CHECKED);
 }
 
+void VMenu2::FlipCheck(int Position)
+{
+	const auto Flags = GetItemFlags(Position) & ~std::numeric_limits<wchar_t>::max();
+	UpdateItemFlags(Position, Flags & LIF_CHECKED? Flags & ~LIF_CHECKED : Flags | LIF_CHECKED);
+}
+
 void VMenu2::UpdateItemFlags(int Pos, unsigned long long NewFlags)
 {
 	if(Pos<0)
 		Pos=GetSelectPos();
-	FarListGetItem flgi={sizeof(FarListGetItem), Pos};
+	FarListGetItem flgi{ sizeof(flgi), Pos };
 	SendMessage(DM_LISTGETITEM, 0, &flgi);
 	flgi.Item.Flags=NewFlags;
 
-	FarListUpdate flu={sizeof(FarListUpdate), Pos, flgi.Item};
+	FarListUpdate flu{ sizeof(flu), Pos, flgi.Item };
 	SendMessage(DM_LISTUPDATE, 0, &flu);
 }
 
@@ -592,6 +571,7 @@ intptr_t VMenu2::RunEx(const std::function<int(int Msg, void *param)>& fn)
 	Resize(true);
 
 	Process();
+	mfn = {};
 
 	return GetExitCode();
 }
@@ -603,12 +583,13 @@ intptr_t VMenu2::Run(const std::function<int(const Manager::Key& RawKey)>& fn)
 
 	return RunEx([&](int Msg, void *param)
 	{
-		const auto Key =
-			Msg == DN_INPUT?
-			Manager::Key(static_cast<const INPUT_RECORD*>(param)->EventType == WINDOW_BUFFER_SIZE_EVENT? KEY_CONSOLE_BUFFER_RESIZE : InputRecordToKey(static_cast<const INPUT_RECORD*>(param)), *static_cast<const INPUT_RECORD*>(param)) :
-			Manager::Key(KEY_NONE);
+		if (Msg == DN_INPUT)
+		{
+			const auto& Rec = *static_cast<const INPUT_RECORD*>(param);
+			return fn(Manager::Key(InputRecordToKey(&Rec), Rec));
+		}
 
-		return fn(Key);
+		return fn(Manager::Key(KEY_NONE));
 	});
 }
 
@@ -680,34 +661,21 @@ int VMenu2::GetTypeAndName(string &strType, string &strName)
 	return windowtype_menu;
 }
 
-static auto ClickHandler(VMenu2* Menu, const IntOption& MenuClick)
-{
-	switch (MenuClick)
-	{
-	case  VMENUCLICK_APPLY:
-		return Menu->ProcessKey(Manager::Key(KEY_ENTER));
-
-	case VMENUCLICK_CANCEL:
-		return Menu->ProcessKey(Manager::Key(KEY_ESC));
-
-	case VMENUCLICK_IGNORE:
-	default:
-		return true;
-	}
-}
-
 bool VMenu2::ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent)
 {
-	if (!IsMoving())
+	if (!IsMoving() && IsMouseButtonEvent(MouseEvent->dwEventFlags) && !m_Where.contains(MouseEvent->dwMousePosition))
 	{
-		if (!m_Where.contains(MouseEvent->dwMousePosition))
+		INPUT_RECORD mouse{ MOUSE_EVENT };
+		mouse.Event.MouseEvent = *MouseEvent;
+		if (!Call(DN_INPUT, &mouse))
 		{
-			if (MouseEvent->dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)
-				return ClickHandler(this, Global->Opt->VMenu.LBtnClick);
-			else if (MouseEvent->dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED)
-				return ClickHandler(this, Global->Opt->VMenu.MBtnClick);
-			else if (MouseEvent->dwButtonState & RIGHTMOST_BUTTON_PRESSED)
-				return ClickHandler(this, Global->Opt->VMenu.RBtnClick);
+			const auto NewButtonState = mouse.Event.MouseEvent.dwButtonState & ~IntKeyState.PrevMouseButtonState;
+			if (NewButtonState & FROM_LEFT_1ST_BUTTON_PRESSED)
+				return VMenu::ClickHandler(this, Global->Opt->VMenu.LBtnClick);
+			else if (NewButtonState & FROM_LEFT_2ND_BUTTON_PRESSED)
+				return VMenu::ClickHandler(this, Global->Opt->VMenu.MBtnClick);
+			else if (NewButtonState & RIGHTMOST_BUTTON_PRESSED)
+				return VMenu::ClickHandler(this, Global->Opt->VMenu.RBtnClick);
 		}
 	}
 	return Dialog::ProcessMouse(MouseEvent);

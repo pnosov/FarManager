@@ -39,7 +39,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/range.hpp"
 
 // External:
 
@@ -47,13 +46,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 [[nodiscard]]
-inline constexpr bool IsEol(wchar_t x) noexcept { return x == L'\r' || x == L'\n'; }
+constexpr bool IsEol(wchar_t x) noexcept { return x == L'\r' || x == L'\n'; }
 
 [[nodiscard]]
-inline bool IsBlankOrEos(wchar_t x) noexcept { return std::iswblank(x) || !x; }
+inline bool IsBlankOrEos(wchar_t x) noexcept { return !x || std::iswblank(x); }
 
 [[nodiscard]]
-string_view GetSpaces();
+string_view GetBlanks();
 
 [[nodiscard]]
 string_view GetEols();
@@ -70,8 +69,11 @@ bool is_lower(wchar_t Char);
 
 namespace inplace
 {
-	void upper(span<wchar_t> Str);
-	void lower(span<wchar_t> Str);
+	void upper(std::span<wchar_t> Str);
+	void lower(std::span<wchar_t> Str);
+
+	void upper(wchar_t& Char);
+	void lower(wchar_t& Char);
 
 	void upper(wchar_t* Str);
 	void lower(wchar_t* Str);
@@ -95,23 +97,32 @@ string upper(string_view Str);
 [[nodiscard]]
 string lower(string_view Str);
 
-struct [[nodiscard]] hash_icase_t
+struct [[nodiscard]] string_comparer_icase
 {
+	using is_transparent = void;
+
 	[[nodiscard]]
 	size_t operator()(wchar_t Char) const;
 
 	[[nodiscard]]
 	size_t operator()(string_view Str) const;
-};
 
-struct [[nodiscard]] equal_icase_t
-{
 	[[nodiscard]]
 	bool operator()(wchar_t Chr1, wchar_t Chr2) const;
 
 	[[nodiscard]]
 	bool operator()(string_view Str1, string_view Str2) const;
 };
+
+using unordered_string_set_icase = std::unordered_set<string, string_comparer_icase, string_comparer_icase>;
+using unordered_string_multiset_icase = std::unordered_multiset<string, string_comparer_icase, string_comparer_icase>;
+
+template<typename T>
+using unordered_string_map_icase = std::unordered_map<string, T, string_comparer_icase, string_comparer_icase>;
+
+template<typename T>
+using unordered_string_multimap_icase = std::unordered_multimap<string, T, string_comparer_icase, string_comparer_icase>;
+
 
 [[nodiscard]]
 bool equal_icase(string_view Str1, string_view Str2);
@@ -127,5 +138,110 @@ size_t find_icase(string_view Str, wchar_t What, size_t Pos = 0);
 bool contains_icase(string_view Str, string_view What);
 [[nodiscard]]
 bool contains_icase(string_view Str, wchar_t What);
+
+class i_searcher
+{
+public:
+	virtual ~i_searcher() = default;
+	virtual std::optional<std::pair<size_t, size_t>> find_in(string_view Haystack, bool Reverse = {}) const = 0;
+};
+
+class exact_searcher final: public i_searcher
+{
+public:
+	NONCOPYABLE(exact_searcher);
+	explicit exact_searcher(string_view Needle, bool CanReverse = true);
+	std::optional<std::pair<size_t, size_t>> find_in(string_view Haystack, bool Reverse = {}) const override;
+
+private:
+	template<typename... args>
+	using searcher = std::boyer_moore_horspool_searcher<args...>;
+
+	string m_Needle;
+	searcher<string::const_iterator> m_Searcher;
+	std::optional<searcher<string::const_reverse_iterator>> m_ReverseSearcher;
+};
+
+class icase_searcher final: public i_searcher
+{
+public:
+	NONCOPYABLE(icase_searcher);
+	explicit icase_searcher(string_view Needle, bool CanReverse = true);
+	std::optional<std::pair<size_t, size_t>> find_in(string_view Haystack, bool Reverse = {}) const override;
+
+private:
+	mutable string m_HayStack;
+	exact_searcher m_Searcher;
+};
+
+namespace detail
+{
+	class fuzzy_searcher_impl
+	{
+	public:
+		string_view normalize(string_view Str);
+		std::optional<std::pair<size_t, size_t>> find_in(const i_searcher& searcher, string_view Haystack, bool Reverse);
+
+	private:
+		string m_Result, m_Intermediate;
+		std::vector<WORD> m_Types;
+	};
+}
+
+template<typename Searcher>
+class fuzzy_searcher final: public i_searcher
+{
+public:
+	NONCOPYABLE(fuzzy_searcher);
+
+	explicit fuzzy_searcher(string_view const Needle, bool const CanReverse = true):
+		m_Searcher(m_Impl.normalize(Needle), CanReverse)
+	{
+	}
+
+	std::optional<std::pair<size_t, size_t>> find_in(string_view Haystack, bool Reverse = {}) const override
+	{
+		return m_Impl.find_in(m_Searcher, Haystack, Reverse);
+	}
+
+private:
+	mutable detail::fuzzy_searcher_impl m_Impl;
+	Searcher m_Searcher;
+};
+
+using fuzzy_cs_searcher = fuzzy_searcher<exact_searcher>;
+using fuzzy_ic_searcher = fuzzy_searcher<icase_searcher>;
+
+using searchers = std::variant
+<
+	std::monostate, // Just to make it default-constructible
+	exact_searcher,
+	icase_searcher,
+	fuzzy_cs_searcher,
+	fuzzy_ic_searcher
+>;
+
+inline i_searcher const& init_searcher(searchers& Searchers, const bool CaseSensitive, const bool Fuzzy, string_view const Needle, const bool CanReverse = true)
+{
+	if (Fuzzy)
+	{
+		if (CaseSensitive) return Searchers.emplace<fuzzy_cs_searcher>(Needle, CanReverse);
+		else               return Searchers.emplace<fuzzy_ic_searcher>(Needle, CanReverse);
+	}
+	else
+	{
+		if (CaseSensitive) return Searchers.emplace<exact_searcher>(Needle, CanReverse);
+		else               return Searchers.emplace<icase_searcher>(Needle, CanReverse);
+	}
+}
+
+struct search_replace_string_options
+{
+	bool CaseSensitive{};
+	bool WholeWords{};
+	bool Reverse{};
+	bool Regex{};
+	bool PreserveStyle{};
+};
 
 #endif // STRING_UTILS_HPP_82ECD8BE_D484_4023_AB42_21D93B2DF8B9

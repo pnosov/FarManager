@@ -1,9 +1,9 @@
 ﻿m4_include(`farversion.m4')m4_dnl
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<!-- Copyright © 1996-2000 Eugene Roshal, Copyright © 2000-COPYRIGHTYEAR Far Group -->
+<!-- Copyright © 1996-2000 Eugene Roshal, Copyright © 2000-M4_MACRO_GET(COPYRIGHTYEAR) Far Group -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3" >
 <assemblyIdentity
-	version="VERSION_MAJOR.VERSION_MINOR.VERSION_BUILD.VERSION_REVISION"
+	version="M4_MACRO_GET(VERSION_MAJOR).M4_MACRO_GET(VERSION_MINOR).M4_MACRO_GET(VERSION_BUILD).M4_MACRO_GET(VERSION_REVISION)"
 	processorArchitecture="*"
 	name="Far Manager"
 	type="win32"
@@ -50,6 +50,7 @@
 	<asmv3:windowsSettings>
 		<dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
 		<longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+		<heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
 	</asmv3:windowsSettings>
 </asmv3:application>
 </assembly>

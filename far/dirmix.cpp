@@ -44,13 +44,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "flink.hpp"
 #include "treelist.hpp"
 #include "pathmix.hpp"
-#include "strmix.hpp"
 #include "interf.hpp"
 #include "elevation.hpp"
 #include "network.hpp"
 #include "string_utils.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.env.hpp"
 #include "platform.fs.hpp"
 
@@ -63,7 +63,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 static auto make_curdir_name(wchar_t Drive)
 {
-	return format(FSTR(L"={0}:"), upper(Drive));
+	return far::format(L"={}:"sv, upper(Drive));
 }
 
 static auto env_get_current_dir(wchar_t Drive)
@@ -102,21 +102,14 @@ bool FarChDir(string_view const NewDir)
 	}
 
 	AddEndSlash(Directory);
-	ReplaceSlashToBackslash(Directory);
+	path::inplace::normalize_separators(Directory);
 	PrepareDiskPath(Directory, false); // resolving not needed, very slow
 
 	const auto PathType = ParsePath(Directory);
 
 	const auto IsNetworkPath = PathType == root_type::remote || PathType == root_type::unc_remote;
 
-	std::optional<elevation::suppress> NoElevation;
-
-	// It's usually useless over the network anyway
-	// TODO: a more generic/common way
-	if (IsNetworkPath)
-		NoElevation.emplace();
-
-	if (os::fs::SetCurrentDirectory(Directory))
+	if (os::fs::set_current_directory(Directory))
 	{
 		set_drive_env_curdir(Directory);
 		return true;
@@ -138,7 +131,7 @@ bool FarChDir(string_view const NewDir)
 
 	ConnectToNetworkResource(Directory);
 
-	if (os::fs::SetCurrentDirectory(Directory))
+	if (os::fs::set_current_directory(Directory))
 	{
 		set_drive_env_curdir(Directory);
 		return true;
@@ -165,7 +158,7 @@ int TestFolder(string_view const Path)
 	if (os::fs::is_not_empty_directory(Path))
 		return TSTFLD_NOTEMPTY;
 
-	const auto ErrorState = error_state::fetch();
+	const auto ErrorState = os::last_error();
 	const auto LastError = ErrorState.Win32Error;
 	if (LastError == ERROR_FILE_NOT_FOUND || LastError == ERROR_NO_MORE_FILES)
 		return TSTFLD_EMPTY;
@@ -201,79 +194,69 @@ int TestFolder(string_view const Path)
 	return TSTFLD_NOTACCESS;
 }
 
-/*
-   Проверка пути или хост-файла на существование
-   Если идет проверка пути (TryClosest=true), то будет
-   предпринята попытка найти ближайший путь. Результат попытки
-   возвращается в переданном TestPath.
-*/
-bool CheckShortcutFolder(string& TestPath, bool TryClosest, bool Silent)
+bool CutToExistingParent(string_view& Path)
 {
-	if (os::fs::exists(TestPath))
+	for (auto PathView = Path; ;)
+	{
+		if (!CutToParent(PathView))
+			return false;
+
+		if (!os::fs::exists(PathView))
+			continue;
+
+		Path.remove_suffix(Path.size() - PathView.size());
 		return true;
-
-	SetLastError(ERROR_PATH_NOT_FOUND);
-	const auto ErrorState = error_state::fetch();
-
-	const auto Target = truncate_path(TestPath, ScrX - 16);
-
-	if (!TryClosest)
-	{
-		if (!Silent)
-		{
-			Message(MSG_WARNING, ErrorState,
-				msg(lng::MError),
-				{
-					Target
-				},
-				{ lng::MOk });
-		}
-		return false;
 	}
-
-	// попытка найти!
-	if (Silent || Message(MSG_WARNING, ErrorState,
-		msg(lng::MError),
-		{
-			Target,
-			msg(lng::MNeedNearPath)
-		},
-		{ lng::MHYes, lng::MHNo }) == Message::first_button)
-	{
-		auto TestPathTemp = TestPath;
-		for (;;)
-		{
-			if (!CutToParent(TestPathTemp))
-				break;
-
-			if (os::fs::exists(TestPathTemp))
-			{
-				TestPath = TestPathTemp;
-				return true;
-			}
-		}
-	}
-
-	return false;
 }
 
-void CreatePath(string_view const InputPath, bool Simple)
+bool CutToExistingParent(string& Path)
+{
+	string_view PathView = Path;
+	if (!CutToExistingParent(PathView))
+		return false;
+
+	Path.resize(PathView.size());
+	return true;
+}
+
+bool TryParentFolder(string& Path)
+{
+	const auto ErrorState = os::last_error();
+	if (Message(MSG_WARNING, ErrorState,
+		msg(lng::MError),
+		{
+			Path,
+			msg(lng::MNeedNearPath)
+		},
+		{ lng::MHYes, lng::MHNo }) != message_result::first_button)
+		return false;
+
+	return CutToExistingParent(Path);
+}
+
+bool CreatePath(string_view const InputPath, bool const AddToTreeCache)
 {
 	const auto Path = ConvertNameToFull(InputPath);
+
 	size_t DirOffset = 0;
 	ParsePath(Path, &DirOffset);
-	string Part;
-	Part.reserve(Path.size());
-	for (size_t i = DirOffset; i <= Path.size(); ++i)
+
+	for (const auto i: std::views::iota(DirOffset, Path.size() + 1))
 	{
-		if (i == Path.size() || IsSlash(Path[i]))
-		{
-			Part.assign(Path, 0, i);
-			if (!os::fs::exists(Part))
-			{
-				if(os::fs::create_directory(Part) && !Simple)
-					TreeList::AddTreeName(Part);
-			}
-		}
+		if (i != Path.size() && !path::is_separator(Path[i]))
+			continue;
+
+		const auto Part = string_view(Path).substr(0, i);
+
+		if (os::fs::is_directory(Part))
+			continue;
+
+		if (!os::fs::create_directory(Part))
+			return false;
+
+		if (AddToTreeCache)
+			TreeList::AddTreeName(Part);
 	}
+
+	return true;
 }

@@ -13,19 +13,13 @@
 #(we try to autodetect if not set)
 #
 #
-#FARSYSLOG - for syslog
-#
 #USE_ANALYZE - for /analyze
 #
 #DISABLE_WOW64_HOOK - set to disable the wow64 hook
 #
 #DEFFILE - name of user file to include
 #
-#NO_RELEASE_PDB - set to disable pdb generation in Release mode
-#
 #NO_RELEASE_LTCG - set to disable link-time code generation in Release mode
-#
-#ASM_LISTING - set to enable assembly, machine code and source listing generation
 #
 #LTCG_STATUS - specifies whether the linker displays a progress indicator that shows what percentage of the link is complete
 #
@@ -34,85 +28,59 @@
 #ENABLE_TESTS - Enable unit tests in Release mode (always enabled in Debug)
 #
 #DEFUSERFLAGS -
+#
+#PYTHON - use the python script for language files generation
 
-.SILENT:
 
 #include for user defines if needed
 !ifdef DEFFILE
 !include $(DEFFILE)
 !endif
 
-!if defined(AMD64) || "$(CPU)" == "AMD64" || "$(PLATFORM)" == "X64" || "$(PLATFORM)" == "x64"
-!undef CPU
-AMD64=1
-DIRBIT=64
-!elseif defined(ARM64) || "$(CPU)" == "ARM64" || "$(PLATFORM)" == "arm64"
-!undef CPU
-ARM64=1
-DIRBIT=ARM64
-!elseif defined(ARM) || "$(CPU)" == "ARM" || "$(PLATFORM)" == "arm"
-!undef CPU
-ARM=1
-DIRBIT=ARM
-!else
-X86=1
-DIRBIT=32
-!endif
+ROOTDIR = ..
 
-!if !defined(VC) && defined(_NMAKE_VER)
+!include $(ROOTDIR)\_build\vc\config\common.mak
 
-!if "$(_NMAKE_VER)">"14.20"
-VC=16
-!elseif "$(_NMAKE_VER)">"14.10"
-VC=15
-!else
-#default
-VC=15
-!endif
-
-!endif
-
-!ifndef DEBUG
-DIRNAME=Release
-USEDEBUG=NDEBUG
-!else
-DIRNAME=Debug
-USEDEBUG=_DEBUG
+!ifdef DEBUG
 ENABLE_TESTS=1
 !endif
 
-OUTDIR=$(DIRNAME).$(DIRBIT).vc
-
 !ifdef CLANG
 OUTDIR=$(OUTDIR).clang
+INTDIR=$(OUTDIR)/obj
 !endif
 
 FARINCLUDE=Include
 
-LINK=link.exe
-ULINK=ulink.exe
 M4=tools\m4 -P -DFARBIT=$(DIRBIT) -DBUILD_TYPE=$(FARMANAGER_BUILD_TYPE) -DSCM_REVISION=$(FARMANAGER_SCM_REVISION)
 GAWK=tools\gawk
 
-INTDIR=$(OUTDIR)/obj
-BOOTSTRAPDIR=$(INTDIR)/include/bootstrap/
-CODDIR=$(INTDIR)\cod
+!ifdef PYTHON
+LGEN=python.exe ..\misc\lng\lng.generator.py
+!else
+LGEN=tools\lng.generator.exe
+!endif
 
-DEPFILE=$(BOOTSTRAPDIR)far.vc.dep
-STATICDEPFILE=static.dep
+BOOTSTRAPDIR=$(INTDIR)/include/bootstrap/
+
+DEPFILE=$(BOOTSTRAPDIR)far.dep
 
 RES_FILE = "$(INTDIR)\far.res"
 
-PCH_FILE = "$(INTDIR)\headers.pch"
+PCH_NAME = headers
+PCH_FILE = "$(INTDIR)\$(PCH_NAME).pch"
 
 LINK_OBJS = \
-	"$(INTDIR)\sqlite.obj" \
-	"$(INTDIR)\sqlite_unicode.obj" \
 	"$(INTDIR)\cache.obj" \
 	"$(INTDIR)\cddrv.obj" \
+	"$(INTDIR)\char_width.obj" \
 	"$(INTDIR)\clipboard.obj" \
 	"$(INTDIR)\cmdline.obj" \
+	"$(INTDIR)\codepage.obj" \
 	"$(INTDIR)\codepage_selection.obj" \
+	"$(INTDIR)\color_picker.obj" \
+	"$(INTDIR)\color_picker_256.obj" \
+	"$(INTDIR)\color_picker_rgb.obj" \
 	"$(INTDIR)\colormix.obj" \
 	"$(INTDIR)\common.tests.obj" \
 	"$(INTDIR)\components.obj" \
@@ -177,15 +145,19 @@ LINK_OBJS = \
 	"$(INTDIR)\hotplug.obj" \
 	"$(INTDIR)\imports.obj"\
 	"$(INTDIR)\infolist.obj" \
+	"$(INTDIR)\initguid.obj" \
 	"$(INTDIR)\interf.obj" \
 	"$(INTDIR)\keybar.obj" \
 	"$(INTDIR)\keyboard.obj" \
 	"$(INTDIR)\language.obj" \
 	"$(INTDIR)\locale.obj" \
 	"$(INTDIR)\lockscrn.obj" \
+	"$(INTDIR)\log.obj" \
 	"$(INTDIR)\macro.obj" \
+	"$(INTDIR)\macroapi.obj" \
 	"$(INTDIR)\main.obj" \
 	"$(INTDIR)\manager.obj" \
+	"$(INTDIR)\map_file.obj" \
 	"$(INTDIR)\memcheck.obj" \
 	"$(INTDIR)\menubar.obj" \
 	"$(INTDIR)\message.obj" \
@@ -204,7 +176,10 @@ LINK_OBJS = \
 	"$(INTDIR)\pipe.obj" \
 	"$(INTDIR)\platform.obj" \
 	"$(INTDIR)\platform.chrono.obj" \
+	"$(INTDIR)\platform.clipboard.obj" \
+	"$(INTDIR)\platform.com.obj" \
 	"$(INTDIR)\platform.concurrency.obj" \
+	"$(INTDIR)\platform.debug.obj" \
 	"$(INTDIR)\platform.env.obj" \
 	"$(INTDIR)\platform.fs.obj" \
 	"$(INTDIR)\platform.memory.obj" \
@@ -239,7 +214,6 @@ LINK_OBJS = \
 	"$(INTDIR)\string_sort.obj" \
 	"$(INTDIR)\string_utils.obj" \
 	"$(INTDIR)\strmix.obj" \
-	"$(INTDIR)\syslog.obj" \
 	"$(INTDIR)\tinyxml.obj" \
 	"$(INTDIR)\taskbar.obj" \
 	"$(INTDIR)\testing.obj" \
@@ -253,11 +227,11 @@ LINK_OBJS = \
 	"$(INTDIR)\window.obj" \
 	"$(INTDIR)\wm_listener.obj" \
 	"$(INTDIR)\xlat.obj" \
-!if defined(X86) && !defined(DISABLE_WOW64_HOOK)
+!if "$(BUILD_PLATFORM)" == "X86" && !defined(DISABLE_WOW64_HOOK)
 	"$(INTDIR)\hook_wow64.obj" \
 !endif
 !ifndef LINK_ULINK
-!if defined(X86) || defined(AMD64)
+!if "$(BUILD_PLATFORM)" == "X86" || "$(BUILD_PLATFORM)" == "AMD64"
 	"$(INTDIR)\vc_crt_fix.obj" \
 !endif
 	"$(INTDIR)\vc_crt_fix_impl.obj" \
@@ -265,152 +239,16 @@ LINK_OBJS = \
 	"$(INTDIR)\vc_crt_fix_ulink.obj"
 !endif
 
-LINK_LIBS=kernel32.lib user32.lib winspool.lib advapi32.lib shell32.lib netapi32.lib mpr.lib ole32.lib psapi.lib secur32.lib setupapi.lib rpcrt4.lib version.lib userenv.lib comdlg32.lib
-
 TEST_OBJS = "$(INTDIR)\api_test_c.testobj" "$(INTDIR)\api_test_c++.testobj"
-
-DEFINES=\
-	/D "UNICODE"\
-	/D "_UNICODE"\
-	/D "$(USEDEBUG)"\
-	/D "FAR_ALPHA_VERSION"\
-!ifdef ENABLE_TESTS
-	/D "ENABLE_TESTS"\
-!endif
-!ifdef DEBUG
-	/D "SYSLOG"\
-	/D "SYSLOG_FARSYSLOG"\
-!endif
-	/D "_ENABLE_EXTENDED_ALIGNED_STORAGE"\
-	/D "_HAS_AUTO_PTR_ETC=0"\
-	/D "_CRT_SECURE_NO_WARNINGS"
-
-DISABLED_WARNINGS=/FI disabled_warnings.hpp /wd5045
 
 ADDINCLUDE=/I $(BOOTSTRAPDIR)..
 
-# common
-CPPFLAGS=\
-	/c\
-	/J\
-	/EHsc\
-	/std:c++latest\
-	/permissive-\
-	/Zc:__cplusplus,externConstexpr,inline,throwingNew\
-	/volatile:iso\
-	/Wall\
-	/utf-8\
-	/Gy\
-	/GF\
-	/Fd"$(INTDIR)\\"\
-	/diagnostics:caret\
-	/nologo\
-	/MP$(MP_LIMIT)\
-	$(ADDINCLUDE)\
-	$(DISABLED_WARNINGS)\
-	$(DEFUSERFLAGS)\
-	$(FARSYSLOG)\
-	$(DEFINES)\
+CPPFLAGS = $(CPPFLAGS) $(ADDINCLUDE)
+RFLAGS = $(RFLAGS) $(ADDINCLUDE)
 
-
-LINKFLAGS=\
-	/nologo\
-	/subsystem:console\
-	/release\
-	/nxcompat\
-	/largeaddressaware\
-	/dynamicbase\
-	/map\
-	/out:"$(OUTDIR)\Far.exe"\
-
-
-ULINKFLAGS=-q -m- -ap -Gz -O- -o- -Gh -Gh- -GF:LARGEADDRESSAWARE -d*kernel32
-RFLAGS=/nologo /l 0x409 /fo"$(RES_FILE)" $(ADDINCLUDE) /d $(USEDEBUG)
-
-# compiler-specific
-#!if "$(VC)">="15"
-#!endif
-
-!ifdef CLANG
-CPP = clang-cl
-CPPFLAGS =\
-	$(CPPFLAGS)\
-	-Qunused-arguments\
-	/clang:-fvisibility=hidden\
-	-Weverything\
-	-Werror=array-bounds\
-	-Werror=dangling\
-	-Werror=odr\
-	-Werror=old-style-cast\
-	-Werror=reorder\
-	-Werror=return-type\
-
-
-NOBATCH=1
-NO_RELEASE_LTCG=1
-!elseifdef ICL
-CPP = icl
-LINK = xilink
-CPPFLAGS = $(CPPFLAGS) /Qstd=c++11 /Qdiag-disable:672,869,2415,3280
+!ifdef ENABLE_TESTS
+CPPFLAGS = $(CPPFLAGS) /D "ENABLE_TESTS"
 !endif
-
-# config-specific
-!ifdef DEBUG
-CPPFLAGS=$(CPPFLAGS) /MTd /Od /Zi
-LINKFLAGS=$(LINKFLAGS) /debug
-ULINKFLAGS=$(ULINKFLAGS) -v
-!else
-CPPFLAGS=$(CPPFLAGS) /MT /O2
-!ifndef NO_RELEASE_LTCG
-!ifndef LINK_ULINK
-CPPFLAGS=$(CPPFLAGS) /GL
-!endif
-!endif
-!ifndef NO_RELEASE_PDB
-CPPFLAGS=$(CPPFLAGS) /Zi
-LINKFLAGS=$(LINKFLAGS) /debug
-!endif
-LINKFLAGS=$(LINKFLAGS) /incremental:no /OPT:REF /OPT:ICF
-!ifndef NO_RELEASE_LTCG
-LINKFLAGS=$(LINKFLAGS) /ltcg
-!ifdef LTCG_STATUS
-LINKFLAGS=$(LINKFLAGS) /ltcg:status
-!endif
-!endif
-!endif
-
-!ifdef ASM_LISTING
-CPPFLAGS=$(CPPFLAGS) /FAcs /Fa"$(CODDIR)\\"
-!endif
-
-!ifdef USE_ANALYZE
-CPPFLAGS=$(CPPFLAGS) /analyze
-!endif
-
-
-# platform-specific
-!ifdef X86
-CPPFLAGS=$(CPPFLAGS) /arch:IA32
-!ifndef DEBUG
-CPPFLAGS=$(CPPFLAGS) /Oy-
-!endif
-LINKFLAGS=$(LINKFLAGS) /machine:i386
-OS_VERSION=5.0
-MASM=ml
-MASM_DEFINES=
-!elseifdef AMD64
-LINKFLAGS=$(LINKFLAGS) /machine:amd64
-ULINKFLAGS=$(ULINKFLAGS) -Tpe+
-OS_VERSION=5.2
-MASM=ml64
-MASM_DEFINES=/D "X64"
-!elseifdef ARM
-LINKFLAGS=$(LINKFLAGS) /machine:ARM
-!elseifdef ARM64
-LINKFLAGS=$(LINKFLAGS) /machine:ARM64
-!endif
-
-CPPFLAGS = $(CPPFLAGS) /Fo"$(INTDIR)\\"
 
 ALL: AllDirs lng depfile include docs $(TEST_OBJS)
 	$(MAKE) /nologo /f makefile_vc build USEDEPS=1
@@ -418,13 +256,14 @@ ALL: AllDirs lng depfile include docs $(TEST_OBJS)
 .PHONY: lng
 lng: $(BOOTSTRAPDIR)farlang.templ
 	@echo Generating language files
-	tools\lng.generator.exe -nc -i "$(BOOTSTRAPDIR)lang.ini" -oh "$(BOOTSTRAPDIR)" -ol "$(OUTDIR)" "$(BOOTSTRAPDIR)farlang.templ"
+	$(LGEN) -nc -i "$(BOOTSTRAPDIR)lang.ini" -oh "$(BOOTSTRAPDIR)" -ol "$(OUTDIR)" "$(BOOTSTRAPDIR)farlang.templ"
 
 .PHONY: depfile
 depfile:
 	@echo Rebuilding dependencies...
 	set BOOTSTRAPDIR=$(BOOTSTRAPDIR)
-	dir /b *.cpp *.hpp *.c *.rc | $(GAWK) -f scripts\mkdep.awk - > $(DEPFILE)
+	set FORCEINCLUDELIST=$(PCH_NAME).hpp memcheck.hpp disabled_warnings.hpp
+	scripts\list_deps.cmd | $(GAWK) -f scripts\mkdep.awk - > $(DEPFILE)
 
 .PHONY: include
 include: \
@@ -443,6 +282,8 @@ HLFS = \
 	"$(OUTDIR)\FarPol.hlf" \
 	"$(OUTDIR)\FarGer.hlf" \
 	"$(OUTDIR)\FarUkr.hlf" \
+	"$(OUTDIR)\FarCze.hlf" \
+	"$(OUTDIR)\FarSky.hlf" \
 
 .PHONY: docs
 docs: \
@@ -459,25 +300,22 @@ AllDirs:
 	if not exist "$(FARINCLUDE)\" mkdir "$(FARINCLUDE)"
 	if not exist "$(INTDIR)\" mkdir "$(INTDIR)"
 	if not exist "$(BOOTSTRAPDIR)" mkdir "$(BOOTSTRAPDIR)"
-!ifdef ASM_LISTING
-	if not exist "$(CODDIR)\" mkdir "$(CODDIR)"
-!endif
 
-"$(OUTDIR)\Far.exe": $(PCH_FILE) $(LINK_OBJS) $(RES_FILE) $(BOOTSTRAPDIR)copyright.inc $(BOOTSTRAPDIR)farversion.inc
+"$(OUTDIR)\Far.exe": $(PCH_FILE) $(LINK_OBJS) $(RES_FILE) $(BOOTSTRAPDIR)copyright.inc $(BOOTSTRAPDIR)farversion.inc "$(OUTDIR)\sqlite3.dll"
 	@echo Linking $@
 !ifndef LINK_ULINK
 	$(LINK) @<<
-	$(LINKFLAGS) $(LINK_OBJS) $(RES_FILE) $(LINK_LIBS)
+	$(LINKFLAGS) /out:"$(OUTDIR)\Far.exe" $(LINK_OBJS) $(RES_FILE) $(LINK_LIBS) $(INTDIR)/sqlite3.lib
 <<
 !else
 	$(ULINK) +- @+<<
 	$(ULINKFLAGS) $(LINK_OBJS)
 	,"$(OUTDIR)\Far.exe","$(OUTDIR)\Far.map"
-	,$(LINK_LIBS)
-	,far.def,"$(RES_FILE)"
+	,$(LINK_LIBS) $(INTDIR)/sqlite3.lib
+	,,"$(RES_FILE)"
 <<
 !endif
-!if defined(X86) || defined(AMD64)
+!if ("$(BUILD_PLATFORM)" == "X86" || "$(BUILD_PLATFORM)" == "AMD64") && !defined(LINK_ULINK)
 	@echo Fixing subsystem version
 	editbin /nologo /subsystem:console,$(OS_VERSION) /osversion:$(OS_VERSION) $(OUTDIR)\Far.exe > $(INTDIR)\version_fix.log
 !endif
@@ -486,15 +324,52 @@ AllDirs:
 	$(OUTDIR)\Far.exe /service:test
 !endif
 
-$(PCH_FILE): headers.cpp headers.hpp
+LINK_SQLITE_OBJS = \
+	"$(INTDIR)\sqlite.obj" \
+	"$(INTDIR)\sqlite.res" \
+!ifndef LINK_ULINK
+!if "$(BUILD_PLATFORM)" == "X86" || "$(BUILD_PLATFORM)" == "AMD64"
+	"$(INTDIR)\vc_crt_fix.obj" \
+!endif
+	"$(INTDIR)\vc_crt_fix_impl.obj" \
+!else
+	"$(INTDIR)\vc_crt_fix_ulink.obj"
+!endif
+
+$(OUTDIR)\sqlite3.dll: $(LINK_SQLITE_OBJS)
+	@echo Linking $@
+!ifndef LINK_ULINK
+	$(LINK) @<<
+	$(LINKFLAGS) /dll /implib:$(INTDIR)/sqlite3.lib /out:"$@" $(LINK_SQLITE_OBJS)
+<<
+!else
+	$(ULINK) +- @+<<
+	$(ULINKFLAGS) -Tpd -Gic -ZI:$(INTDIR)/sqlite3.lib
+	,"$@","$(@R).map"
+	,$(LINK_SQLITE_OBJS)
+<<
+!endif
+
+$(INTDIR)\sqlite.res: thirdparty/sqlite/sqlite3.rc $(BOOTSTRAPDIR)sqlite_version.h
+	@echo sqlite3.rc
+	$(RC) $(RFLAGS) /fo"$@" thirdparty/sqlite/sqlite3.rc
+
+$(BOOTSTRAPDIR)sqlite_version.h:
+	@echo sqlite_version.h
+	$(GAWK) -f scripts/sqlite_version.awk -v target=$(BOOTSTRAPDIR)sqlite_version.h thirdparty/sqlite/sqlite3.h
+
+$(PCH_FILE): $(PCH_NAME).cpp $(PCH_NAME).hpp
 	@echo Making precompiled headers
-	$(CPP) $(CPPFLAGS) headers.cpp /Yc"headers.hpp" /Fp"$(PCH_FILE)"
+	$(CPP) $(CPPFLAGS) $(PCH_NAME).cpp /Yc$(PCH_NAME).hpp /Fp$(PCH_FILE)
 
-$(INTDIR)\vc_crt_fix_impl.obj: vc_crt_fix_impl.cpp
-	$(CPP) $(CPPFLAGS) /Zc:threadSafeInit- vc_crt_fix_impl.cpp
+$(INTDIR)\initguid.obj: $(@B).cpp
+	$(CPP) $(CPPFLAGS) $(@B).cpp
 
-$(INTDIR)\vc_crt_fix_ulink.obj: vc_crt_fix_ulink.cpp
-	$(CPP) $(CPPFLAGS) vc_crt_fix_ulink.cpp
+$(INTDIR)\vc_crt_fix_impl.obj: $(@B).cpp
+	$(CPP) $(CPPFLAGS) /Zc:threadSafeInit- $(@B).cpp
+
+$(INTDIR)\vc_crt_fix_ulink.obj: $(@B).cpp
+	$(CPP) $(CPPFLAGS) $(@B).cpp
 
 !ifdef NOBATCH
 .c{$(INTDIR)}.obj:
@@ -502,8 +377,8 @@ $(INTDIR)\vc_crt_fix_ulink.obj: vc_crt_fix_ulink.cpp
 !else
 .c{$(INTDIR)}.obj::
 !endif
-	$(CPP) @<<
-	$(CPPFLAGS) $<
+	$(CC) @<<
+	$(CFLAGS) $<
 <<
 
 !ifdef NOBATCH
@@ -513,25 +388,24 @@ $(INTDIR)\vc_crt_fix_ulink.obj: vc_crt_fix_ulink.cpp
 .cpp{$(INTDIR)}.obj::
 !endif
 	$(CPP) @<<
-	$(CPPFLAGS) /Yuheaders.hpp /Fp"$(PCH_FILE)" /FI headers.hpp /FI memcheck.hpp $<
+	$(CPPFLAGS) /Yu$(PCH_NAME).hpp /Fp$(PCH_FILE) /FI $(PCH_NAME).hpp /FI memcheck.hpp $<
 <<
 
 #Do not use $(AS) here - nmake incorrectly substitutes ml64 when compiling in amd64_x86 environment
 .asm{$(INTDIR)}.obj:
-	$(MASM) /nologo /c $(MASM_DEFINES) /Fo$@ $<
+	$(MASM) $(AFLAGS) $<
 
 $(RES_FILE): far.rc $(BOOTSTRAPDIR)far.rc.inc $(BOOTSTRAPDIR)Far.exe.manifest Far.ico Far.red.ico Far.black.ico Far.hack.ico Far.mono.ico Far.msg.ico
 	@echo far.rc
-	$(RC) $(RFLAGS) far.rc
+	$(RC) $(RFLAGS) /fo"$(RES_FILE)" far.rc
 
 !ifdef USEDEPS
 !include "$(DEPFILE)"
-!include "$(STATICDEPFILE)"
 !endif
 
 $(INTDIR)\api_test_c.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.hpp api_test.c
 	@echo Testing C plugin API
-	$(CPP) /nologo /c /Fo"$@" /TC api_test.c
+	$(CC) /nologo /c /Fo"$@" /TC api_test.c
 
 $(INTDIR)\api_test_c++.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.hpp api_test.c
 	@echo Testing C++ plugin API
@@ -539,7 +413,7 @@ $(INTDIR)\api_test_c++.testobj: $(FARINCLUDE)/plugin.hpp $(FARINCLUDE)/farcolor.
 
 MSG=@echo Generating $@
 
-VERSION_DEPS=farversion.m4 tools.m4 vbuild.m4
+VERSION_DEPS=farversion.m4 vbuild.m4
 
 $(BOOTSTRAPDIR)Far.exe.manifest \
 $(BOOTSTRAPDIR)copyright.inc \
@@ -582,10 +456,11 @@ CLEAN:
 	"$(CODDIR)"\
 	"$(INTDIR)"\
 	"$(OUTDIR)\Far.exe"\
-	"$(OUTDIR)\Far.exp"\
-	"$(OUTDIR)\Far.lib"\
 	"$(OUTDIR)\Far.map"\
 	"$(OUTDIR)\Far.pdb"\
+	"$(OUTDIR)\sqlite3.dll"\
+	"$(OUTDIR)\sqlite3.map"\
+	"$(OUTDIR)\sqlite3.pdb"\
 	"$(OUTDIR)\*.hlf"\
 	"$(OUTDIR)\*.lng"\
 	"$(OUTDIR)\File_id.diz"\
@@ -604,7 +479,7 @@ install: instdir
 	@copy /Y "$(FARINCLUDE)\*.hpp" "$(HPPINSTDIR)\" > nul
 	@copy /Y "$(FARINCLUDE)\..\..\plugins\common\unicode\DlgBuilder.hpp" "$(HPPINSTDIR)\" > nul
 	@copy /Y "$(FARINCLUDE)\*.pas" "$(PASINSTDIR)\" > nul
-	for %%i in (changelog changelog_eng "$(OUTDIR)\Far.*" "$(OUTDIR)\*.lng" "$(OUTDIR)\File_id.diz" "$(OUTDIR)\*.hlf" "$(OUTDIR)\Far.exe.example.ini") do @copy /Y %%i "$(INSTALLDIR)\" > nul
+	for %%i in (changelog "$(OUTDIR)\Far.*" "$(OUTDIR)\sqlite3.*" "$(OUTDIR)\*.lng" "$(OUTDIR)\File_id.diz" "$(OUTDIR)\*.hlf" "$(OUTDIR)\Far.exe.example.ini") do @copy /Y %%i "$(INSTALLDIR)\" > nul
 
 .PHONY: instdir
 instdir:

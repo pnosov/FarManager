@@ -47,12 +47,13 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-class FileViewer:public window,public ViewerContainer
+class FileViewer final: public window,public ViewerContainer
 {
-	struct private_tag {};
+	struct private_tag { explicit private_tag() = default; };
+
 public:
 	static fileviewer_ptr create(
-		const string& Name,
+		string_view Name,
 		bool EnableSwitch = false,
 		bool DisableHistory = false,
 		bool DisableEdit = false,
@@ -66,7 +67,7 @@ public:
 		window_ptr Update = nullptr);
 
 	static fileviewer_ptr create(
-		const string& Name,
+		string_view Name,
 		bool EnableSwitch,
 		bool DisableHistory,
 		string_view Title,
@@ -118,7 +119,7 @@ private:
 	void DisplayObject() override;
 
 	void Init(
-		const string& Name,
+		string_view Name,
 		bool EnableSwitch,
 		bool DisableHistory,
 		long long ViewStartPos,
@@ -130,7 +131,6 @@ private:
 
 	std::unique_ptr<Viewer> m_View;
 	bool m_RedrawTitle{};
-	bool m_F3KeyOnly{};
 	bool m_bClosing{};
 	bool m_FullScreen{true};
 	bool m_DisableEdit;
@@ -139,6 +139,13 @@ private:
 	bool m_SaveToSaveAs{};
 	int m_DeleteOnClose{};
 	string m_StrTitle;
+
+	class f3_key_timer;
+	std::unique_ptr<f3_key_timer> m_F3Timer;
+
+	class reload_timer;
+	std::unique_ptr<reload_timer> m_ReloadTimer;
+
 };
 
 #endif // FILEVIEW_HPP_BC5E36F0_1E01_45AE_A121_A8D6EED6A14C

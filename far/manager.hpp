@@ -41,7 +41,6 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 // Platform:
 
 // Common:
-#include "common/function_ref.hpp"
 #include "common/noncopyable.hpp"
 
 // External:
@@ -56,7 +55,7 @@ public:
 	class Key
 	{
 	public:
-		Key(): m_Event(), m_FarKey(0), m_EventFilled(false) {}
+		Key() = default;
 		explicit Key(int Key);
 		Key(unsigned int Key, const INPUT_RECORD& Event): m_Event(Event), m_FarKey(Key), m_EventFilled(true) {}
 		const INPUT_RECORD& Event() const {return m_Event;}
@@ -65,11 +64,12 @@ public:
 		Key& operator=(unsigned int Key);
 		Key& operator&=(unsigned int Key);
 		unsigned int operator()() const {return m_FarKey;}
+		size_t NumberOfWheelEvents() const;
 
 	private:
-		INPUT_RECORD m_Event;
-		unsigned int m_FarKey;
-		bool m_EventFilled;
+		INPUT_RECORD m_Event{};
+		unsigned int m_FarKey{};
+		bool m_EventFilled{};
 		void Fill(unsigned int Key);
 	};
 
@@ -108,17 +108,17 @@ public:
 	*/
 	bool ExitAll();
 	size_t GetWindowCount() const { return m_windows.size(); }
-	int  GetWindowCountByType(int Type);
+	int  GetWindowCountByType(int Type) const;
 	/*
 	This method can execute any far or plugins code. Never call from non-reentrant code.
 	*/
 	void PluginCommit();
-	int CountWindowsWithName(string_view Name, bool IgnoreCase = true);
-	bool IsPanelsActive(bool and_not_qview = false, bool or_autocomplete = false) const;
-	window_ptr FindWindowByFile(int ModalType, string_view FileName);
+	int CountWindowsWithName(string_view Name, bool IgnoreCase = true) const;
+	bool IsPanelsActive() const;
+	window_ptr FindWindowByFile(int ModalType, string_view FileName) const;
 	void EnterMainLoop();
 	void ProcessMainLoop();
-	void ExitMainLoop(int Ask);
+	void ExitMainLoop(int Ask, int ExitCode = EXIT_SUCCESS);
 	bool ProcessKey(Key key);
 	bool ProcessMouse(const MOUSE_EVENT_RECORD *MouseEvent) const;
 	void PluginsMenu() const; // вызываем меню по F11
@@ -148,6 +148,8 @@ public:
 	void ImmediateHide();
 	bool HaveAnyMessage() const;
 
+	void FolderChanged();
+
 private:
 	struct window_comparer
 	{
@@ -155,10 +157,6 @@ private:
 	};
 	using sorted_windows = std::set<window_ptr, window_comparer>;
 	sorted_windows GetSortedWindows() const;
-
-#if defined(SYSLOG)
-	friend void ManagerClass_Dump(const wchar_t *Title, FILE *fp);
-#endif
 
 	window_ptr WindowMenu(); //    вместо void SelectWindow(); // show window menu (F12)
 	bool HaveAnyWindow() const;
@@ -191,14 +189,13 @@ private:
 	void WindowsChanged() { std::fill(m_windows_changed.begin(), m_windows_changed.end(), true); }
 
 	using windows = std::vector<window_ptr>;
-	void* GetCurrent(function_ref<void*(window_ptr const&)> Check) const;
-	windows::const_iterator SpecialWindow();
+	windows::const_iterator IsSpecialWindow() const;
 	windows m_windows;
-	size_t m_NonModalSize;
-	bool EndLoop;            // Признак выхода из цикла
-	int ModalExitCode;
-	bool StartManager;
-	int m_DesktopModalled;
+	size_t m_NonModalSize{};
+	bool EndLoop{};            // Признак выхода из цикла
+	int ModalExitCode{-1};
+	bool StartManager{};
+	int m_DesktopModalled{};
 	static inline std::atomic_long CurrentWindowType{-1};
 	std::queue<std::function<void()>> m_Queue;
 	std::vector<std::function<bool(const Key&)>> m_GlobalKeyHandlers;

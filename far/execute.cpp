@@ -56,8 +56,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "scrbuf.hpp"
 #include "global.hpp"
 #include "keys.hpp"
+#include "log.hpp"
+#include "char_width.hpp"
+#include "string_sort.hpp"
 
 // Platform:
+#include "platform.hpp"
 #include "platform.env.hpp"
 #include "platform.fs.hpp"
 #include "platform.process.hpp"
@@ -72,9 +76,31 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 //----------------------------------------------------------------------------
 
-static string short_name_if_too_long(const string& LongName)
+static string short_name_if_too_long(string_view const LongName, size_t const MaxSize)
 {
-	return LongName.size() >= MAX_PATH - 1? ConvertNameToShort(LongName) : LongName;
+	return LongName.size() >= MaxSize? ConvertNameToShort(LongName) : string(LongName);
+}
+
+static auto short_file_name_if_too_long(const string& LongName)
+{
+	return short_name_if_too_long(LongName, MAX_PATH - 1);
+}
+
+static auto short_directory_name_if_too_long(const string& LongName)
+{
+	assert(!LongName.empty());
+
+	const auto HasEndSlash = path::is_separator(LongName.back());
+
+	auto Dir = short_name_if_too_long(LongName, MAX_PATH - (HasEndSlash? 1 : 2));
+
+	// For funny names that end with spaces
+	// We do this for SetCurrentDirectory already
+	// Here it is for paths that go into CreateProcess & ShellExecuteEx
+	if (!HasEndSlash)
+		AddEndSlash(Dir);
+
+	return Dir;
 }
 
 static bool FindObject(string_view const Command, string& strDest)
@@ -114,9 +140,11 @@ static bool FindObject(string_view const Command, string& strDest)
 		return std::pair(false, L""s);
 	};
 
-	if (IsAbsolutePath(Module))
+	const auto IsWithPath = ContainsSlash(Module);
+
+	if (IsWithPath)
 	{
-		// If absolute path has been specified it makes no sense to walk through the %PATH%.
+		// If a path has been specified it makes no sense to walk through the %PATH%.
 		// Just try all the extensions and we are done here:
 		const auto [Found, FoundName] = TryWithExtOrPathExt(Module, [](string_view const NameWithExt, bool)
 		{
@@ -145,6 +173,7 @@ static bool FindObject(string_view const Command, string& strDest)
 		}
 	}
 
+	if (!IsWithPath)
 	{
 		// Look in the %PATH%:
 		const auto PathEnv = os::env::get(L"PATH"sv);
@@ -167,9 +196,7 @@ static bool FindObject(string_view const Command, string& strDest)
 				}
 			}
 		}
-	}
 
-	{
 		// Use SearchPath:
 		const auto [Found, FoundName] = TryWithExtOrPathExt(Module, [](string_view const NameWithExt, bool const HasExt)
 		{
@@ -185,6 +212,75 @@ static bool FindObject(string_view const Command, string& strDest)
 	}
 
 	return false;
+}
+
+static string get_comspec()
+{
+	if (auto Comspec = os::env::expand(Global->Opt->Exec.Comspec); !Comspec.empty())
+		return Comspec;
+
+	if (auto Comspec = os::env::get(L"COMSPEC"sv); !Comspec.empty())
+		return Comspec;
+
+	return {};
+}
+
+static std::span<string_view const> exclude_cmds()
+{
+	if (!Global->Opt->Exec.strExcludeCmds.empty())
+		return Global->Opt->Exec.ExcludeCmds;
+
+	if (equal_icase(PointToName(get_comspec()), L"cmd.exe"sv))
+	{
+		static constexpr std::array PredefinedCmdCommands
+		{
+			L"ASSOC"sv,
+			L"CALL"sv,
+			L"CD"sv,
+			L"CHCP"sv,
+			L"CHDIR"sv,
+			L"CLS"sv,
+			L"COLOR"sv,
+			L"COPY"sv,
+			L"DATE"sv,
+			L"DEL"sv,
+			L"DIR"sv,
+			L"DPATH"sv,
+			L"ECHO"sv,
+			L"ERASE"sv,
+			L"EXIT"sv,
+			L"FOR"sv,
+			L"FTYPE"sv,
+			L"IF"sv,
+			L"KEYS"sv,
+			L"MD"sv,
+			L"MKDIR"sv,
+			L"MKLINK"sv,
+			L"MOVE"sv,
+			L"PATH"sv,
+			L"PAUSE"sv,
+			L"POPD"sv,
+			L"PROMPT"sv,
+			L"PUSHD"sv,
+			L"RD"sv,
+			L"REM"sv,
+			L"REN"sv,
+			L"RENAME"sv,
+			L"RMDIR"sv,
+			L"SET"sv,
+			L"START"sv,
+			L"TIME"sv,
+			L"TITLE"sv,
+			L"TYPE"sv,
+			L"VER"sv,
+			L"VERIFY"sv,
+			L"VOL"sv,
+		};
+
+		return PredefinedCmdCommands;
+	}
+
+	return {};
 }
 
 /*
@@ -210,8 +306,14 @@ static bool PartCmdLine(string_view const FullCommand, string& Command, string& 
 		if (Re.Pattern != Condition)
 		{
 			Re.Re = std::make_unique<RegExp>();
-			if (!Re.Re->Compile(Condition, OP_OPTIMIZE))
+
+			try
 			{
+				Re.Re->Compile(Condition, OP_OPTIMIZE);
+			}
+			catch (regex_exception const& e)
+			{
+				LOGERROR(L"ComspecCondition regex error: {}; position: {}"sv, e.message(), e.position());
 				Re.Re.reset();
 			}
 			Re.Pattern = Condition;
@@ -222,14 +324,11 @@ static bool PartCmdLine(string_view const FullCommand, string& Command, string& 
 			if (Re.Re->Search(FullCommand))
 				return false;
 
-			if (Re.Re->LastError() == errNone)
-			{
-				UseDefaultCondition = false;
-			}
+			UseDefaultCondition = false;
 		}
 	}
 
-	const auto Begin = std::find_if(ALL_CONST_RANGE(FullCommand), [](wchar_t i){ return i != L' '; });
+	const auto Begin = std::ranges::find_if(FullCommand, [](wchar_t i){ return i != L' '; });
 	const auto End = FullCommand.cend();
 	auto CmdEnd = End;
 	auto ParamsBegin = End;
@@ -265,12 +364,11 @@ static bool PartCmdLine(string_view const FullCommand, string& Command, string& 
 		}
 	}
 
-	const auto Cmd = make_string_view(Begin, CmdEnd);
-	const auto ExcludeCmds = enum_tokens(os::env::expand(Global->Opt->Exec.strExcludeCmds), L";"sv);
-	if (std::any_of(ALL_CONST_RANGE(ExcludeCmds), [&](string_view const i){ return equal_icase(i, Cmd); }))
+	string_view const Cmd{ Begin, CmdEnd };
+	if (std::ranges::binary_search(exclude_cmds(), Cmd, string_sort::less_icase))
 		return false;
 
-	Command.assign(Begin, CmdEnd);
+	Command = Cmd;
 	Parameters.assign(ParamsBegin, End);
 	return true;
 }
@@ -283,22 +381,24 @@ static auto full_command(string_view const Command, string_view const Parameters
 void OpenFolderInShell(string_view const Folder)
 {
 	execute_info Info;
-	auto FullFolderName = ConvertNameToFull(Folder);
-	// To avoid collisions with bat/cmd/etc.
-	AddEndSlash(FullFolderName);
 	Info.DisplayCommand = Folder;
 	Info.Command = Folder;
+	// To avoid collisions with bat/cmd/etc.
+	AddEndSlash(Info.Command);
 	Info.WaitMode = execute_info::wait_mode::no_wait;
-	Info.SourceMode = execute_info::source_mode::known;
+	Info.SourceMode = execute_info::source_mode::known_external;
 
 	Execute(Info);
 }
 
-static void wait_for_process_or_detach(os::handle const& Process, int const ConsoleDetachKey, point const& ConsoleSize, rectangle const& ConsoleWindowRect)
+[[nodiscard]]
+static bool wait_for_process(os::handle const& Process, int const ConsoleDetachKey)
 {
-	const auto
-		hInput = console.GetInputHandle(),
-		hOutput = console.GetOutputHandle();
+	if (!ConsoleDetachKey)
+	{
+		Process.wait();
+		return true;
+	}
 
 	const auto ConfigVKey = TranslateKeyToVK(ConsoleDetachKey);
 
@@ -339,127 +439,168 @@ static void wait_for_process_or_detach(os::handle const& Process, int const Cons
 		return ConfigVKey == i.Event.KeyEvent.wVirtualKeyCode && match(ConfigCtrl, Ctrl) && match(ConfigAlt, Alt) && match(ConfigShift, Shift);
 	};
 
-	std::vector<INPUT_RECORD> Buffer(256);
+	// Everywhere else we peek & read input records one by one,
+	// so it does not make much sense to complicate things
+	// and support multiple records everywhere because of this single case.
+	::console_detail::console::input_queue_inspector QueueInspector;
 
 	//Тут нельзя делать WaitForMultipleObjects из за бага в Win7 при работе в телнет
 	while (!Process.is_signaled(100ms))
 	{
-		const auto NumberOfEvents = []
-		{
-			size_t Result;
-			return console.GetNumberOfInputEvents(Result)? Result : 0;
-		}();
-
-		if (Buffer.size() < NumberOfEvents)
-		{
-			Buffer.clear();
-			Buffer.resize(NumberOfEvents + NumberOfEvents / 2);
-		}
-
-		if (!os::handle::is_signaled(hInput, 100ms))
-			continue;
-
-		size_t EventsRead;
-		if (!console.PeekInput(Buffer, EventsRead) || !EventsRead)
-			continue;
-
-		if (std::none_of(Buffer.cbegin(), Buffer.cbegin() + EventsRead, is_detach_key))
-			continue;
-
-		const auto Aliases = console.GetAllAliases();
-
-		consoleicons::instance().restore_icon();
-
-		FlushInputBuffer();
-		ClearKeyQueue();
-
-		/*
-		  Не будем вызывать CloseConsole, потому, что она поменяет
-		  ConsoleMode на тот, что был до запуска Far'а,
-		  чего работающее приложение могло и не ожидать.
-		*/
-
-		os::handle{ hInput };
-		os::handle{ hOutput };
-
-		console.Free();
-		console.Allocate();
-
-		if (const auto Window = console.GetWindow())   // если окно имело HOTKEY, то старое должно его забыть.
-			SendMessage(Window, WM_SETHOTKEY, 0, 0);
-
-		console.SetSize(ConsoleSize);
-		console.SetWindowRect(ConsoleWindowRect);
-		console.SetSize(ConsoleSize);
-
-		os::chrono::sleep_for(100ms);
-		InitConsole();
-
-		consoleicons::instance().set_icon();
-		console.SetAllAliases(Aliases);
-
-		return;
+		if (QueueInspector.search(is_detach_key))
+			return false;
 	}
+
+	return true;
 }
 
-
-static void after_process_creation(os::handle Process, execute_info::wait_mode const WaitMode, HANDLE Thread, point const& ConsoleSize, rectangle const& ConsoleWindowRect, function_ref<void(bool)> const ConsoleActivator)
+static void detach(point const& ConsoleSize, rectangle const& ConsoleWindowRect)
 {
+	auto Aliases = console.GetAllAliases();
+
+	consoleicons::instance().restore_icon();
+
+	FlushInputBuffer();
+	ClearKeyQueue();
+
+	/*
+	  Не будем вызывать CloseConsole, потому, что она поменяет
+	  ConsoleMode на тот, что был до запуска Far'а,
+	  чего работающее приложение могло и не ожидать.
+	*/
+
+	if (const auto Window = console.GetWindow())   // если окно имело HOTKEY, то старое должно его забыть.
+		SendMessage(Window, WM_SETHOTKEY, 0, 0);
+
+	console.Free();
+	console.Allocate();
+
+	InitConsole();
+	Global->ScrBuf->FillBuf();
+
+	console.SetSize(ConsoleSize);
+	console.SetWindowRect(ConsoleWindowRect);
+	console.SetSize(ConsoleSize);
+
+	console.SetAllAliases(std::move(Aliases));
+}
+
+[[nodiscard]]
+static os::handle wait_for_process_or_detach(os::handle Process, int const ConsoleDetachKey, point const& ConsoleSize, rectangle const& ConsoleWindowRect)
+{
+	if (wait_for_process(Process, ConsoleDetachKey))
+	{
+		if (point Size; !console.GetSize(Size) && GetLastError() == ERROR_PIPE_NOT_CONNECTED)
+		{
+			// The process has crashed the conhost. Well done. *slow clap*
+			detach(ConsoleSize, ConsoleWindowRect);
+		}
+
+		return Process;
+	}
+
+	detach(ConsoleSize, ConsoleWindowRect);
+	return {};
+}
+
+static void log_process_exit_code(execute_info const& Info, os::handle const& Process, bool const UsingComspec)
+{
+	DWORD ExitCode;
+	if (!GetExitCodeProcess(Process.native_handle(), &ExitCode))
+	{
+		LOGWARNING(L"GetExitCodeProcess({}): {}"sv, Info.Command, os::last_error());
+		return;
+	}
+
+	LOG(
+		ExitCode == EXIT_SUCCESS?
+			logging::level::debug :
+			logging::level::warning,
+		L"Exit code: {}"sv,
+		ExitCode
+	);
+
+	if (ExitCode != EXIT_SUCCESS && ExitCode != EXIT_FAILURE)
+	{
+		LOGWARNING(L"{}"sv, os::format_error(ExitCode));
+		LOGWARNING(L"{}"sv, os::format_ntstatus(ExitCode));
+	}
+
+	console.command_finished(ExitCode);
+
+	if (UsingComspec && ExitCode == EXIT_FAILURE)
+		console.command_not_found(Info.Command);
+}
+
+static void after_process_creation(
+	execute_info const& Info,
+	os::handle Process,
+	execute_info::wait_mode const WaitMode,
+	os::handle Thread,
+	point const& ConsoleSize,
+	rectangle const& ConsoleWindowRect,
+	function_ref<void(bool)> const ConsoleActivator,
+	bool const UsingComspec
+)
+{
+	const auto resume_process = [&](bool const Consolise)
+	{
+		ConsoleActivator(Consolise);
+
+		if (Thread)
+		{
+			ResumeThread(Thread.native_handle());
+			Thread = {};
+		}
+	};
+
 	switch (WaitMode)
 	{
 	case execute_info::wait_mode::no_wait:
-		ConsoleActivator(false);
-		if (Thread)
-			ResumeThread(Thread);
+		resume_process(false);
 		return;
 
 	case execute_info::wait_mode::if_needed:
 		{
 			const auto NeedWaiting = os::process::get_process_subsystem(Process.get()) != os::process::image_type::graphical;
-			ConsoleActivator(NeedWaiting);
-			if (Thread)
-				ResumeThread(Thread);
+
+			resume_process(NeedWaiting);
 
 			if (!NeedWaiting)
 				return;
 
-			if (const auto ConsoleDetachKey = KeyNameToKey(Global->Opt->ConsoleDetachKey))
-				wait_for_process_or_detach(Process, ConsoleDetachKey, ConsoleSize, ConsoleWindowRect);
-			else
-				Process.wait();
+			Process = wait_for_process_or_detach(std::move(Process), KeyNameToKey(Global->Opt->ConsoleDetachKey), ConsoleSize, ConsoleWindowRect);
+			if (Process)
+				log_process_exit_code(Info, Process, UsingComspec);
 		}
 		return;
 
 	case execute_info::wait_mode::wait_finish:
-		ConsoleActivator(true);
-		if (Thread)
-			ResumeThread(Thread);
+		resume_process(true);
 		Process.wait();
+		log_process_exit_code(Info, Process, UsingComspec);
 		return;
 	}
 }
 
 static bool UseComspec(string& FullCommand, string& Command, string& Parameters)
 {
-	Command = os::env::expand(Global->Opt->Exec.Comspec);
+	Command = get_comspec();
+
 	if (Command.empty())
 	{
-		Command = os::env::get(L"COMSPEC"sv);
-		if (Command.empty())
-		{
-			Message(MSG_WARNING,
-				msg(lng::MError),
-				{
-					msg(lng::MComspecNotFound)
-				},
-				{ lng::MOk });
-			return false;
-		}
+		Message(MSG_WARNING,
+			msg(lng::MError),
+			{
+				msg(lng::MComspecNotFound)
+			},
+			{ lng::MOk });
+		return false;
 	}
 
 	try
 	{
-		Parameters = format(os::env::expand(Global->Opt->Exec.ComspecArguments), FullCommand);
+		Parameters = far::vformat(os::env::expand(Global->Opt->Exec.ComspecArguments), FullCommand);
 	}
 	catch (fmt::format_error const& e)
 	{
@@ -484,14 +625,17 @@ static bool execute_createprocess(string const& Command, string const& Parameter
 	if (RunAs)
 		return false;
 
+	auto FullCommand = full_command(quote(Command), Parameters);
 	STARTUPINFO si{ sizeof(si) };
 
-	return CreateProcess(
+	LOGDEBUG(L"CreateProcess({})"sv, FullCommand);
+
+	if (!CreateProcess(
 		// We can't pass ApplicationName - if it's a bat file with a funny name (e.g. containing '&')
 		// it will fail because CreateProcess doesn't quote it properly when spawning comspec,
 		// and we can't quote it ourselves because it's not supported.
 		{},
-		full_command(quote(Command), Parameters).data(),
+		FullCommand.data(),
 		{},
 		{},
 		false,
@@ -500,12 +644,18 @@ static bool execute_createprocess(string const& Command, string const& Parameter
 		Directory.c_str(),
 		&si,
 		&pi
-	);
+	))
+	{
+		LOGDEBUG(L"CreateProcess({}): {}"sv, FullCommand, os::last_error());
+		return false;
+	}
+
+	return true;
 }
 
-static bool execute_shell(string const& Command, string const& Parameters, string const& Directory, bool const RunAs, bool const Wait, HANDLE& Process)
+static bool execute_shell(string const& Command, string const& Parameters, string const& Directory, execute_info::source_mode const SourceMode, bool const RunAs, bool const Wait, HANDLE& Process)
 {
-	SHELLEXECUTEINFO Info = { sizeof(Info) };
+	SHELLEXECUTEINFO Info{ sizeof(Info) };
 	Info.lpFile = Command.c_str();
 	Info.lpParameters = EmptyToNull(Parameters);
 	Info.lpDirectory = Directory.c_str();
@@ -513,8 +663,31 @@ static bool execute_shell(string const& Command, string const& Parameters, strin
 	Info.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC | SEE_MASK_NOCLOSEPROCESS | (Wait? SEE_MASK_NO_CONSOLE : 0);
 	Info.lpVerb = RunAs? L"runas" : nullptr;
 
+	if (any_of(SourceMode, execute_info::source_mode::known, execute_info::source_mode::known_executable))
+	{
+		assert(Parameters.empty());
+
+		// In this mode we know exactly what we're launching,
+		// but ShellExecuteEx might still resort to some AI
+		// and turn path\file_without_ext into path\file_without_ext.exe.
+		// To prevent that, we specify the extension explicitly.
+		if (auto Extension = name_ext(Command).second; !equal_icase(Extension, L".lnk"sv))
+		{
+			if (Extension.empty())
+				Extension = L"."sv;
+			// .data() is fine, the underlying string is in the outer scope and null-terminated.
+			Info.lpClass = Extension.data();
+			Info.fMask |= SEE_MASK_CLASSNAME;
+		}
+	}
+
+	LOGDEBUG(L"ShellExecuteEx({})"sv, Command);
+
 	if (!ShellExecuteEx(&Info))
+	{
+		LOGDEBUG(L"ShellExecuteEx({}): {}"sv, Command, os::last_error());
 		return false;
+	}
 
 	Process = Info.hProcess;
 
@@ -533,15 +706,14 @@ public:
 		ChangeConsoleMode(console.GetInputHandle(), InitialConsoleMode->Input);
 		ChangeConsoleMode(console.GetOutputHandle(), InitialConsoleMode->Output);
 		ChangeConsoleMode(console.GetErrorHandle(), InitialConsoleMode->Error);
-
-		GetCursorType(CursorVisible, CursorSize);
 	}
 
 	~external_execution_context()
 	{
-		SetFarConsoleMode(true);
+		SCOPED_ACTION(os::last_error_guard);
 
-		SetCursorType(CursorVisible, CursorSize);
+		SetFarConsoleMode(true);
+		SetPalette();
 
 		point ConSize;
 		if (console.GetSize(ConSize) && (ConSize.x != ScrX + 1 || ConSize.y != ScrY + 1))
@@ -554,20 +726,25 @@ public:
 			console.SetInputCodepage(ConsoleCP);
 			console.SetOutputCodepage(ConsoleOutputCP);
 		}
+		else
+		{
+			if (console.GetOutputCodepage() != ConsoleOutputCP)
+			{
+				char_width::invalidate();
+			}
+		}
 
-		// The title could be changed by the external program
-		Global->ScrBuf->Flush(flush_type::cursor | flush_type::title);
+		// Could be changed by the external program
+		Global->ScrBuf->Invalidate();
 	}
 
 private:
-	int ConsoleCP = console.GetInputCodepage();
-	int ConsoleOutputCP = console.GetOutputCodepage();
-	bool CursorVisible{};
-	size_t CursorSize{};
+	uintptr_t ConsoleCP = console.GetInputCodepage();
+	uintptr_t ConsoleOutputCP = console.GetOutputCodepage();
 };
 
 static bool execute_impl(
-	execute_info& Info,
+	const execute_info& Info,
 	function_ref<void(bool)> const ConsoleActivator,
 	string& FullCommand,
 	string& Command,
@@ -579,11 +756,18 @@ static bool execute_impl(
 	rectangle ConsoleWindowRect;
 	point ConsoleSize;
 	std::optional<external_execution_context> Context;
+	auto ConsoleActivatorInvoked = false;
 
 	const auto ExtendedActivator = [&](bool const Consolise)
 	{
 		if (Context)
 			return;
+
+		if (!ConsoleActivatorInvoked)
+		{
+			ConsoleActivator(Consolise);
+			ConsoleActivatorInvoked = true;
+		}
 
 		if (Consolise)
 		{
@@ -591,8 +775,6 @@ static bool execute_impl(
 			console.GetSize(ConsoleSize);
 			Context.emplace();
 		}
-
-		ConsoleActivator(Consolise);
 	};
 
 	const auto execute_process = [&]
@@ -601,34 +783,41 @@ static bool execute_impl(
 		if (!execute_createprocess(Command, Parameters, CurrentDirectory, Info.RunAs, Info.WaitMode != execute_info::wait_mode::no_wait, pi))
 			return false;
 
-		after_process_creation(os::handle(pi.hProcess), Info.WaitMode, pi.hThread, ConsoleSize, ConsoleWindowRect, ExtendedActivator);
+		after_process_creation(Info, os::handle(pi.hProcess), Info.WaitMode, os::handle(pi.hThread), ConsoleSize, ConsoleWindowRect, ExtendedActivator, UsingComspec);
 		return true;
 
 	};
 
-	if (execute_process())
-		return true;
+	// Filter out the cases where the source is known, but is not a known executable (exe, com, bat, cmd, see IsExecutable in filelist.cpp)
+	// This should cover gh-449 and is usually pointless anyway.
+	if (
+		Info.SourceMode == execute_info::source_mode::known_executable ||
+		Info.SourceMode == execute_info::source_mode::unknown)
+	{
+		if (execute_process())
+			return true;
 
-	if (error_state::fetch().Win32Error == ERROR_EXE_MACHINE_TYPE_MISMATCH)
-		return false;
+		if (os::last_error().Win32Error == ERROR_EXE_MACHINE_TYPE_MISMATCH)
+			return false;
+	}
 
 	ExtendedActivator(Info.WaitMode != execute_info::wait_mode::no_wait);
 
 	const auto execute_shell = [&]
 	{
 		HANDLE Process;
-		if (!::execute_shell(Command, Parameters, CurrentDirectory, Info.RunAs, Info.WaitMode != execute_info::wait_mode::no_wait, Process))
+		if (!::execute_shell(Command, Parameters, CurrentDirectory, Info.SourceMode, Info.RunAs, Info.WaitMode != execute_info::wait_mode::no_wait, Process))
 			return false;
 
 		if (Process)
-			after_process_creation(os::handle(Process), Info.WaitMode, {}, ConsoleSize, ConsoleWindowRect, [](bool){});
+			after_process_creation(Info, os::handle(Process), Info.WaitMode, {}, ConsoleSize, ConsoleWindowRect, [](bool){}, UsingComspec);
 		return true;
 	};
 
 	if (execute_shell())
 		return true;
 
-	if (error_state::fetch().Win32Error != ERROR_FILE_NOT_FOUND || UsingComspec || !UseComspec(FullCommand, Command, Parameters))
+	if (os::last_error().Win32Error != ERROR_FILE_NOT_FOUND || UsingComspec || !UseComspec(FullCommand, Command, Parameters))
 		return false;
 
 	UsingComspec = true;
@@ -639,7 +828,7 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 {
 	// CreateProcess retardedly doesn't take into account CurrentDirectory when searching for the executable.
 	// SearchPath looks there as well and if it's set to something else we could get unexpected results.
-	const auto CurrentDirectory = short_name_if_too_long(os::fs::GetCurrentDirectory());
+	const auto CurrentDirectory = short_directory_name_if_too_long(Info.Directory.empty()? os::fs::get_current_directory() : Info.Directory);
 	os::fs::process_current_directory_guard const Guard(CurrentDirectory);
 
 
@@ -652,10 +841,10 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 		Info.WaitMode = execute_info::wait_mode::no_wait;
 	}
 
-	if (Info.SourceMode == execute_info::source_mode::known)
+	if (Info.SourceMode != execute_info::source_mode::unknown)
 	{
 		FullCommand = Info.Command;
-		Command = short_name_if_too_long(Info.Command);
+		Command = short_file_name_if_too_long(Info.Command);
 	}
 	else
 	{
@@ -663,11 +852,15 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 
 		if (PartCmdLine(FullCommand, Command, Parameters))
 		{
-			string FullName;
+			// Can happen if the user entered only spaces.
+			// No point in going further.
+			if (Command.empty())
+				return;
+
 			// Unfortunately it's not possible to avoid the manual search, see gh-290.
-			if (FindObject(Command, FullName))
+			if (string FullName; FindObject(Command, FullName))
 			{
-				Command = FullName;
+				Command = std::move(FullName);
 			}
 		}
 		else
@@ -681,7 +874,7 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 
 	const auto IgnoreInternalAssociations =
 		!Info.UseAssociations ||
-		Info.SourceMode == execute_info::source_mode::known ||
+		Info.SourceMode != execute_info::source_mode::unknown ||
 		Info.WaitMode == execute_info::wait_mode::no_wait ||
 		UsingComspec ||
 		!Global->Opt->Exec.UseAssociations;
@@ -695,7 +888,7 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 
 		const auto ObjectNameShort = ConvertNameToShort(Command);
 		const auto LastX = WhereX(), LastY = WhereY();
-		if (ProcessLocalFileTypes(Command, ObjectNameShort, FILETYPE_EXEC, Info.WaitMode == execute_info::wait_mode::wait_finish, false, Info.RunAs, [&](execute_info& AssocInfo)
+		if (ProcessLocalFileTypes(Command, ObjectNameShort, FILETYPE_EXEC, Info.WaitMode == execute_info::wait_mode::wait_finish, Info.Directory, false, Info.RunAs, [&](execute_info& AssocInfo)
 		{
 			GotoXY(LastX, LastY);
 
@@ -716,7 +909,7 @@ void Execute(execute_info& Info, function_ref<void(bool)> const ConsoleActivator
 	if (execute_impl(Info, ConsoleActivator, FullCommand, Command, Parameters, CurrentDirectory, UsingComspec))
 		return;
 
-	const auto ErrorState = error_state::fetch();
+	const auto ErrorState = os::last_error();
 
 	if (ErrorState.Win32Error == ERROR_CANCELLED)
 		return;
@@ -771,7 +964,7 @@ static string_view PrepareOSIfExist(string_view const CmdLine, predicate IsExist
 
 	auto Command = CmdLine;
 
-	while (starts_with(Command, L'@'))
+	while (Command.starts_with(L'@'))
 		Command.remove_prefix(1);
 
 	const auto skip_spaces = [](string_view& Str)

@@ -2,6 +2,8 @@
 #include "marclng.hpp"
 #include <dos.h>
 
+#include <cstdlib>
+
 BOOL FileExists(const char* Name)
 {
   return GetFileAttributes(Name)!=0xFFFFFFFF;
@@ -85,13 +87,13 @@ const char *GetMsg(int MsgId)
    запуск треда для ожидания момента убийства лист файла */
 void StartThreadForKillListFile(PROCESS_INFORMATION *pi,char *list)
 {
-    if ( pi==0 || list==0 || *list==0)
+    if (!pi || !list || !*list)
         return;
     KillStruct *ks;
     DWORD dummy;
 
     ks=(KillStruct*)GlobalAlloc(GPTR,sizeof(KillStruct));
-    if ( ks==0 )
+    if (!ks)
         return ;
 
     ks->hThread=pi->hThread;
@@ -123,7 +125,7 @@ int Execute(HANDLE hPlugin,char *CmdStr,int HideOutput,int Silent,int ShowTitle,
   memset(&si,0,sizeof(si));
   si.cb=sizeof(si);
 
-  HANDLE hChildStdoutRd,hChildStdoutWr;
+  HANDLE hChildStdoutRd{}, hChildStdoutWr{};
   HANDLE StdInput=GetStdHandle(STD_INPUT_HANDLE);
   HANDLE StdOutput=GetStdHandle(STD_OUTPUT_HANDLE);
   HANDLE StdError=GetStdHandle(STD_ERROR_HANDLE);
@@ -486,7 +488,7 @@ char *SeekDefExtPoint(char *Name, char *DefExt/*=NULL*/, char **Ext/*=NULL*/)
 
 BOOL AddExt(char *Name, char *Ext)
 {
-  char *ExtPnt;
+  char *ExtPnt = {};
   FSF.Unquote(Name); //$ AA 15.04.2003 для правильной обработки имен в кавычках
   if(Name && *Name && !SeekDefExtPoint(Name, Ext, &ExtPnt))
   {
@@ -563,7 +565,7 @@ int GetScrX(void)
 
 
 
-int PathMayBeAbsolute(const char *Path)
+static int PathMayBeAbsolute(const char *Path)
 {
   return (Path &&
            (

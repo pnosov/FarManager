@@ -134,6 +134,7 @@
 <?define Guid.Panel.Search.CtrlIns.lua = "71A09EF7-1AEF-408E-BC67-A2A011216657" ?>
 <?define Guid.ShiftBS.lua = "D9C2AB23-6DC2-408E-9192-87C2F113188C" ?>
 <?define Guid.ShiftTab.lua = "D0CE372A-263F-4DEE-B4DD-C2A2B53FD9E6" ?>
+<?define Guid.SwapHorizontalScrollDirection.lua = "0782F84D-32F3-48C7-B107-098E79473515" ?>
 <?define Guid.Symlink.lua = "4702F78F-07E1-4C55-A464-FA6598C3F649" ?>
 <?define Guid.UppercaseFolders.lua = "AA9B1595-E162-4B64-957B-20D9C23620B1" ?>
 <?define Guid.View.CtrlUpDown.lua = "20944403-38BD-481D-A82F-9359415B1394" ?>
@@ -574,10 +575,9 @@
 <?define Guid.lm_pol.lng = "C3069057-FDB6-491D-B012-A29886A4B628" ?>
 <?define Guid.luamacro.example.ini = "E782F2C0-4B28-49A5-83FF-31E1FD086862" ?>
 <?define Guid.lua51.dll = "31F36739-E199-4FA9-BD95-E08D99C54F27" ?>
- 
-<?define Guid.lpeg.dll = "924E63FA-359B-4E4B-98B3-D04502466DEF" ?>
 <?define Guid.luafar3.dll = "51D92B8C-EFB1-47A7-98FA-AD3BB73BBDD8" ?>
 <?define Guid.luafar3.map = "931D33C2-2675-4DC7-8A57-DF8A12B263ED" ?>
+
 <?define Guid.DlgBuilder.hpp = "8E572810-F31E-476C-A67E-3679CFDDF510" ?>
 <?define Guid.farcolor.hpp = "09214A8A-A57C-42EB-9E74-FA95E5006BFD" ?>
 <?define Guid.plugin.hpp = "E736C600-248A-445F-8EC5-2646A8D586E7" ?>

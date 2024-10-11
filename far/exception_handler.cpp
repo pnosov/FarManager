@@ -464,7 +464,7 @@ static string self_version()
 	return ScmRevision.empty()? Version : Version + far::format(L" ({:.7})"sv, ScmRevision);
 }
 
-static string timestamp(SYSTEMTIME const& SystemTime)
+static string timestamp(os::chrono::time const SystemTime)
 {
 	const auto [Date, Time] = format_datetime(SystemTime);
 	return concat(Date, L' ', Time);
@@ -472,15 +472,14 @@ static string timestamp(SYSTEMTIME const& SystemTime)
 
 static string timestamp(os::chrono::time_point const Point)
 {
-	const auto FileTime = os::chrono::nt_clock::to_filetime(Point);
-	SYSTEMTIME SystemTime{};
-	if (!FileTimeToSystemTime(&FileTime, &SystemTime))
+	os::chrono::utc_time UtcTime;
+	if (!timepoint_to_utc_time(Point, UtcTime))
 	{
 		LOGWARNING(L"FileTimeToSystemTime(): {}"sv, os::last_error());
 		return far::format(L"{:16X}"sv, Point.time_since_epoch().count());
 	}
 
-	return timestamp(SystemTime);
+	return timestamp(UtcTime);
 }
 
 static string pe_timestamp()
@@ -513,7 +512,7 @@ static string system_timestamp()
 
 static string local_timestamp()
 {
-	SYSTEMTIME LocalTime;
+	os::chrono::local_time LocalTime;
 	if (!os::chrono::utc_to_local(os::chrono::nt_clock::now(), LocalTime))
 		return {};
 
@@ -765,7 +764,6 @@ public:
 		{
 			LOGWARNING(L"{}"sv, e);
 		}
-
 	}
 
 private:
@@ -1084,7 +1082,7 @@ static string get_uptime()
 	if (!os::chrono::get_process_creation_time(GetCurrentProcess(), CreationTime))
 		return os::last_error().to_string();
 
-	return ConvertDurationToHMS(os::chrono::nt_clock::now() - CreationTime);
+	return duration_to_string_hms(os::chrono::nt_clock::now() - CreationTime);
 }
 
 static auto memory_status()
@@ -1558,6 +1556,7 @@ static string collect_information(
 
 	const auto Version = self_version();
 	const auto Compiler = build::compiler();
+	const auto Library = build::library();
 	const auto PeTime = pe_timestamp();
 	const auto FileTime = file_timestamp();
 	const auto SystemTime = system_timestamp();
@@ -1595,6 +1594,7 @@ static string collect_information(
 	{
 		{ L"Far:      "sv, Version,       },
 		{ L"Compiler: "sv, Compiler,      },
+		{ L"Library:  "sv, Library,       },
 		{ L"PE time:  "sv, PeTime,        },
 		{ L"File time:"sv, FileTime,      },
 		{ L"Time:     "sv, SystemTime,    },
@@ -2170,10 +2170,15 @@ signal_handler::~signal_handler()
 extern "C" void _invalid_parameter(wchar_t const*, wchar_t const*, wchar_t const*, unsigned int, uintptr_t);
 #endif
 #else
+WARNING_PUSH()
+WARNING_DISABLE_CLANG("-Wmissing-noreturn")
+
 static void _invalid_parameter(wchar_t const*, wchar_t const*, wchar_t const*, unsigned int, uintptr_t)
 {
 	os::process::terminate(STATUS_INVALID_CRUNTIME_PARAMETER);
 }
+
+WARNING_POP()
 #endif
 
 static void invalid_parameter_handler_impl(const wchar_t* const Expression, const wchar_t* const Function, const wchar_t* const File, unsigned int const Line, uintptr_t const Reserved)

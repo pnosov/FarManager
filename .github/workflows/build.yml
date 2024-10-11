@@ -98,7 +98,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Initialize CodeQL
-        if: matrix.platform == 'x64' && matrix.build_type == 'Debug'
+        if: matrix.platform == 'x64' && matrix.build_type == 'Debug' && matrix.compiler == 'cl'
         uses: github/codeql-action/init@v3
         with:
           languages: cpp
@@ -136,7 +136,7 @@ jobs:
           nmake /f makefile_all_vc
 
       - name: Perform CodeQL Analysis
-        if: matrix.platform == 'x64' && matrix.build_type == 'Debug'
+        if: matrix.platform == 'x64' && matrix.build_type == 'Debug' && matrix.compiler == 'cl'
         uses: github/codeql-action/analyze@v3
 
       - name: Publish
@@ -153,12 +153,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sys: [mingw32, clang32, mingw64, ucrt64, clang64]
+        sys: [mingw32, mingw64, ucrt64, clang64]
         compiler: [gcc, clang]
         build_type: [Release, Debug]
         exclude:
-          - sys: clang32
-            compiler: gcc
           - sys: clang64
             compiler: gcc
 
@@ -183,6 +181,7 @@ jobs:
         with:
           update: true
           msystem: ${{ matrix.sys }}
+          install: unzip
           pacboy: toolchain:p
 
       - name: Setup clang build
@@ -236,7 +235,7 @@ jobs:
       CLANG: 1
       PYTHON: 1
       SYS_LUA: 1
-      LUA_VER: '5.1.5'
+      LUA_VER: '5.1'
       ENABLE_TESTS: 0
 
     steps:
@@ -249,13 +248,10 @@ jobs:
         with:
           languages: cpp
 
-      - name: Install luver
-        uses: MunifTanjim/luver-action@v1
-
       - name: Install lua ${{ env.LUA_VER }}
         run: |
-          luver install lua $LUA_VER
-          luver use $LUA_VER
+          sudo apt-get update
+          sudo apt-get install lua${{ env.LUA_VER }}
 
       - name: Download llvm-mingw
         id: download_llvm_mingw

@@ -51,6 +51,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "filemasks.hpp"
 #include "filepanels.hpp"
 #include "flink.hpp"
+#include "history.hpp"
 #include "global.hpp"
 #include "interf.hpp"
 #include "keyboard.hpp"
@@ -1715,8 +1716,10 @@ void FarMacroApi::promptFunc() const
 
 	const auto oldHistoryDisable = GetHistoryDisableMask();
 
-	if (history.empty()) // Mantis#0001743: Возможность отключения истории
-		SetHistoryDisableMask(8); // если не указан history, то принудительно отключаем историю для ЭТОГО prompt()
+	// Mantis#0001743: Возможность отключения истории
+	// если не указан history, то принудительно отключаем историю для ЭТОГО prompt()
+	if (history.empty())
+		SetHistoryDisableMask(1 << HISTORYTYPE_DIALOG);
 
 	if (GetString(title, prompt, history, src, strDest, {}, (Flags&~FIB_CHECKBOX) | FIB_ENABLEEMPTY))
 		PassValue(strDest);
@@ -2296,11 +2299,10 @@ void FarMacroApi::farcfggetFunc() const
 // V=Far.GetConfig(Key.Name)
 void FarMacroApi::fargetconfigFunc() const
 {
-	const wchar_t *Keyname = (mData->Count >= 1 && mData->Values[0].Type==FMVT_STRING) ?
+	const auto Keyname = (mData->Count >= 1 && mData->Values[0].Type==FMVT_STRING) ?
 		mData->Values[0].String : L"";
 
-	const auto Dot = wcsrchr(Keyname, L'.');
-	if (Dot)
+	if (const auto Dot = std::wcsrchr(Keyname, L'.'))
 	{
 		const string_view Key(Keyname, Dot - Keyname);
 
@@ -3176,7 +3178,7 @@ void FarMacroApi::panelitemFunc() const
 
 		const auto FormatDate = [](const os::chrono::time_point TimePoint)
 		{
-			const auto& [Date, Time] = ConvertDate(TimePoint, 8, 1);
+			const auto& [Date, Time] = time_point_to_string(TimePoint, 8, 1);
 			return concat(Date, L' ', Time);
 		};
 

@@ -108,6 +108,7 @@ namespace console_detail
 
 		bool GetMode(HANDLE ConsoleHandle, DWORD& Mode) const;
 		bool SetMode(HANDLE ConsoleHandle, DWORD Mode) const;
+		std::optional<DWORD> UpdateMode(HANDLE ConsoleHandle, DWORD ToSet, DWORD ToClear) const;
 
 		bool IsVtSupported() const;
 
@@ -163,6 +164,8 @@ namespace console_detail
 
 		bool ClearExtraRegions(const FarColor& Color, int Mode) const;
 
+		bool Clear(const FarColor& Color) const;
+
 		bool ScrollWindow(int Lines, int Columns = 0) const;
 
 		bool ScrollWindowToBegin() const;
@@ -187,11 +190,11 @@ namespace console_detail
 		bool ExternalRendererLoaded() const;
 
 		[[nodiscard]]
-		bool IsWidePreciseExpensive(char32_t Codepoint);
+		size_t GetWidthPreciseExpensive(char32_t Codepoint);
 		void ClearWideCache();
 
-		bool GetPalette(std::array<COLORREF, 16>& Palette) const;
-		bool SetPalette(std::array<COLORREF, 16> const& Palette) const;
+		bool GetPalette(std::array<COLORREF, 256>& Palette) const;
+		bool SetPalette(std::array<COLORREF, 256> const& Palette) const;
 
 		static void EnableWindowMode(bool Value);
 		static void EnableVirtualTerminal(bool Value);

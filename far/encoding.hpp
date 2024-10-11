@@ -50,20 +50,38 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 namespace encoding
 {
-	struct diagnostics
+	enum class is_utf8
 	{
+		no,
+		yes,
+		yes_ascii
+	};
+
+	class diagnostics
+	{
+	public:
 		enum: unsigned
 		{
-			no_translation  = 0_bit,
+			no_translation = 0_bit,
 			not_enough_data = 1_bit,
 
 			all = ~0u
 		};
 
-		unsigned EnabledDiagnostics{ all };
+		explicit diagnostics(unsigned Diagnostics = all);
+
+		void clear();
+
+		unsigned EnabledDiagnostics;
 		std::optional<size_t> ErrorPosition;
 		size_t PartialInput{};
 		size_t PartialOutput{};
+
+		void set_is_utf8(is_utf8 IsUtf8);
+		is_utf8 get_is_utf8() const;
+
+	private:
+		is_utf8 m_IsUtf8{is_utf8::yes_ascii};
 	};
 
 	[[nodiscard]] size_t get_bytes(uintptr_t Codepage, string_view Str, std::span<char> Buffer, diagnostics* Diagnostics = {});
@@ -166,6 +184,11 @@ namespace encoding
 		[[nodiscard]] static string get_chars(std::string_view Str, diagnostics* Diagnostics = {});
 	};
 
+	struct ascii
+	{
+		[[nodiscard]] static string get_chars(std::string_view Str);
+	};
+
 	[[nodiscard]] std::string_view get_signature_bytes(uintptr_t Cp);
 
 	class writer
@@ -188,13 +211,6 @@ namespace encoding
 		uintptr_t m_Codepage;
 		bool m_AddSignature;
 		bool m_IgnoreEncodingErrors;
-	};
-
-	enum class is_utf8
-	{
-		no,
-		yes,
-		yes_ascii
 	};
 
 	is_utf8 is_valid_utf8(std::string_view Str, bool PartialContent);
@@ -281,11 +297,7 @@ public:
 	[[nodiscard]] auto lf() const { return m_Lf; }
 
 private:
-	static char to(uintptr_t Codepage, wchar_t WideChar)
-	{
-		char Char;
-		return encoding::get_bytes(Codepage, { &WideChar, 1 }, { &Char, 1 })? Char : WideChar;
-	}
+	static char to(uintptr_t Codepage, wchar_t WideChar);
 
 	char
 		m_Cr{'\r'},

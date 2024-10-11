@@ -55,6 +55,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "common/2d/algorithm.hpp"
 #include "common/algorithm.hpp"
 #include "common/enum_substrings.hpp"
+#include "common/from_string.hpp"
 #include "common/io.hpp"
 #include "common/scope_exit.hpp"
 #include "common/view/enumerate.hpp"
@@ -66,7 +67,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #define ESC L"\u001b"
 #define CSI ESC L"["
-#define OSC(Command) ESC L"]" Command ESC L"\\"sv
+#define ST ESC L"\\"
+#define OSC(Command) ESC L"]" Command ST ""sv
 #define ANSISYSSC CSI L"s"
 #define ANSISYSRC CSI L"u"
 
@@ -420,7 +422,7 @@ protected:
 						throw far_fatal_exception(L"File write error"sv);
 				};
 
-				if constexpr (constexpr auto UseUtf8Output = true)
+				if constexpr ([[maybe_unused]] constexpr auto UseUtf8Output = true)
 				{
 					const auto Utf8Str = encoding::utf8::get_bytes(Str);
 					write(Utf8Str.data(), Utf8Str.size());
@@ -532,6 +534,144 @@ protected:
 		bool m_Restore{};
 	};
 
+	class scoped_vt_output
+	{
+	public:
+		NONCOPYABLE(scoped_vt_output);
+
+		scoped_vt_output():
+			m_ConsoleMode(::console.UpdateMode(::console.GetOutputHandle(), ENABLE_PROCESSED_OUTPUT | ENABLE_VIRTUAL_TERMINAL_PROCESSING, 0))
+		{
+		}
+
+		~scoped_vt_output()
+		{
+			if (m_ConsoleMode)
+				::console.SetMode(::console.GetOutputHandle(), *m_ConsoleMode);
+		}
+
+		explicit operator bool() const
+		{
+			return m_ConsoleMode.has_value();
+		}
+
+	private:
+		std::optional<DWORD> m_ConsoleMode;
+	};
+
+	class scoped_vt_input
+	{
+	public:
+		NONCOPYABLE(scoped_vt_input);
+
+		scoped_vt_input():
+			m_ConsoleMode(::console.UpdateMode(::console.GetInputHandle(), ENABLE_VIRTUAL_TERMINAL_INPUT, ENABLE_LINE_INPUT))
+		{
+		}
+
+		~scoped_vt_input()
+		{
+			if (m_ConsoleMode)
+				::console.SetMode(::console.GetInputHandle(), *m_ConsoleMode);
+		}
+
+		explicit operator bool() const
+		{
+			return m_ConsoleMode.has_value();
+		}
+
+	private:
+		std::optional<DWORD> m_ConsoleMode;
+	};
+
+	static string query_vt(string_view const Command)
+	{
+		// A VT query works as follows:
+		// - We cast an unpronounceable spell into the output stream.
+		// - If the terminal recognizes the spell, it conjures
+		//   an equally unpronounceable answer into the input stream.
+		//   Notably, it takes its time at that and answers asynchronously.
+		// - If the terminal does not recognize the spell, it does not
+		//   burden itself with explanations and stays silent.
+
+		// A classic, timeless design, a pinnacle of 70's or whatever.
+
+		// The only problem with it is that there is no way to tell what will happen.
+		// You conjure a dodgy incantation, which may or may not be supported, and pray.
+		// Maybe the response comes immediately.
+		// Maybe later.
+		// Maybe never.
+
+		// 🤦
+
+		// To make sure that we do not deadlock ourselves here we prepend & append
+		// this dummy DA command that always works (since it was in the initial WT release),
+		// so that the response is always non-empty and we know exactly where it starts and ends.
+		// In other words:
+		// - <attributes>[the response we are actually after]<attributes>: yay.
+		// - <attributes><attributes>: nay, the request is unsupported.
+
+		// Ah, and since it is input stream, the user can type any rubbish into it at the same time.
+		// Fortunately, it seems that user input is queued before and/or after the responses,
+		// but does not interlace with them.
+
+		// We also need to enable VT input, otherwise it will only work in a real console.
+		// Are you not entertained?
+
+		scoped_vt_input const VtInput;
+		if (!VtInput)
+			throw far_exception(L"scoped_vt_input"sv);
+
+		const auto Dummy = CSI L"0c"sv;
+
+		if (!::console.Write(concat(Dummy, Command, Dummy)))
+			throw far_exception(L"WriteConsole"sv);
+
+		string Response;
+
+		std::optional<size_t>
+			FirstTokenPrefixPos,
+			FirstTokenSuffixPos,
+			SecondTokenPrefixPos,
+			SecondTokenSuffixPos;
+
+		const auto
+			TokenPrefix = CSI "?"sv,
+			TokenSuffix = L"c"sv;
+
+		while (!SecondTokenSuffixPos)
+		{
+			wchar_t ResponseBuffer[8192];
+			size_t ResponseSize;
+
+			if (!::console.Read(ResponseBuffer, ResponseSize))
+				throw far_exception(L"ReadConsole"sv);
+
+			Response.append(ResponseBuffer, ResponseSize);
+
+			if (!FirstTokenPrefixPos)
+				if (const auto Pos = Response.find(TokenPrefix); Pos != Response.npos)
+					FirstTokenPrefixPos = Pos;
+
+			if (FirstTokenPrefixPos && !FirstTokenSuffixPos)
+				if (const auto Pos = Response.find(TokenSuffix, *FirstTokenPrefixPos + TokenPrefix.size()); Pos != Response.npos)
+					FirstTokenSuffixPos = Pos;
+
+			if (FirstTokenSuffixPos && !SecondTokenPrefixPos)
+				if (const auto Pos = Response.find(TokenPrefix, *FirstTokenSuffixPos + TokenSuffix.size()); Pos != Response.npos)
+					SecondTokenPrefixPos = Pos;
+
+			if (SecondTokenPrefixPos && !SecondTokenSuffixPos)
+				if (const auto Pos = Response.find(TokenSuffix, *SecondTokenPrefixPos + TokenPrefix.size()); Pos != Response.npos)
+					SecondTokenSuffixPos = Pos;
+		}
+
+		Response.resize(*SecondTokenPrefixPos);
+		Response.erase(0, *FirstTokenSuffixPos + TokenSuffix.size());
+
+		return Response;
+	}
+
 	console::console():
 		m_OriginalInputHandle(GetStdHandle(STD_INPUT_HANDLE)),
 		m_StreamBuffersOverrider(std::make_unique<stream_buffers_overrider>())
@@ -586,18 +726,21 @@ protected:
 		return m_OriginalInputHandle;
 	}
 
+	static bool is_pseudo_console(HWND const Window)
+	{
+		wchar_t ClassName[MAX_PATH];
+		const auto Size = GetClassName(Window, ClassName, static_cast<int>(std::size(ClassName)));
+		return string_view(ClassName, Size) == L"PseudoConsoleWindow"sv;
+	}
+
 	HWND console::GetWindow() const
 	{
 		const auto Window = GetConsoleWindow();
 
-		wchar_t ClassName[MAX_PATH];
-		if (const auto Size = GetClassName(Window, ClassName, static_cast<int>(std::size(ClassName))); Size)
+		if (is_pseudo_console(Window))
 		{
-			if (string_view(ClassName, Size) == L"PseudoConsoleWindow"sv)
-			{
-				if (const auto Owner = ::GetWindow(Window, GW_OWNER))
-					return Owner;
-			}
+			if (const auto Owner = ::GetWindow(Window, GW_OWNER))
+				return Owner;
 		}
 
 		return Window;
@@ -878,6 +1021,19 @@ protected:
 		}
 
 		return true;
+	}
+
+	std::optional<DWORD> console::UpdateMode(HANDLE const ConsoleHandle, DWORD const ToSet, DWORD const ToClear) const
+	{
+		DWORD CurrentMode;
+
+		if (!GetMode(ConsoleHandle, CurrentMode))
+			return {};
+
+		if (const auto NewMode = (CurrentMode | ToSet) & ~ToClear; NewMode != CurrentMode && !SetMode(ConsoleHandle, NewMode))
+			return {};
+
+		return CurrentMode;
 	}
 
 	bool console::IsVtSupported() const
@@ -1324,7 +1480,7 @@ protected:
 			if (colors::is_default(Color.Value))
 				append(Str, Mapping.Default);
 			else if (const auto Index = vt_color_index(colors::index_value(Color.Value)); Index < colors::index::nt_size && Mapping.PreferBasicIndex)
-				append(Str, Color.Value & FOREGROUND_INTENSITY? Mapping.Intense : Mapping.Normal, static_cast<wchar_t>(L'0' + (Index & 0b111)));
+				append(Str, Color.Value & C_INTENSE? Mapping.Intense : Mapping.Normal, static_cast<wchar_t>(L'0' + (Index & 0b111)));
 			else
 				far::format_to(Str, L"{1}{0}5{0}{2}"sv, Mapping.Separator, Mapping.ExtendedColour, Index);
 		}
@@ -1374,6 +1530,15 @@ protected:
 				UnderlineStyle(Color.GetUnderline()),
 				UnderlineColor(single_color::underline(Color))
 			{
+				if (Color.Flags & COMMON_LVB_GRID_HORIZONTAL)
+					Style |= FCF_FG_OVERLINE;
+
+				if (Color.Flags & COMMON_LVB_REVERSE_VIDEO)
+					Style |= FCF_FG_INVERSE;
+
+				if (Color.Flags & COMMON_LVB_UNDERSCORE && UnderlineStyle == UNDERLINE_STYLE::UNDERLINE_NONE)
+					UnderlineStyle = UNDERLINE_STYLE::UNDERLINE_SINGLE;
+
 				if (
 					// If there's no underline, no point in emitting its color
 					UnderlineStyle == UNDERLINE_NONE ||
@@ -1521,7 +1686,7 @@ protected:
 					(
 						encoding::utf16::is_high_surrogate(Cell.Char) ||
 						// FFFD can be wide too
-						(Cell.Char == encoding::replace_char && char_width::is_wide(encoding::replace_char))
+						(Cell.Char == encoding::replace_char && Cell.Reserved1 <= std::numeric_limits<wchar_t>::max() && char_width::is_wide(encoding::replace_char))
 					)
 				)
 				{
@@ -1552,6 +1717,63 @@ protected:
 
 	class console::implementation
 	{
+		class foreign_blocks_list
+		{
+		public:
+			void queue(FAR_CHAR_INFO const& Cell, point const& Point, rectangle const WorkingArea)
+			{
+				const auto IsForeign = check(Cell);
+				if (IsForeign)
+				{
+					if (!m_ForeignBlock)
+						m_ForeignBlock.emplace(WorkingArea.left + Point.x, WorkingArea.top + Point.y, WorkingArea.left + Point.x, WorkingArea.top + Point.y);
+					else
+						++m_ForeignBlock->right;
+				}
+
+				if (m_ForeignBlock && (!IsForeign || Point.x == WorkingArea.width() - 1 || Point.y == WorkingArea.height() - 1))
+					queue();
+			}
+
+			void unstash() const
+			{
+				for (const auto& Block : m_ForeignBlocks)
+					::console.unstash_output(Block);
+			}
+
+		private:
+			static bool check(FAR_CHAR_INFO const& Cell)
+			{
+				return
+					Cell.Attributes.Flags & FCF_FOREIGN &&
+					colors::is_transparent(Cell.Attributes.ForegroundColor) &&
+					colors::is_transparent(Cell.Attributes.BackgroundColor);
+			}
+
+			void queue()
+			{
+				for (auto& Block: m_ForeignBlocks)
+				{
+					if (
+						Block.left == m_ForeignBlock->left &&
+						Block.right == m_ForeignBlock->right &&
+						Block.bottom == m_ForeignBlock->top - 1
+						)
+					{
+						Block.bottom = m_ForeignBlock->bottom;
+						m_ForeignBlock.reset();
+						return;
+					}
+				}
+
+				m_ForeignBlocks.emplace_back(*m_ForeignBlock);
+				m_ForeignBlock.reset();
+			}
+
+			std::vector<rectangle> m_ForeignBlocks;
+			std::optional<rectangle> m_ForeignBlock;
+		};
+
 	public:
 		static bool WriteOutputVT(matrix<FAR_CHAR_INFO>& Buffer, point const BufferCoord, rectangle const& WriteRegion)
 		{
@@ -1637,31 +1859,7 @@ protected:
 				// Save cursor position
 				Str = ANSISYSSC L""sv;
 
-				std::vector<rectangle> ForeignBlocks;
-				std::optional<rectangle> ForeignBlock;
-
-				const auto queue_block = [&]
-				{
-					if (!ForeignBlock)
-						return;
-
-					for (auto& Block: ForeignBlocks)
-					{
-						if (
-							Block.left == ForeignBlock->left &&
-							Block.right == ForeignBlock->right &&
-							Block.bottom == ForeignBlock->top - 1
-							)
-						{
-							Block.bottom = ForeignBlock->bottom;
-							ForeignBlock.reset();
-							return;
-						}
-					}
-
-					ForeignBlocks.emplace_back(*ForeignBlock);
-					ForeignBlock.reset();
-				};
+				foreign_blocks_list ForeignBlocksList;
 
 				for (const auto i: std::views::iota(SubRect.top + SubrectOffset, std::min(SubRect.top + SubrectOffset + ViewportSize.y, SubRect.bottom + 1)))
 				{
@@ -1693,35 +1891,14 @@ protected:
 
 					for (const auto& Cell: BlockRow)
 					{
-						const auto CellIndex = &Cell - BlockRow.data();
-
-						if (
-							Cell.Attributes.Flags & FCF_FOREIGN &&
-							colors::is_transparent(Cell.Attributes.ForegroundColor) &&
-							colors::is_transparent(Cell.Attributes.BackgroundColor)
-						)
-						{
-							if (!ForeignBlock)
-								ForeignBlock.emplace(SubRect.left + CellIndex, i, SubRect.left + CellIndex, i);
-							else
-								++ForeignBlock->right;
-
-							continue;
-						}
-
-						queue_block();
+						ForeignBlocksList.queue(Cell, { static_cast<int>(&Cell - BlockRow.data()), i - (SubRect.top + SubrectOffset) }, SubRect);
 					}
-
-					queue_block();
 				}
-
-				queue_block();
 
 				if (!::console.Write(Str))
 					return false;
 
-				for (const auto& Block: ForeignBlocks)
-					::console.unstash_output(Block);
+				ForeignBlocksList.unstash();
 
 				Str.clear();
 			}
@@ -1783,6 +1960,8 @@ protected:
 			std::vector<CHAR_INFO> ConsoleBuffer;
 			ConsoleBuffer.reserve(SubRect.width() * SubRect.height());
 
+			foreign_blocks_list ForeignBlocksList;
+
 			if (char_width::is_enabled())
 			{
 				for_submatrix(Buffer, SubRect, [&](FAR_CHAR_INFO& Cell, point const Point)
@@ -1818,13 +1997,15 @@ protected:
 					}
 
 					ConsoleBuffer.emplace_back(CHAR_INFO{ { ReplaceControlCharacter(Cell.Char) }, colors::FarColorToConsoleColor(Cell.Attributes) });
+					ForeignBlocksList.queue(Cell, Point, SubRect);
 				});
 			}
 			else
 			{
-				for_submatrix(Buffer, SubRect, [&](const FAR_CHAR_INFO& i)
+				for_submatrix(Buffer, SubRect, [&](const FAR_CHAR_INFO& Cell, point const Point)
 				{
-					ConsoleBuffer.emplace_back(CHAR_INFO{ { ReplaceControlCharacter(i.Char) }, colors::FarColorToConsoleColor(i.Attributes) });
+					ConsoleBuffer.emplace_back(CHAR_INFO{ { ReplaceControlCharacter(Cell.Char) }, colors::FarColorToConsoleColor(Cell.Attributes) });
+					ForeignBlocksList.queue(Cell, Point, SubRect);
 				});
 			}
 
@@ -1860,6 +2041,8 @@ protected:
 					return false;
 			}
 
+			ForeignBlocksList.unstash();
+
 			return true;
 		}
 
@@ -1884,21 +2067,144 @@ protected:
 			return true;
 		}
 
-		static bool SetPaletteVT(std::array<COLORREF, 16> const& Palette)
+		static bool GetPaletteVT(std::array<COLORREF, 256>& Palette)
+		{
+			try
+			{
+				LOGDEBUG(L"Reading VT palette - here be dragons"sv);
+
+				const auto
+					OSCPrefix = ESC L"]4"sv,
+					OSCSuffix = ST L""sv;
+
+				string Request;
+				Request.reserve(OSCPrefix.size() + L";255;?"sv.size() * Palette.size() - 100 - 10 + OSCSuffix.size());
+
+				// A single OSC for the whole thing.
+				// Querying the palette was introduced after the terse syntax, so it's fine.
+				Request = OSCPrefix;
+
+				for (const auto i: std::views::iota(0uz, Palette.size()))
+					far::format_to(Request, L";{};?"sv, vt_color_index(static_cast<uint8_t>(i)));
+
+				Request += OSCSuffix;
+
+				const auto ResponseData = query_vt(Request);
+				if (ResponseData.empty())
+				{
+					LOGWARNING(L"OSC 4 query is not supported"sv, Request);
+					return false;
+				}
+
+				const auto give_up = [&]
+				{
+					throw far_exception(far::format(L"Incorrect response: {}"sv, ResponseData), false);
+				};
+
+				string_view Response = ResponseData;
+				if (!Response.ends_with(L'\\'))
+					give_up();
+
+				Response.remove_suffix(1);
+
+				const auto
+					Prefix = ESC "]"sv,
+					Suffix = ESC ""sv,
+					RGBPrefix = L"rgb:"sv;
+
+				size_t ColorsSet = 0;
+
+				for (auto PaletteToken: enum_tokens(Response, L"\\"sv))
+				{
+					if (!PaletteToken.starts_with(Prefix) || !PaletteToken.ends_with(Suffix))
+						give_up();
+
+					PaletteToken.remove_prefix(Prefix.size());
+					PaletteToken.remove_suffix(Suffix.size());
+
+					enum_tokens const Subtokens(PaletteToken, L";"sv);
+
+					auto SubIterator = Subtokens.cbegin();
+					if (SubIterator == Subtokens.cend())
+						give_up();
+
+					if (*SubIterator++ != L"4"sv)
+						give_up();
+
+					const auto VtIndex = from_string<unsigned>(*SubIterator++);
+					if (VtIndex >= Palette.size())
+						give_up();
+
+					auto& PaletteColor = Palette[vt_color_index(VtIndex)];
+
+					auto ColorStr = *SubIterator;
+					if (!ColorStr.starts_with(RGBPrefix))
+						give_up();
+
+					ColorStr.remove_prefix(RGBPrefix.size());
+
+					if (ColorStr.size() != L"0000"sv.size() * 3 + 2)
+						give_up();
+
+					const auto color = [&](size_t const Offset)
+					{
+						const auto Value = from_string<unsigned>(ColorStr.substr(Offset * L"0000/"sv.size(), 4), {}, 16);
+						if (Value > 0xffff)
+							give_up();
+
+						return Value / 0x0101;
+					};
+
+					PaletteColor = RGB(color(0), color(1), color(2));
+					++ColorsSet;
+				}
+
+				if (ColorsSet != Palette.size())
+					give_up();
+
+				LOGDEBUG(L"VT palette read successfuly"sv);
+				return true;
+			}
+			catch (far_exception const& e)
+			{
+				LOGERROR(L"{}"sv, e);
+				return false;
+			}
+		}
+
+		static bool GetPaletteNT(std::array<COLORREF, 256>& Palette)
+		{
+			if (!imports.GetConsoleScreenBufferInfoEx)
+				return false;
+
+			CONSOLE_SCREEN_BUFFER_INFOEX csbi{ sizeof(csbi) };
+			if (!imports.GetConsoleScreenBufferInfoEx(::console.GetOutputHandle(), &csbi))
+			{
+				LOGERROR(L"GetConsoleScreenBufferInfoEx(): {}"sv, os::last_error());
+				return false;
+			}
+
+			std::ranges::copy(csbi.ColorTable, Palette.begin());
+
+			return true;
+		}
+
+		static bool SetPaletteVT(std::array<COLORREF, 256> const& Palette)
 		{
 			string Str;
-			Str.reserve(OSC(L"4;15;rgb:ff/ff/ff").size() * 16);
+			Str.reserve(OSC(L"4;255;rgb:ff/ff/ff").size() * Palette.size() - 100 - 10);
 
 			for (const auto& [Color, i] : enumerate(Palette))
 			{
 				const auto RGBA = colors::to_rgba(Color);
+				// A separate OSC for every color: unfortunately the terse syntax was only added in 2020
 				far::format_to(Str, OSC(L"4;{};rgb:{:02x}/{:02x}/{:02x}"), vt_color_index(i), RGBA.r, RGBA.g, RGBA.b);
 			}
 
 			return ::console.Write(Str);
 		}
 
-		static bool SetPaletteNT(std::array<COLORREF, 16> const& Palette)
+		static bool SetPaletteNT(std::array<COLORREF, 256> const& Palette)
 		{
 			if (!imports.GetConsoleScreenBufferInfoEx)
 				return false;
@@ -1912,10 +2218,12 @@ protected:
 				return false;
 			}
 
-			if (std::ranges::equal(Palette, csbi.ColorTable))
+			std::span const NtPalette(Palette.data(), colors::index::nt_size);
+
+			if (std::ranges::equal(NtPalette, csbi.ColorTable))
 				return true;
 
-			std::ranges::copy(Palette, std::begin(csbi.ColorTable));
+			std::ranges::copy(NtPalette, std::begin(csbi.ColorTable));
 
 			if (!imports.SetConsoleScreenBufferInfoEx(Output, &csbi))
 			{
@@ -2319,6 +2627,25 @@ protected:
 		return true;
 	}
 
+	bool console::Clear(const FarColor& Color) const
+	{
+		ClearExtraRegions(Color, CR_BOTH);
+
+		point ViewportSize;
+		if (!GetSize(ViewportSize))
+			return false;
+
+		const auto ConColor = colors::FarColorToConsoleColor(Color);
+		const DWORD Size = ViewportSize.x * ViewportSize.y;
+
+		COORD const Coord{ 0, GetDelta() };
+		DWORD CharsWritten;
+		FillConsoleOutputCharacter(GetOutputHandle(), L' ', Size, Coord, &CharsWritten);
+		FillConsoleOutputAttribute(GetOutputHandle(), ConColor, Size, Coord, &CharsWritten);
+
+		return true;
+	}
+
 	bool console::ScrollWindow(int Lines, int Columns) const
 	{
 		bool process = false;
@@ -2579,7 +2906,7 @@ protected:
 		return ExternalConsole.Imports.pWriteOutput.operator bool();
 	}
 
-	bool console::IsWidePreciseExpensive(char32_t const Codepoint)
+	size_t console::GetWidthPreciseExpensive(char32_t const Codepoint)
 	{
 		// It ain't stupid if it works
 
@@ -2610,11 +2937,11 @@ protected:
 			LOGWARNING(L"SetConsoleCursorPosition(): {}"sv, os::last_error());
 
 			if (GetLastError() != ERROR_INVALID_HANDLE)
-				return false;
+				return 1;
 
-			LOGINFO(L"Reinitializing");
+			LOGINFO(L"Reinitializing"sv);
 			initialize();
-			return false;
+			return 1;
 		}
 
 		DWORD Written;
@@ -2623,14 +2950,14 @@ protected:
 		if (!WriteConsole(m_WidthTestScreen.native_handle(), Chars.data(), Pair.second? 2 : 1, &Written, {}))
 		{
 			LOGWARNING(L"WriteConsole(): {}"sv, os::last_error());
-			return false;
+			return 1;
 		}
 
 		CONSOLE_SCREEN_BUFFER_INFO Info;
 		if (!get_console_screen_buffer_info(m_WidthTestScreen.native_handle(), &Info))
-			return false;
+			return 1;
 
-		return Info.dwCursorPosition.X > 1;
+		return Info.dwCursorPosition.X;
 	}
 
 	void console::ClearWideCache()
@@ -2638,31 +2965,34 @@ protected:
 		m_WidthTestScreen = {};
 	}
 
-	bool console::GetPalette(std::array<COLORREF, 16>& Palette) const
-	{
-		if (!imports.GetConsoleScreenBufferInfoEx)
-			return false;
-
-		CONSOLE_SCREEN_BUFFER_INFOEX csbi{ sizeof(csbi) };
-		if (!imports.GetConsoleScreenBufferInfoEx(GetOutputHandle(), &csbi))
-		{
-			LOGERROR(L"GetConsoleScreenBufferInfoEx(): {}"sv, os::last_error());
-			return false;
-		}
-
-		std::ranges::copy(csbi.ColorTable, Palette.begin());
-
-		return true;
-	}
-
-	bool console::SetPalette(std::array<COLORREF, 16> const& Palette) const
+	bool console::GetPalette(std::array<COLORREF, 256>& Palette) const
 	{
 		// Happy path
-		if (IsVtEnabled())
-			return implementation::SetPaletteVT(Palette);
+		const auto VtEnabled = IsVtEnabled();
+		if (VtEnabled && implementation::GetPaletteVT(Palette))
+			return true;
 
 		// Legacy console
-		if (!IsVtSupported())
+		if (VtEnabled || !IsVtSupported())
+			return implementation::GetPaletteNT(Palette);
+
+		// If VT is not enabled, we enable it temporarily and use VT method if we can:
+		if ([[maybe_unused]] scoped_vt_output const VtOutput{})
+			return implementation::GetPaletteVT(Palette);
+
+		// Otherwise fallback to NT
+		return implementation::GetPaletteNT(Palette);
+	}
+
+	bool console::SetPalette(std::array<COLORREF, 256> const& Palette) const
+	{
+		// Happy path
+		const auto VtEnabled = IsVtEnabled();
+		if (VtEnabled && implementation::SetPaletteVT(Palette))
+			return true;
+
+		// Legacy console
+		if (VtEnabled || !IsVtSupported())
 			return implementation::SetPaletteNT(Palette);
 
 		// These methods are currently not synchronized in WT 🤦
@@ -2670,11 +3000,8 @@ protected:
 		// VT does and updates the CSBI too.
 
 		// If VT is not enabled, we enable it temporarily and use VT method if we can:
-		if (std::pair<HANDLE, DWORD> Data{ GetOutputHandle(), 0 }; GetMode(Data.first, Data.second) && SetMode(Data.first, Data.second | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
-		{
-			SCOPE_EXIT { SetMode(Data.first, Data.second); };
+		if ([[maybe_unused]] scoped_vt_output const VtOutput{})
 			return implementation::SetPaletteVT(Palette);
-		}
 
 		// Otherwise fallback to NT
 		return implementation::SetPaletteNT(Palette);
@@ -2741,7 +3068,7 @@ protected:
 	void console::start_prompt() const
 	{
 		send_vt_command(OSC("133;D"));
- 		send_vt_command(OSC("133;A"));
+		send_vt_command(OSC("133;A"));
 	}
 
 	void console::start_command() const
@@ -2801,11 +3128,8 @@ protected:
 			return false;
 
 		// If VT is not enabled, we enable it temporarily
-		if (std::pair<HANDLE, DWORD> Data{ GetOutputHandle(), 0 }; GetMode(Data.first, Data.second) && SetMode(Data.first, Data.second | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
-		{
-			SCOPE_EXIT{ SetMode(Data.first, Data.second); };
+		if ([[maybe_unused]] scoped_vt_output const VtOutput{})
 			return Write(Command);
-		}
 
 		return false;
 	}
@@ -2876,8 +3200,8 @@ TEST_CASE("console.vt_sequence")
 
 	{
 		FAR_CHAR_INFO Buffer[]{ def, def, def, def };
-		Buffer[1].Attributes.BackgroundColor = colors::opaque(F_MAGENTA);
-		Buffer[2].Attributes.ForegroundColor = colors::opaque(F_GREEN);
+		Buffer[1].Attributes.BackgroundColor = colors::opaque(C_MAGENTA);
+		Buffer[2].Attributes.ForegroundColor = colors::opaque(C_GREEN);
 		Buffer[3].Attributes.Flags |= FCF_FG_BOLD;
 		check(Buffer, VTSTR(
 			" "
@@ -2890,8 +3214,8 @@ TEST_CASE("console.vt_sequence")
 	{
 		FAR_CHAR_INFO Buffer[]{ def, def, def };
 		Buffer[0].Attributes.Flags |= FCF_FG_BOLD;
-		Buffer[0].Attributes.BackgroundColor = colors::opaque(F_BLUE);
-		Buffer[0].Attributes.ForegroundColor = colors::opaque(F_LIGHTGREEN);
+		Buffer[0].Attributes.BackgroundColor = colors::opaque(C_BLUE);
+		Buffer[0].Attributes.ForegroundColor = colors::opaque(C_LIGHTGREEN);
 
 		Buffer[1] = Buffer[0];
 
@@ -2906,8 +3230,8 @@ TEST_CASE("console.vt_sequence")
 
 	{
 		FAR_CHAR_INFO Buffer[]{ def, def, def, def, def };
-		Buffer[0].Attributes.BackgroundColor = colors::opaque(F_BLUE);
-		Buffer[0].Attributes.ForegroundColor = colors::opaque(F_YELLOW);
+		Buffer[0].Attributes.BackgroundColor = colors::opaque(C_BLUE);
+		Buffer[0].Attributes.ForegroundColor = colors::opaque(C_YELLOW);
 
 		Buffer[1] = Buffer[0];
 		Buffer[1].Attributes.SetUnderline(UNDERLINE_CURLY);
@@ -2915,13 +3239,13 @@ TEST_CASE("console.vt_sequence")
 		Buffer[1].Attributes.SetUnderlineIndex(Buffer[1].Attributes.IsFgIndex());
 
 		Buffer[2] = Buffer[1];
-		Buffer[2].Attributes.UnderlineColor = colors::opaque(F_RED);
+		Buffer[2].Attributes.UnderlineColor = colors::opaque(C_RED);
 
 		Buffer[3] = Buffer[1];
 
 		Buffer[4] = Buffer[3];
-		Buffer[4].Attributes.ForegroundColor = colors::opaque(F_MAGENTA);
-		Buffer[4].Attributes.UnderlineColor = colors::opaque(F_MAGENTA);
+		Buffer[4].Attributes.ForegroundColor = colors::opaque(C_MAGENTA);
+		Buffer[4].Attributes.UnderlineColor = colors::opaque(C_MAGENTA);
 
 
 		check(Buffer, VTSTR(
@@ -2936,13 +3260,13 @@ TEST_CASE("console.vt_sequence")
 	{
 		FAR_CHAR_INFO Buffer[]{ def, def, def, def, def, def };
 
-		Buffer[0].Attributes.BackgroundColor = colors::opaque(F_BLUE);
-		Buffer[0].Attributes.ForegroundColor = colors::opaque(F_LIGHTGREEN);
+		Buffer[0].Attributes.BackgroundColor = colors::opaque(C_BLUE);
+		Buffer[0].Attributes.ForegroundColor = colors::opaque(C_LIGHTGREEN);
 		Buffer[0].Attributes.SetUnderline(UNDERLINE_DOUBLE);
 
 		Buffer[1] = Buffer[0];
 		Buffer[1].Attributes.SetUnderline(UNDERLINE_CURLY);
-		Buffer[1].Attributes.UnderlineColor = colors::opaque(F_YELLOW);
+		Buffer[1].Attributes.UnderlineColor = colors::opaque(C_YELLOW);
 
 		Buffer[2] = Buffer[1];
 		Buffer[2].Attributes.SetUnderline(UNDERLINE_DOT);

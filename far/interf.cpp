@@ -1149,15 +1149,15 @@ void SetScreen(rectangle const Where, wchar_t Ch, const FarColor& Color)
 	Global->ScrBuf->FillRect(Where, { Ch, {}, {}, Color });
 }
 
-void MakeShadow(rectangle const Where, bool const IsLegacy)
+void MakeShadow(rectangle const Where)
 {
-	Global->ScrBuf->ApplyShadow(Where, IsLegacy);
+	Global->ScrBuf->ApplyShadow(Where);
 }
 
-void DropShadow(rectangle const Where, bool const IsLegacy)
+void DropShadow(rectangle const Where)
 {
-	MakeShadow({ Where.left + 2, Where.bottom + 1, Where.right + 2, Where.bottom + 1 }, IsLegacy);
-	MakeShadow({ Where.right + 1, Where.top + 1, Where.right + 2, Where.bottom }, IsLegacy);
+	MakeShadow({ Where.left + 2, Where.bottom + 1, Where.right + 2, Where.bottom + 1 });
+	MakeShadow({ Where.right + 1, Where.top + 1, Where.right + 2, Where.bottom });
 }
 
 void SetColor(int Color)
@@ -1180,23 +1180,12 @@ void SetRealColor(const FarColor& Color)
 	console.SetTextAttributes(Color);
 }
 
-void ClearScreen(const FarColor& Color)
-{
-	Global->ScrBuf->FillRect({ 0, 0, ScrX, ScrY }, { L' ', {}, {}, Color });
-	if(Global->Opt->WindowMode)
-	{
-		console.ClearExtraRegions(Color, CR_BOTH);
-	}
-	Global->ScrBuf->Flush();
-	console.SetTextAttributes(Color);
-}
-
 const FarColor& GetColor()
 {
 	return CurColor;
 }
 
-bool DoWeReallyHaveToScroll(short Rows)
+size_t NumberOfEmptyLines(size_t const Desired)
 {
 	/*
 	Q: WTF is this magic?
@@ -1211,13 +1200,19 @@ bool DoWeReallyHaveToScroll(short Rows)
 	This function reads the specified number of the last lines from the screen buffer and checks if there's anything else in them but spaces.
 	*/
 
-	rectangle const Region{ 0, ScrY - Rows + 1, ScrX, ScrY };
+	rectangle const Region{ 0, static_cast<int>(ScrY - Desired + 1), ScrX, ScrY };
 
 	// TODO: matrix_view to avoid copying
-	matrix<FAR_CHAR_INFO> BufferBlock(Rows, ScrX + 1);
+	matrix<FAR_CHAR_INFO> BufferBlock(Desired, ScrX + 1);
 	Global->ScrBuf->Read(Region, BufferBlock);
 
-	return !std::ranges::all_of(BufferBlock.vector(), [](const FAR_CHAR_INFO& i) { return i.Char == L' '; });
+	for (const auto Row: std::views::reverse(BufferBlock))
+	{
+		if (!std::ranges::all_of(Row, [](const FAR_CHAR_INFO& i){ return i.Char == L' '; }))
+			return BufferBlock.height() - 1 - BufferBlock.row_number(Row);
+	}
+
+	return Desired;
 }
 
 size_t string_pos_to_visual_pos(string_view Str, size_t const StringPos, size_t const TabSize, position_parser_state* SavedState)
@@ -1251,7 +1246,7 @@ size_t string_pos_to_visual_pos(string_view Str, size_t const StringPos, size_t 
 		{
 			const auto Codepoint = encoding::utf16::extract_codepoint(Str.substr(State.StringIndex));
 			CharStringIncrement = Codepoint > std::numeric_limits<char16_t>::max()? 2 : 1;
-			CharVisualIncrement = char_width::is_wide(Codepoint)? 2 : 1;
+			CharVisualIncrement = char_width::get(Codepoint);
 		}
 		else
 		{
@@ -1306,7 +1301,7 @@ size_t visual_pos_to_string_pos(string_view Str, size_t const VisualPos, size_t 
 		else if (CharWidthEnabled)
 		{
 			const auto Codepoint = encoding::utf16::extract_codepoint(Str.substr(State.StringIndex));
-			CharVisualIncrement = char_width::is_wide(Codepoint)? 2 : 1;
+			CharVisualIncrement = char_width::get(Codepoint);
 			CharStringIncrement = Codepoint > std::numeric_limits<char16_t>::max()? 2 : 1;
 		}
 		else
@@ -1603,7 +1598,7 @@ size_t HiStrlen(string_view const Str)
 
 		const auto Codepoint = First && IsLow? encoding::utf16::extract_codepoint(*First, Char) : Char;
 
-		Result += char_width::is_wide(Codepoint)? 2 : 1;
+		Result += char_width::get(Codepoint);
 		return true;
 	});
 
@@ -1679,7 +1674,7 @@ void AdjustConsoleScreenBufferSize()
 void SetPalette()
 {
 	if (Global->Opt->SetPalette)
-		console.SetPalette(colors::nt_palette());
+		console.SetPalette(colors::default_palette());
 }
 
 static point& NonMaximisedBufferSize()
